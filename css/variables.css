@@ -1,0 +1,67 @@
+/* css/variables.css - Flat Grayish Design System Tokens */
+:root {
+  /* Color Palette - Flat Grayish Slate Theme */
+  --bg-primary: #f1f5f9;       /* Light Slate-100 */
+  --bg-secondary: #ffffff;     /* Flat White Sidebar/Header */
+  --bg-tertiary: #e2e8f0;      /* Slate-200 */
+  --bg-surface: #ffffff;       /* Flat White Surface */
+  --bg-surface-hover: #f8fafc; /* Hover Slate */
+  --bg-glass: #ffffff;
+  --bg-glass-card: #ffffff;
+  --bg-glass-input: #f8fafc;
+
+  /* Accents - Flat Solid Colors */
+  --accent-primary: #4f46e5;        /* Flat Indigo */
+  --accent-primary-hover: #4338ca;
+  --accent-secondary: #7c3aed;      /* Flat Violet */
+  --accent-cyan: #0284c7;           /* Flat Cyan */
+  --accent-rose: #e11d48;           /* Flat Rose */
+  --accent-emerald: #059669;        /* Flat Emerald */
+  --accent-amber: #d97706;          /* Flat Amber */
+  
+  --gradient-primary: #4f46e5;
+  --gradient-accent: #7c3aed;
+
+  /* Text Colors - High Contrast Dark Slate on Light Gray */
+  --text-main: #0f172a;       /* Slate-900 */
+  --text-muted: #334155;      /* Slate-700 */
+  --text-dim: #64748b;        /* Slate-500 */
+  --text-accent: #4f46e5;     /* Indigo Accent Text */
+
+  /* Borders & Dividers - Flat Crisp Gray Borders */
+  --border-light: #e2e8f0;
+  --border-subtle: #cbd5e1;
+  --border-focus: #4f46e5;
+
+  /* Flat Subtle Shadows */
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.07);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.08);
+  --shadow-glow: 0 0 0 3px rgba(79, 70, 229, 0.15);
+
+  /* Border Radii - Clean Flat Radii */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+  --radius-full: 9999px;
+
+  /* Typography */
+  --font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-heading: 'Outfit', 'Inter', sans-serif;
+  --font-mono: 'Fira Code', 'Consolas', monospace;
+
+  /* Transitions */
+  --transition-fast: 0.15s ease;
+  --transition-normal: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* Sizing */
+  --header-height: 64px;
+  --sidebar-width: 250px;
+  --sidebar-width-collapsed: 72px;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
