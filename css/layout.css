@@ -298,15 +298,16 @@
     justify-content: center;
   }
 
-  /* View Container Padding on Mobile */
+  /* View Container Padding on Mobile (Clear of 60px bottom nav bar) */
   .view-container {
-    padding: 1.25rem 1rem 80px 1rem;
+    padding: 1rem 1rem 110px 1rem !important;
   }
 
   /* Grid Layout on Mobile */
   .grid-cards {
     grid-template-columns: 1fr;
-    gap: 1rem;
+    gap: 1.25rem;
+    margin-bottom: 2rem;
   }
 
   /* Transform Sidebar into Sticky Mobile Bottom Navigation Bar */
