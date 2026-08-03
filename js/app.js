@@ -10,13 +10,12 @@ import { SettingsView } from './ui/views/settingsView.js';
 
 class App {
   constructor() {
-    this.currentView = 'characters';
+    this.currentView = null;
     this.activeCharacterId = null;
-    this._suppressHashChange = false;
   }
 
   async init() {
-    console.log('Initializing Aetheria RP Studio...');
+    console.log('Initializing NnzRP...');
 
     // Initialize Database & Sample Seeds
     await initDatabase();
@@ -24,19 +23,15 @@ class App {
     // Render Shell Layout
     this.renderShell();
 
-    // Restore view from the URL hash (if any) so a page reload stays where
-    // the user was instead of always bouncing back to the character list.
-    const { view, params } = this.parseHash();
-    await this.navigate(view, params);
-
+    // Listen to hash changes for browser back/forward and direct URL navigation
     window.addEventListener('hashchange', () => {
-      if (this._suppressHashChange) {
-        this._suppressHashChange = false;
-        return;
-      }
       const { view, params } = this.parseHash();
       this.navigate(view, params);
     });
+
+    // Restore view from the URL hash (if any)
+    const { view, params } = this.parseHash();
+    await this.navigate(view, params);
   }
 
   /** Reads window.location.hash into a { view, params } route descriptor. */
@@ -56,7 +51,6 @@ class App {
       ? `#chat/${encodeURIComponent(params.characterId)}`
       : `#${viewName}`;
     if (window.location.hash !== target) {
-      this._suppressHashChange = true;
       window.location.hash = target;
     }
   }
@@ -74,6 +68,11 @@ class App {
   }
 
   async navigate(viewName, params = {}) {
+    const targetCharId = params.characterId || this.activeCharacterId;
+    if (this.currentView === viewName && (viewName !== 'chat' || this.activeCharacterId === targetCharId)) {
+      return; // Already on requested view
+    }
+
     this.currentView = viewName;
     if (params.characterId) {
       this.activeCharacterId = params.characterId;
@@ -102,8 +101,13 @@ class App {
       });
     }
 
-    // Render Target View
-    viewContainer.innerHTML = '';
+    // Render Target View Loading State
+    viewContainer.innerHTML = `
+      <div style="display:flex; justify-content:center; align-items:center; min-height:300px; color:var(--text-muted); gap:0.75rem;">
+        <div class="app-loading-spinner" style="width:24px; height:24px; margin:0;"></div>
+        <span>Loading View...</span>
+      </div>
+    `;
     
     switch (this.currentView) {
       case 'characters':
@@ -148,7 +152,7 @@ function bootApp() {
     const appEl = document.getElementById('app');
     if (appEl) {
       appEl.innerHTML = `<div style="padding:2rem; color:#e11d48; font-family:sans-serif;">
-        <h2>Aetheria RP Studio Initialization Error</h2>
+        <h2>NnzRP Initialization Error</h2>
         <pre style="background:#f1f5f9; padding:1rem; border-radius:8px; overflow:auto;">${err.stack || err.message || err}</pre>
       </div>`;
     }

@@ -62,4 +62,13 @@ export class ProxyStore {
   static async saveGlobalSystemPrompt(prompt) {
     await db.put('settings', { key: 'globalSystemPrompt', value: prompt });
   }
+
+  static async getSystemPromptPresets() {
+    const res = await db.get('settings', 'systemPromptPresets');
+    return res ? res.value : (APP_CONFIG.DEFAULT_SYSTEM_PROMPT_PRESETS || []);
+  }
+
+  static async saveSystemPromptPresets(presets) {
+    await db.put('settings', { key: 'systemPromptPresets', value: presets });
+  }
 }

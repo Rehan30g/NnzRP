@@ -1,6 +1,6 @@
 /* js/ui/components/sidebar.js - Collapsible Navigation Sidebar */
 import { ProxyStore } from '../../storage/proxyStore.js';
-import { escapeHtml } from '../../utils/sanitize.js';
+import { escapeHtml, escapeAttr } from '../../utils/sanitize.js';
 
 export class Sidebar {
   static async render(container, activeView, onNavigate) {
@@ -16,10 +16,9 @@ export class Sidebar {
     container.innerHTML = `
       <div class="sidebar-header">
         <div class="brand-wrapper">
-          <div class="brand-logo">A</div>
+          <img src="src/icon.png" style="width:36px; height:36px; image-rendering:pixelated; flex-shrink:0;" alt="NnzRP Icon">
           <div class="brand-text">
-            <div style="font-weight:700; font-size:1.05rem; background:var(--gradient-primary); -webkit-background-clip:text; -webkit-text-fill-color:transparent;">Aetheria RP</div>
-            <div style="font-size:0.7rem; color:var(--text-dim);">BYOK AI Studio</div>
+            <div style="font-weight:800; font-size:1.1rem; background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); -webkit-background-clip:text; -webkit-text-fill-color:transparent;">NnzRP</div>
           </div>
         </div>
         <button class="sidebar-toggle-btn" id="btn-collapse-sidebar" title="${isCollapsed ? 'Expand Sidebar' : 'Collapse Sidebar'}">
@@ -57,12 +56,12 @@ export class Sidebar {
       </nav>
 
       <div class="sidebar-footer">
-        <div class="proxy-status-card">
-          <div style="display:flex; align-items:center; justify-content:space-between;">
-            <div class="status-dot" title="Active Engine"></div>
-            <div class="proxy-info-text" style="font-weight:600; font-size:0.78rem;">${defaultProxy ? escapeHtml(defaultProxy.name) : 'No Proxy'}</div>
+        <div class="proxy-status-card" title="${defaultProxy ? escapeAttr(defaultProxy.name + ' - ' + (defaultProxy.selectedModel || defaultProxy.provider)) : 'No Active Proxy'}">
+          <div style="display:flex; align-items:center; gap:0.5rem; overflow:hidden;">
+            <div class="status-dot" title="Active Engine" style="flex-shrink:0;"></div>
+            <div class="proxy-info-text" style="font-weight:600; font-size:0.78rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:1;">${defaultProxy ? escapeHtml(defaultProxy.name) : 'No Proxy'}</div>
           </div>
-          <div class="proxy-info-text" style="font-size:0.7rem; color:var(--text-dim); margin-top:0.2rem;">
+          <div class="proxy-info-text" style="font-size:0.7rem; color:var(--text-dim); margin-top:0.25rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
             ${escapeHtml(defaultProxy?.selectedModel || defaultProxy?.provider) || 'None'}
           </div>
         </div>

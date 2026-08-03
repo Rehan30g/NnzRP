@@ -11,6 +11,7 @@ import { ProxiesView } from './proxiesView.js';
 import { SettingsView } from './settingsView.js';
 import { escapeHtml, escapeAttr } from '../../utils/sanitize.js';
 import { extractThinking } from '../../utils/thinkingParser.js';
+import { replaceMacros } from '../../utils/macroReplacer.js';
 
 // Module-level generation state - only one ChatView is ever mounted at a time
 // in this SPA, so a shared abort/generating flag is simpler than threading it
@@ -47,42 +48,74 @@ function setGeneratingState(generating) {
   }
 }
 
+// Remembers user preference for collapsing thinking blocks.
+// If the user collapses any thinking block, subsequent thinking blocks start collapsed.
+let isThinkingCollapsedDefault = localStorage.getItem('aetheria_thinking_collapsed') === '1';
+
+/**
+ * Estimates token count for thinking text (~3.8 chars per token).
+ */
+function estimateThinkingTokens(thinkingText = '') {
+  if (!thinkingText || !thinkingText.trim()) return 0;
+  return Math.max(1, Math.ceil(thinkingText.trim().length / 3.8));
+}
+
+/**
+ * Robust helper to scroll the chat container to bottom.
+ */
+function scrollToBottom(containerEl) {
+  const el = containerEl || document.getElementById('messages-container');
+  if (!el) return;
+  requestAnimationFrame(() => {
+    el.scrollTop = el.scrollHeight;
+  });
+}
+
 /**
  * Creates/updates/removes a message's collapsible thinking block to match
  * `thinkingText`, live during streaming or as a final sync after generation.
- * Handles both cases that broke before: a block that didn't exist yet (new
- * thinking appearing mid-stream) and a stale block left over from a previous
- * swipe variation that had thinking when the new one doesn't.
+ * Includes real-time thinking token counter.
  */
 function syncThinkingBlock(containerEl, thinkingText, { streaming = false } = {}) {
   if (!containerEl) return;
   const contentEl = containerEl.querySelector('.message-content');
   let block = containerEl.querySelector('.thinking-block');
 
-  if (!thinkingText) {
-    // Only prune once generation is finished - mid-stream, thinking text
-    // may simply not have arrived yet.
-    if (block && !streaming) block.remove();
+  if (!thinkingText || !thinkingText.trim()) {
+    if (block) block.remove();
     return;
   }
 
+  const tokenCount = estimateThinkingTokens(thinkingText);
+
   if (!block) {
     block = document.createElement('div');
-    block.className = 'thinking-block expanded';
+    block.className = `thinking-block ${isThinkingCollapsedDefault ? '' : 'expanded'}`.trim();
     block.innerHTML = `
       <button class="thinking-toggle" type="button">
         <svg class="thinking-chevron" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"></path></svg>
         <span>Thinking</span>
+        <span class="thinking-token-badge">${tokenCount.toLocaleString()} tokens</span>
       </button>
       <div class="thinking-content"></div>
     `;
-    block.querySelector('.thinking-toggle').onclick = () => block.classList.toggle('expanded');
+    block.querySelector('.thinking-toggle').onclick = () => {
+      const isExpanded = block.classList.toggle('expanded');
+      isThinkingCollapsedDefault = !isExpanded;
+      localStorage.setItem('aetheria_thinking_collapsed', isThinkingCollapsedDefault ? '1' : '0');
+    };
     if (contentEl) containerEl.insertBefore(block, contentEl);
     else containerEl.appendChild(block);
   }
 
   const textEl = block.querySelector('.thinking-content');
   textEl.textContent = thinkingText;
+
+  const tokenBadgeEl = block.querySelector('.thinking-token-badge');
+  if (tokenBadgeEl) {
+    tokenBadgeEl.textContent = `${tokenCount.toLocaleString()} tokens`;
+  }
+
   if (block.classList.contains('expanded')) {
     textEl.scrollTop = textEl.scrollHeight;
   }
@@ -144,7 +177,11 @@ export class ChatView {
     const createChatWithGreeting = async (personaId, title) => {
       const chat = await ChatStore.createChat(selectedCharId, personaId, title);
       if (activeChar.first_mes) {
-        await ChatStore.addMessage(chat.id, 'assistant', activeChar.first_mes, '', [activeChar.first_mes]);
+        const personaObj = personaId ? await PersonaStore.getById(personaId) : await PersonaStore.getDefault();
+        const userName = personaObj?.name || 'User';
+        const charName = activeChar.name || 'Character';
+        const startMsg = replaceMacros(activeChar.first_mes, userName, charName);
+        await ChatStore.addMessage(chat.id, 'assistant', startMsg, '', [startMsg]);
       }
       return chat;
     };
@@ -152,7 +189,7 @@ export class ChatView {
     // Auto-create initial session if none exists
     if (sessions.length === 0) {
       const defaultPersona = await PersonaStore.getDefault();
-      const newSession = await createChatWithGreeting(defaultPersona?.id, `Sesi 1 - ${activeChar.name}`);
+      const newSession = await createChatWithGreeting(defaultPersona?.id, `Session 1 - ${activeChar.name}`);
       sessions = [newSession];
     }
 
@@ -165,13 +202,12 @@ export class ChatView {
           <!-- Top Header Bar (Centered 880px Reading Column) -->
           <div class="chat-header">
             <div class="chat-header-inner">
-              <div style="display:flex; align-items:center; gap:0.75rem;">
-                <button class="btn btn-secondary btn-sm" id="btn-chat-back" title="Kembali ke Dashboard Utama" style="gap:0.35rem; padding:0.35rem 0.65rem;">
-                  <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M10 19l-7-7m0 0l7-7m-7 7h18"></path></svg>
-                  <span>Kembali</span>
+              <div style="display:flex; align-items:center; gap:0.5rem;">
+                <button class="btn-chat-back-icon" id="btn-chat-back" title="Back to Main Dashboard" aria-label="Back to Main Dashboard">
+                  <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path d="M10 19l-7-7m0 0l7-7m-7 7h18"></path></svg>
                 </button>
 
-                <div class="character-header-info" id="btn-char-info-header" title="Klik untuk Detail Karakter">
+                <div class="character-header-info" id="btn-char-info-header" title="Click for Character Details">
                   <img src="${escapeAttr(activeChar.avatar)}" class="avatar-img" onerror="this.src='https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(activeChar.name)}'">
                   <div>
                     <div class="character-header-name">${escapeHtml(activeChar.name)}</div>
@@ -181,8 +217,9 @@ export class ChatView {
               </div>
 
               <!-- Right Button Aligned with Central Chat Column -->
-              <button class="btn btn-secondary btn-sm" id="btn-open-right-drawer">
-                <span>Sesi & Opsi</span>
+              <button class="btn btn-secondary btn-sm" id="btn-open-right-drawer" title="Config & Chat Sessions (Keybind: Ctrl+.)">
+                <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path></svg>
+                <span>Config</span>
               </button>
             </div>
           </div>
@@ -193,9 +230,9 @@ export class ChatView {
           <!-- Chat Input Container (Clean Floating Box) -->
           <div class="chat-input-container">
             <div class="chat-input-wrapper">
-              <textarea class="chat-textarea" id="chat-input" rows="2" placeholder="Tulis aksi (*melihat sekeliling*) atau dialog (&quot;Halo...&quot;)... (Shift+Enter untuk baris baru)"></textarea>
+              <textarea class="chat-textarea" id="chat-input" rows="2" placeholder="Type action (*looks around*) or dialogue (&quot;Hello...&quot;)... (Shift+Enter for new line)"></textarea>
               <div class="chat-input-toolbar" style="justify-content:flex-end;">
-                <button class="btn-send-icon" id="btn-send-message" title="Kirim Pesan" aria-label="Kirim Pesan">
+                <button class="btn-send-icon" id="btn-send-message" title="Send Message" aria-label="Send Message">
                   <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"></path></svg>
                 </button>
               </div>
@@ -203,24 +240,24 @@ export class ChatView {
           </div>
         </div>
 
-        <!-- Slide-over Right Drawer with Separate Tabs for Sesi Chat & Opsi Chat -->
+        <!-- Slide-over Right Drawer with Separate Tabs for Chat Sessions & Options -->
         <div class="chat-right-drawer-overlay hidden" id="right-drawer-overlay">
           <div class="chat-right-drawer-content">
             <div class="drawer-tab-header">
-              <div class="drawer-tab active" id="tab-btn-sessions">Sesi Chat</div>
-              <div class="drawer-tab" id="tab-btn-options">Opsi Chat</div>
-              <button class="btn-icon" id="btn-close-right-drawer" style="margin-right:0.5rem;">&times;</button>
+              <div class="drawer-tab active" id="tab-btn-sessions">Chat Sessions</div>
+              <div class="drawer-tab" id="tab-btn-options">Chat Options</div>
+              <button class="btn-icon" id="btn-close-right-drawer" style="margin-right:0.5rem;" title="Close (Esc)">&times;</button>
             </div>
 
-            <!-- Tab 1 Content: Sesi Chat -->
+            <!-- Tab 1 Content: Chat Sessions -->
             <div class="drawer-body" id="tab-content-sessions">
               <button class="btn btn-primary btn-sm" id="btn-new-session" style="width:100%;">
-                + Sesi Roleplay Baru
+                + New Chat Session
               </button>
               <div id="right-drawer-session-list" style="display:flex; flex-direction:column; gap:0.6rem;"></div>
             </div>
 
-            <!-- Tab 2 Content: Opsi Chat -->
+            <!-- Tab 2 Content: Chat Options -->
             <div class="drawer-body hidden" id="tab-content-options">
               <!-- Player Persona Switcher -->
               <div class="form-group">
@@ -234,8 +271,24 @@ export class ChatView {
                 <select class="select" id="drawer-proxy-select"></select>
               </div>
 
+              <!-- System Prompt Preset Switcher -->
+              <div class="form-group">
+                <label class="form-label">System Prompt Preset</label>
+                <select class="select" id="drawer-preset-select"></select>
+              </div>
+
+              <!-- Chat Font Size Selector -->
+              <div class="form-group">
+                <label class="form-label">Chat Text Size</label>
+                <div style="display:flex; gap:0.4rem;" id="drawer-font-size-group">
+                  <button class="btn btn-secondary btn-sm btn-font-opt" data-size="small" style="flex:1;">Small</button>
+                  <button class="btn btn-secondary btn-sm btn-font-opt" data-size="medium" style="flex:1;">Medium</button>
+                  <button class="btn btn-secondary btn-sm btn-font-opt" data-size="big" style="flex:1;">Big</button>
+                </div>
+              </div>
+
               <!-- Quick Config Shortcuts -->
-              <div style="display:flex; flex-direction:column; gap:0.5rem;">
+              <div style="display:flex; flex-direction:column; gap:0.5rem; margin-top:0.25rem;">
                 <button class="btn btn-secondary btn-sm" id="btn-open-proxies-config" style="width:100%;">Multi-Proxy Config</button>
                 <button class="btn btn-secondary btn-sm" id="btn-open-global-settings" style="width:100%;">Global Settings</button>
               </div>
@@ -244,13 +297,13 @@ export class ChatView {
               <div class="card" style="padding:1rem; font-size:0.85rem;">
                 <div style="font-weight:700; font-size:0.95rem; margin-bottom:0.2rem;">${escapeHtml(activeChar.name)}</div>
                 <div style="color:var(--text-accent); font-size:0.78rem; margin-bottom:0.5rem;">${escapeHtml(activeChar.tagline) || ''}</div>
-                <p style="color:var(--text-muted); font-size:0.82rem; margin-bottom:0.75rem;">${escapeHtml(activeChar.description) || 'Tidak ada deskripsi.'}</p>
-                <button class="btn btn-secondary btn-sm" id="btn-view-char-details" style="width:100%;">Detail Lengkap</button>
+                <p style="color:var(--text-muted); font-size:0.82rem; margin-bottom:0.75rem;">${escapeHtml(activeChar.description) || 'No description provided.'}</p>
+                <button class="btn btn-secondary btn-sm" id="btn-view-char-details" style="width:100%;">View Full Details</button>
               </div>
 
               <div style="border-top:1px solid var(--border-light); padding-top:1rem; margin-top:auto;">
                 <button class="btn btn-danger btn-sm" id="btn-delete-current-session" style="width:100%;">
-                  Hapus Sesi Chat Ini
+                  Delete Current Session
                 </button>
               </div>
             </div>
@@ -300,10 +353,27 @@ export class ChatView {
       }
     };
 
+    // Toggle keybind: Ctrl+. or Cmd+. or Alt+C or Esc
+    const handleKeydown = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === '.') {
+        e.preventDefault();
+        drawerOverlay.classList.toggle('hidden');
+      } else if (e.altKey && e.key.toLowerCase() === 'c') {
+        e.preventDefault();
+        drawerOverlay.classList.toggle('hidden');
+      } else if (e.key === 'Escape' && !drawerOverlay.classList.contains('hidden')) {
+        drawerOverlay.classList.add('hidden');
+      }
+    };
+    window.addEventListener('keydown', handleKeydown);
+
     // Back Button Handler
     const backBtn = container.querySelector('#btn-chat-back');
     if (backBtn && onBack) {
-      backBtn.onclick = () => onBack();
+      backBtn.onclick = () => {
+        window.removeEventListener('keydown', handleKeydown);
+        onBack();
+      };
     }
 
     // Populate Select Options in Opsi Tab
@@ -337,6 +407,60 @@ export class ChatView {
           if (onProxyChanged) onProxyChanged();
         }
       };
+
+      // System Prompt Presets
+      const presets = await ProxyStore.getSystemPromptPresets();
+      const presetSelect = container.querySelector('#drawer-preset-select');
+      if (presetSelect) {
+        presetSelect.innerHTML = `<option value="">-- Select System Prompt Preset --</option>` +
+          presets.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
+
+        presetSelect.onchange = async (e) => {
+          const selectedId = e.target.value;
+          const targetPreset = presets.find(p => p.id === selectedId);
+          if (targetPreset) {
+            await ProxyStore.saveGlobalSystemPrompt(targetPreset.content);
+            Toast.success(`Preset System Prompt diset: ${targetPreset.name}`);
+          }
+        };
+      }
+
+      // Font Size Buttons
+      const genSettings = await ProxyStore.getGenerationSettings();
+      const currentFontSize = genSettings.fontSize || 'medium';
+      const messagesEl = container.querySelector('#messages-container');
+      if (messagesEl) {
+        messagesEl.className = 'messages-container font-' + currentFontSize;
+      }
+
+      const fontBtns = container.querySelectorAll('.btn-font-opt');
+      fontBtns.forEach(btn => {
+        if (btn.dataset.size === currentFontSize) {
+          btn.classList.add('btn-primary');
+          btn.classList.remove('btn-secondary');
+        } else {
+          btn.classList.remove('btn-primary');
+          btn.classList.add('btn-secondary');
+        }
+
+        btn.onclick = async () => {
+          const newSize = btn.dataset.size;
+          genSettings.fontSize = newSize;
+          await ProxyStore.saveGenerationSettings(genSettings);
+
+          fontBtns.forEach(b => {
+            b.classList.remove('btn-primary');
+            b.classList.add('btn-secondary');
+          });
+          btn.classList.add('btn-primary');
+          btn.classList.remove('btn-secondary');
+
+          if (messagesEl) {
+            messagesEl.className = 'messages-container font-' + newSize;
+          }
+          Toast.success(`Ukuran teks diset: ${newSize.toUpperCase()}`);
+        };
+      });
     };
 
     await populateDrawerSelects();
@@ -387,20 +511,20 @@ export class ChatView {
     };
 
     container.querySelector('#btn-delete-current-session').onclick = async () => {
-      if (confirm('Hapus sesi chat saat ini?')) {
+      if (confirm('Delete current chat session?')) {
         await ChatStore.deleteChat(currentChatId);
         const remaining = await ChatStore.getChatsByCharacter(selectedCharId);
         if (remaining.length > 0) {
           currentChatId = remaining[0].id;
         } else {
           const defaultPersona = await PersonaStore.getDefault();
-          const newSession = await createChatWithGreeting(defaultPersona?.id, `Sesi 1 - ${activeChar.name}`);
+          const newSession = await createChatWithGreeting(defaultPersona?.id, `Session 1 - ${activeChar.name}`);
           currentChatId = newSession.id;
         }
         await updateSessionList();
         await renderMessages();
         drawerOverlay.classList.add('hidden');
-        Toast.info('Sesi chat telah dihapus.');
+        Toast.info('Chat session deleted.');
       }
     };
 
@@ -415,10 +539,10 @@ export class ChatView {
             <div style="font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:1;">${escapeHtml(s.title)}</div>
           </div>
           <div style="display:flex; align-items:center; gap:0.15rem; flex-shrink:0;">
-            <button class="btn-rename-session" data-id="${s.id}" title="Ganti Nama Sesi">
+            <button class="btn-rename-session" data-id="${s.id}" title="Rename Session">
               <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
             </button>
-            ${chatSessions.length > 1 ? `<button class="btn-icon btn-del-session" data-id="${s.id}" style="padding:0.1rem 0.3rem;" title="Hapus Sesi">&times;</button>` : ''}
+            ${chatSessions.length > 1 ? `<button class="btn-icon btn-del-session" data-id="${s.id}" style="padding:0.1rem 0.3rem;" title="Delete Session">&times;</button>` : ''}
           </div>
         </div>
       `).join('');
@@ -438,7 +562,7 @@ export class ChatView {
           e.stopPropagation();
           const targetId = btn.dataset.id;
           const targetChat = chatSessions.find(s => s.id === targetId);
-          const newTitle = prompt('Ganti nama sesi:', targetChat?.title || '');
+          const newTitle = prompt('Rename session:', targetChat?.title || '');
           if (newTitle && newTitle.trim()) {
             await ChatStore.updateChatTitle(targetId, newTitle.trim(), { manual: true });
             await updateSessionList();
@@ -450,7 +574,7 @@ export class ChatView {
         btn.onclick = async (e) => {
           e.stopPropagation();
           const targetId = btn.dataset.id;
-          if (confirm('Hapus sesi chat ini?')) {
+          if (confirm('Delete this chat session?')) {
             await ChatStore.deleteChat(targetId);
             const remaining = await ChatStore.getChatsByCharacter(selectedCharId);
             if (remaining.length > 0) currentChatId = remaining[0].id;
@@ -465,9 +589,12 @@ export class ChatView {
       const messagesEl = container.querySelector('#messages-container');
       const msgs = await ChatStore.getMessages(currentChatId);
       const activePersonaObj = await PersonaStore.getDefault();
+      const userName = activePersonaObj?.name || 'User';
+      const charName = activeChar?.name || 'Character';
 
       if (msgs.length === 0) {
         // First message greeting block from character
+        const startMsg = replaceMacros(activeChar.first_mes, userName, charName);
         messagesEl.innerHTML = `
           <div class="message-block assistant">
             <div class="message-block-inner">
@@ -476,7 +603,7 @@ export class ChatView {
                 <div class="message-sender-name">${escapeHtml(activeChar.name)}</div>
               </div>
               <div class="message-content">
-                ${this.formatRoleplayMarkdown(activeChar.first_mes)}
+                ${this.formatRoleplayMarkdown(startMsg)}
               </div>
             </div>
           </div>
@@ -489,7 +616,7 @@ export class ChatView {
 
       messagesEl.innerHTML = msgs.map((m, idx) => {
         const isUser = m.role === 'user';
-        const senderName = isUser ? (activePersonaObj ? activePersonaObj.name : 'You') : activeChar.name;
+        const senderName = isUser ? userName : charName;
         const avatar = isUser ? (activePersonaObj?.avatar || 'https://api.dicebear.com/7.x/bottts/svg?seed=User') : activeChar.avatar;
         const swipeCount = m.swipes ? m.swipes.length : 1;
         const swipeIdx = m.swipeIndex || 0;
@@ -505,23 +632,30 @@ export class ChatView {
               </div>
 
               ${!isUser && thoughtsText ? `
-                <div class="thinking-block expanded" data-msgid="${m.id}">
+                <div class="thinking-block ${isThinkingCollapsedDefault ? '' : 'expanded'}" data-msgid="${m.id}">
                   <button class="thinking-toggle" type="button">
                     <svg class="thinking-chevron" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"></path></svg>
                     <span>Thinking</span>
+                    <span class="thinking-token-badge">${estimateThinkingTokens(thoughtsText).toLocaleString()} tokens</span>
                   </button>
                   <div class="thinking-content">${escapeHtml(thoughtsText)}</div>
                 </div>
               ` : ''}
 
               <div class="message-content" data-msgid="${m.id}">
-                ${this.formatRoleplayMarkdown(m.content)}
+                ${this.formatRoleplayMarkdown(m.content, userName, charName)}
               </div>
 
               <div class="message-footer">
                 <div class="message-footer-actions">
-                  <button class="btn-msg-action btn-edit-message" data-id="${m.id}">Edit</button>
-                  ${!isUser && !isLastAssistant ? `<button class="btn-msg-action btn-fork-message" data-id="${m.id}">Fork dari sini</button>` : ''}
+                  <button class="btn-msg-action btn-edit-message" data-id="${m.id}" title="Edit pesan">
+                    <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+                  </button>
+                  ${!isUser && !isLastAssistant ? `
+                    <button class="btn-msg-action btn-fork-message" data-id="${m.id}" title="Fork sesi dari pesan ini">
+                      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="18" r="3"></circle><circle cx="6" cy="6" r="3"></circle><circle cx="18" cy="6" r="3"></circle><path d="M18 9v2a2 2 0 01-2 2H8a2 2 0 01-2-2V9"></path><path d="M12 12v3"></path></svg>
+                    </button>
+                  ` : ''}
                 </div>
 
                 ${!isUser ? `
@@ -537,7 +671,7 @@ export class ChatView {
         `;
       }).join('');
 
-      messagesEl.scrollTop = messagesEl.scrollHeight;
+      scrollToBottom(messagesEl);
 
       // Direction-aware slide animation helper for swipe transitions
       const refreshMessageBlock = async (messageId, direction = 'next') => {
@@ -579,9 +713,16 @@ export class ChatView {
         btn.onclick = async () => this.handleSwipeNext(btn.dataset.id, currentChatId, activeChar, () => refreshMessageBlock(btn.dataset.id, 'next'));
       });
 
-      // Thinking block collapse/expand toggle (default expanded)
+      // Thinking block collapse/expand toggle
       messagesEl.querySelectorAll('.thinking-toggle').forEach(btn => {
-        btn.onclick = () => btn.closest('.thinking-block').classList.toggle('expanded');
+        btn.onclick = () => {
+          const block = btn.closest('.thinking-block');
+          if (block) {
+            const isExpanded = block.classList.toggle('expanded');
+            isThinkingCollapsedDefault = !isExpanded;
+            localStorage.setItem('aetheria_thinking_collapsed', isThinkingCollapsedDefault ? '1' : '0');
+          }
+        };
       });
 
       // Inline message editing (both user and assistant messages)
@@ -614,7 +755,7 @@ export class ChatView {
               return;
             }
             await ChatStore.updateMessageContent(msgId, newText);
-            Toast.success('Pesan berhasil diedit.');
+            Toast.success('Message edited successfully.');
             await renderMessages();
           };
         };
@@ -625,14 +766,14 @@ export class ChatView {
       messagesEl.querySelectorAll('.btn-fork-message').forEach(btn => {
         btn.onclick = async () => {
           const msgId = btn.dataset.id;
-          if (!confirm('Fork sesi chat dari titik pesan ini? Sesi baru akan dibuat sebagai cabang terpisah dan pesan ini bisa di-regenerate di sana.')) return;
+          if (!confirm('Fork chat session from this message point? A new session branch will be created.')) return;
           try {
             const newChat = await ChatStore.forkChat(currentChatId, msgId);
             currentChatId = newChat.id;
             await updateSessionList();
             await renderMessages();
             drawerOverlay.classList.add('hidden');
-            Toast.success(`Sesi baru "${newChat.title}" dibuat dari fork.`);
+            Toast.success(`New session "${newChat.title}" created from fork.`);
           } catch (err) {
             Toast.error(err.message);
           }
@@ -744,11 +885,12 @@ export class ChatView {
             onContentChunk: (delta) => {
               liveContent += delta;
               typingContentEl.innerHTML = this.formatRoleplayMarkdown(liveContent);
-              messagesEl.scrollTop = messagesEl.scrollHeight;
+              scrollToBottom(messagesEl);
             },
             onThinkingChunk: (delta) => {
               liveThinking += delta;
               syncThinkingBlock(typingInnerEl, liveThinking, { streaming: true });
+              scrollToBottom(messagesEl);
             }
           });
           ({ content: finalContent, thinking: finalThinking } = mergePrefillResult(genSettings, result));
@@ -806,11 +948,11 @@ export class ChatView {
     newSessionBtn.onclick = async () => {
       const activePersonaObj = await PersonaStore.getDefault();
       const chatSessions = await ChatStore.getChatsByCharacter(selectedCharId);
-      const newSession = await createChatWithGreeting(activePersonaObj?.id, `Sesi ${chatSessions.length + 1} - ${activeChar.name}`);
+      const newSession = await createChatWithGreeting(activePersonaObj?.id, `Session ${chatSessions.length + 1} - ${activeChar.name}`);
       currentChatId = newSession.id;
       await updateSessionList();
       await renderMessages();
-      Toast.success('Sesi roleplay baru telah dibuat!');
+      Toast.success('New roleplay session created!');
     };
 
     // Initial render
@@ -881,8 +1023,16 @@ export class ChatView {
     activeAbortController = new AbortController();
     setGeneratingState(true);
 
+    const messagesEl = document.getElementById('messages-container');
     const contentEl = document.querySelector(`.message-content[data-msgid="${messageId}"]`);
     const blockInnerEl = document.querySelector(`.message-block[data-id="${messageId}"] .message-block-inner`);
+
+    // Remove any stale thinking block from previous variation before starting generation
+    if (blockInnerEl) {
+      const staleThinking = blockInnerEl.querySelector('.thinking-block');
+      if (staleThinking) staleThinking.remove();
+    }
+
     const restoreOriginal = () => {
       if (contentEl) contentEl.innerHTML = ChatView.formatRoleplayMarkdown(msg.content);
       if (blockInnerEl) syncThinkingBlock(blockInnerEl, (msg.thoughts || '').trim(), { streaming: false });
@@ -900,10 +1050,12 @@ export class ChatView {
           onContentChunk: (delta) => {
             liveContent += delta;
             if (contentEl) contentEl.innerHTML = ChatView.formatRoleplayMarkdown(liveContent);
+            scrollToBottom(messagesEl);
           },
           onThinkingChunk: (delta) => {
             liveThinking += delta;
             if (blockInnerEl) syncThinkingBlock(blockInnerEl, liveThinking, { streaming: true });
+            scrollToBottom(messagesEl);
           }
         });
         ({ content: newContent, thinking: newThinking } = mergePrefillResult(genSettings, result));
@@ -939,11 +1091,15 @@ export class ChatView {
     }
   }
 
-  static formatRoleplayMarkdown(text = '') {
+  static formatRoleplayMarkdown(text = '', userName = '', charName = '') {
     if (!text) return '';
+    let textToFormat = text;
+    if (userName || charName) {
+      textToFormat = replaceMacros(text, userName, charName);
+    }
     // Escape raw HTML first so chat content (user-typed or AI-generated) can
     // never inject tags/scripts through here - only markdown syntax survives.
-    let formatted = escapeHtml(text);
+    let formatted = escapeHtml(textToFormat);
     // Format actions in italics (*action* -> <em>action</em>)
     formatted = formatted.replace(/\*(.*?)\*/g, '<em>$1</em>');
     // Format quotes ("speech" -> <strong>"speech"</strong>)

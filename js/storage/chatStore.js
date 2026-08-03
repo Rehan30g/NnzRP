@@ -11,7 +11,7 @@ export class ChatStore {
     return await db.get('chats', id);
   }
 
-  static async createChat(characterId, personaId, title = 'New Sesi Roleplay') {
+  static async createChat(characterId, personaId, title = 'New Roleplay Session') {
     const now = Date.now();
     const chat = {
       id: `chat-${now}`,

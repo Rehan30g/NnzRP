@@ -1,19 +1,19 @@
 /* css/variables.css - Flat Grayish Design System Tokens */
 :root {
-  /* Color Palette - Flat Grayish Slate Theme */
-  --bg-primary: #f1f5f9;       /* Light Slate-100 */
-  --bg-secondary: #ffffff;     /* Flat White Sidebar/Header */
+  /* Color Palette - Clean Slate Light Theme (Zero Yellow) */
+  --bg-primary: #f1f5f9;       /* Slate-100 (#f1f5f9) */
+  --bg-secondary: #ffffff;     /* Flat White Containers */
   --bg-tertiary: #e2e8f0;      /* Slate-200 */
   --bg-surface: #ffffff;       /* Flat White Surface */
-  --bg-surface-hover: #f8fafc; /* Hover Slate */
+  --bg-surface-hover: #f8fafc; /* Slate Hover */
   --bg-glass: #ffffff;
   --bg-glass-card: #ffffff;
   --bg-glass-input: #f8fafc;
 
-  /* Accents - Flat Solid Colors */
-  --accent-primary: #4f46e5;        /* Flat Indigo */
+  /* Accents - Sleek Indigo & Violet */
+  --accent-primary: #4f46e5;        /* Sleek Indigo */
   --accent-primary-hover: #4338ca;
-  --accent-secondary: #7c3aed;      /* Flat Violet */
+  --accent-secondary: #7c3aed;      /* Sleek Violet */
   --accent-cyan: #0284c7;           /* Flat Cyan */
   --accent-rose: #e11d48;           /* Flat Rose */
   --accent-emerald: #059669;        /* Flat Emerald */
@@ -22,22 +22,22 @@
   --gradient-primary: #4f46e5;
   --gradient-accent: #7c3aed;
 
-  /* Text Colors - High Contrast Dark Slate on Light Gray */
+  /* Text Colors - High Contrast Dark Slate */
   --text-main: #0f172a;       /* Slate-900 */
   --text-muted: #334155;      /* Slate-700 */
   --text-dim: #64748b;        /* Slate-500 */
   --text-accent: #4f46e5;     /* Indigo Accent Text */
 
-  /* Borders & Dividers - Flat Crisp Gray Borders */
+  /* Borders & Dividers - Crisp Gray Borders */
   --border-light: #e2e8f0;
   --border-subtle: #cbd5e1;
   --border-focus: #4f46e5;
 
-  /* Flat Subtle Shadows */
-  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
-  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.07);
-  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.08);
-  --shadow-glow: 0 0 0 3px rgba(79, 70, 229, 0.15);
+  /* Flat Subtle Shadows - Flat Design (No Carding) */
+  --shadow-sm: none;
+  --shadow-md: none;
+  --shadow-lg: none;
+  --shadow-glow: 0 0 0 2px rgba(79, 70, 229, 0.2);
 
   /* Border Radii - Clean Flat Radii */
   --radius-sm: 6px;

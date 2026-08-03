@@ -1,12 +1,12 @@
 # CLAUDE.md — Agent System Guide & Code Function Index
 
-This document provides a concise architectural sitemap and function lookup table for **Aetheria RP Studio**. AI agents reading this file can instantly understand the codebase structure without reading every file individually.
+This document provides a concise architectural sitemap and function lookup table for **NnzRP**. AI agents reading this file can instantly understand the codebase structure without reading every file individually.
 
 ---
 
-## 🎯 Architecture Summary
+## 🏛️ System Overview & Core Stack
 
-- **App Name**: Aetheria RP Studio (Client-Side BYOK AI Roleplay Studio)
+- **App Name**: NnzRP (Client-Side BYOK AI Roleplay Studio)
 - **Backend**: None (100% Client-Side, Browser BYOK)
 - **Database**: Native IndexedDB (`AetheriaRoleplayDB_v2`)
 - **Routing**: ES6 Module Router in `js/app.js`

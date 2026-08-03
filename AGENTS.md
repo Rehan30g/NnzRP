@@ -1,6 +1,6 @@
 # AGENTS.md — Codebase Map & AI Operating Manual
 
-> **Project Name**: Aetheria RP Studio  
+> **Project Name**: NnzRP  
 > **Type**: 100% Client-Side BYOK AI Roleplay Web Application (Zero Backend Required)  
 > **Design Philosophy**: Flat Grayish Slate Light Theme, Minimalist UI, Dedicated Fullscreen Chat, Per-Block Storybook Formatting, Floating Overlay Input.
 
@@ -156,3 +156,7 @@ D:\CODEY\
    - Keep chat messages in **Per-Block Storybook format** (`.message-block`), not rounded speech bubbles.
    - Keep chat input box as an **Absolute Floating Overlay Card** over the bottom screen area.
    - Maintain the **Dedicated Fullscreen Chat Page** with `Kembali` button navigation.
+
+3. **Mandatory Testing & Visual Verification Directive**:
+   - **ALWAYS TEST VISUALLY BEFORE DECLARING COMPLETED**: Before finishing any task or reporting to the user, ALWAYS use MCP Browser (`browser_navigate`, `browser_snapshot`, `browser_screenshot`) to verify that the UI renders cleanly, visual layout is harmonious, text/elements are not clipped, and interactive elements work as expected.
+

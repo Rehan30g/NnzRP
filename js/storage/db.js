@@ -168,4 +168,12 @@ export async function initDatabase() {
       value: APP_CONFIG.DEFAULT_GLOBAL_SYSTEM_PROMPT
     });
   }
+
+  const presets = await db.get('settings', 'systemPromptPresets');
+  if (!presets) {
+    await db.put('settings', {
+      key: 'systemPromptPresets',
+      value: APP_CONFIG.DEFAULT_SYSTEM_PROMPT_PRESETS
+    });
+  }
 }

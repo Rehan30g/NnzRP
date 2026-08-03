@@ -63,7 +63,12 @@
   transition: opacity var(--transition-fast);
 }
 
-.app-sidebar.collapsed .brand-text {
+.app-sidebar.collapsed .sidebar-header {
+  padding: 0 0.5rem;
+  justify-content: center;
+}
+
+.app-sidebar.collapsed .brand-wrapper {
   display: none;
 }
 
@@ -139,22 +144,24 @@
   padding: 0.7rem 0;
 }
 
-/* Tooltip on collapsed hover */
-.app-sidebar.collapsed .nav-item:hover::after {
-  content: attr(data-tooltip);
-  position: absolute;
-  left: calc(100% + 10px);
-  top: 50%;
-  transform: translateY(-50%);
-  background: #0f172a;
-  color: #ffffff;
-  padding: 0.35rem 0.75rem;
-  border-radius: var(--radius-sm);
-  font-size: 0.8rem;
-  white-space: nowrap;
-  box-shadow: var(--shadow-md);
-  pointer-events: none;
-  z-index: 1000;
+/* Tooltip on collapsed hover (Desktop only) */
+@media (min-width: 769px) {
+  .app-sidebar.collapsed .nav-item:hover::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    left: calc(100% + 10px);
+    top: 50%;
+    transform: translateY(-50%);
+    background: #0f172a;
+    color: #ffffff;
+    padding: 0.35rem 0.75rem;
+    border-radius: var(--radius-sm);
+    font-size: 0.8rem;
+    white-space: nowrap;
+    box-shadow: var(--shadow-md);
+    pointer-events: none;
+    z-index: 1000;
+  }
 }
 
 /* Sidebar Footer (Active Proxy) */
@@ -176,6 +183,12 @@
 .app-sidebar.collapsed .proxy-status-card {
   padding: 0.5rem;
   text-align: center;
+}
+
+.proxy-info-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .app-sidebar.collapsed .proxy-info-text {
@@ -217,21 +230,184 @@
   position: relative;
 }
 
-/* Grid Views */
+/* Grid Views (Desktop Default) */
 .grid-cards {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
   gap: 1.5rem;
 }
 
+.view-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.5rem;
+}
+
+.mobile-toggle {
+  display: none;
+}
+
 @media (max-width: 768px) {
+  #app {
+    flex-direction: column;
+  }
+
+  /* Main Header on Mobile */
+  .main-header {
+    padding: 0 1rem;
+    height: 52px;
+    justify-content: center !important;
+  }
+
+  .navbar-title-wrapper {
+    display: flex !important;
+  }
+
+  .navbar-title-wrapper h2 {
+    font-size: 1.15rem !important;
+    font-weight: 700 !important;
+  }
+
+  .navbar-proxy-wrapper {
+    display: none !important; /* Hide Active Proxy dropdown from top navbar on mobile */
+  }
+
+  /* View Header Rows on Mobile */
+  .view-header-row {
+    flex-direction: column;
+    align-items: stretch !important;
+    gap: 0.85rem;
+    margin-bottom: 1.25rem;
+  }
+
+  .view-header-row > div {
+    width: 100%;
+  }
+
+  .view-header-row > div:last-child {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem !important;
+    width: 100%;
+  }
+
+  .view-header-row .btn, 
+  .view-header-row label.btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  /* View Container Padding on Mobile */
+  .view-container {
+    padding: 1.25rem 1rem 80px 1rem;
+  }
+
+  /* Grid Layout on Mobile */
+  .grid-cards {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
+
+  /* Transform Sidebar into Sticky Mobile Bottom Navigation Bar */
   .app-sidebar {
     position: fixed;
-    top: 0; bottom: 0; left: 0;
-    transform: translateX(-100%);
-    box-shadow: var(--shadow-lg);
+    bottom: 0;
+    left: 0;
+    right: 0;
+    top: auto;
+    width: 100% !important;
+    height: 60px;
+    flex-direction: row;
+    border-right: none;
+    border-top: 1px solid var(--border-light);
+    background-color: #ffffff;
+    z-index: 1000;
+    box-shadow: 0 -2px 12px rgba(15, 23, 42, 0.08);
+    transform: none !important;
   }
-  .app-sidebar.open {
-    transform: translateX(0);
+
+  .sidebar-header,
+  .sidebar-footer {
+    display: none !important;
+  }
+
+  .sidebar-nav {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-around;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    gap: 0;
+  }
+
+  /* Exclude Roleplay Chat tab on mobile bottom navigation bar */
+  .sidebar-nav .nav-item[data-view="chat"] {
+    display: none !important;
+  }
+
+  /* Disable tooltip popups on mobile */
+  .sidebar-nav .nav-item::after,
+  .sidebar-nav .nav-item:hover::after,
+  .sidebar-nav .nav-item:active::after,
+  .sidebar-nav .nav-item:focus::after {
+    display: none !important;
+    content: none !important;
+  }
+
+  .sidebar-nav .nav-item {
+    flex: 1;
+    height: 100%;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    gap: 0.2rem;
+    padding: 0.25rem 0;
+    border-radius: 0;
+    white-space: nowrap;
+    position: relative;
+    color: var(--text-dim);
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .sidebar-nav .nav-item svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  .sidebar-nav .nav-label {
+    display: block !important;
+    font-size: 0.68rem;
+    font-weight: 500;
+    line-height: 1;
+  }
+
+  .sidebar-nav .nav-item.active {
+    background: transparent;
+    color: var(--accent-primary);
+    font-weight: 600;
+    border-top: none;
+  }
+
+  .sidebar-nav .nav-item.active::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 20%;
+    right: 20%;
+    height: 3px;
+    background-color: var(--accent-primary);
+    border-bottom-left-radius: 3px;
+    border-bottom-right-radius: 3px;
+  }
+
+  /* Hide mobile hamburger toggle since bottom bar replaces slide-over menu */
+  .mobile-toggle {
+    display: none !important;
   }
 }

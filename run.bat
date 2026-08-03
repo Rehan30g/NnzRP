@@ -1,8 +1,8 @@
 @echo off
-title Aetheria RP Studio - BYOK AI Roleplay App
+title NnzRP - BYOK AI Roleplay App
 color 0B
 echo ===================================================
-echo     Aetheria RP Studio - BYOK AI Roleplay Client   
+echo     NnzRP - BYOK AI Roleplay Client   
 echo ===================================================
 echo.
 echo Menjalankan local server di http://localhost:8080 ...

@@ -18,33 +18,39 @@
 }
 
 .btn-primary {
-  background: var(--accent-primary);
-  color: #ffffff;
-  border-color: var(--accent-primary);
+  background: #ffffff;
+  color: var(--text-main);
+  border: 1.5px solid var(--border-subtle);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(28,25,23,0.06);
 }
 .btn-primary:hover {
-  background: var(--accent-primary-hover);
-  border-color: var(--accent-primary-hover);
+  background: var(--bg-surface-hover);
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
 }
 
 .btn-secondary {
   background: #ffffff;
   color: var(--text-main);
-  border-color: var(--border-subtle);
+  border: 1px solid var(--border-light);
+  box-shadow: 0 1px 2px rgba(28,25,23,0.04);
 }
 .btn-secondary:hover {
-  background: var(--bg-primary);
-  border-color: var(--text-dim);
+  background: var(--bg-surface-hover);
+  border-color: var(--border-subtle);
+  color: var(--text-main);
 }
 
 .btn-danger {
-  background: #ffe4e6;
+  background: #ffffff;
   color: var(--accent-rose);
-  border-color: #fecdd3;
+  border: 1px solid #fecdd3;
 }
 .btn-danger:hover {
-  background: var(--accent-rose);
-  color: #ffffff;
+  background: #fff1f2;
+  border-color: var(--accent-rose);
+  color: var(--accent-rose);
 }
 
 .btn-icon {
@@ -210,16 +216,25 @@
   background: #f8fafc;
 }
 
-/* Toasts - Clean Flat Alerts */
+/* Toasts - Clean Flat Alerts (Positioned at Bottom Right Dead Zone) */
 .toast-container {
   position: fixed;
   bottom: 1.5rem;
   right: 1.5rem;
   display: flex;
-  flex-direction: column;
+  flex-direction: column-reverse;
   gap: 0.6rem;
-  z-index: 2000;
+  z-index: 9999;
   pointer-events: none;
+}
+
+@media (max-width: 768px) {
+  .toast-container {
+    bottom: 75px; /* Clear of 60px mobile bottom navigation bar */
+    right: 1rem;
+    left: auto;
+    max-width: calc(100vw - 2rem);
+  }
 }
 
 .toast {
@@ -241,3 +256,100 @@
 .toast-success { border-left: 4px solid var(--accent-emerald); }
 .toast-error { border-left: 4px solid var(--accent-rose); }
 .toast-info { border-left: 4px solid var(--accent-cyan); }
+
+/* ===================================================
+   Full-page & View Loading Indicators
+   =================================================== */
+.app-loading-screen {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  width: 100%;
+  background-color: var(--bg-primary, #f1f5f9);
+  font-family: var(--font-main, 'Inter', sans-serif);
+  color: var(--text-main, #0f172a);
+}
+
+.app-loading-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: #ffffff;
+  padding: 2.5rem 3rem;
+  border-radius: var(--radius-xl, 16px);
+  border: 1px solid var(--border-light, #e2e8f0);
+  box-shadow: var(--shadow-md);
+  text-align: center;
+  max-width: 380px;
+  width: 90%;
+  animation: appLoadingFadeIn 0.3s ease-out forwards;
+}
+
+.app-loading-logo {
+  width: 56px;
+  height: 56px;
+  background: linear-gradient(135deg, var(--accent-primary, #4f46e5) 0%, var(--accent-violet, #7c3aed) 100%);
+  color: #ffffff;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 1.25rem;
+  box-shadow: 0 4px 12px rgba(79, 70, 229, 0.25);
+}
+
+.app-loading-title {
+  font-family: var(--font-heading, 'Outfit', sans-serif);
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: var(--text-main, #0f172a);
+  margin: 0 0 1.25rem 0;
+  letter-spacing: -0.01em;
+}
+
+.app-loading-spinner-wrapper {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  margin-bottom: 1rem;
+}
+
+.app-loading-spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid var(--border-light, #e2e8f0);
+  border-top-color: var(--accent-primary, #4f46e5);
+  border-radius: 50%;
+  animation: appSpinnerRotate 0.8s linear infinite;
+}
+
+.app-loading-sub {
+  font-size: 0.85rem;
+  color: var(--text-dim, #64748b);
+  margin: 0;
+  font-weight: 500;
+}
+
+.view-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 300px;
+  height: 100%;
+  gap: 1rem;
+  color: var(--text-dim);
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+@keyframes appSpinnerRotate {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+@keyframes appLoadingFadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}

@@ -1,5 +1,6 @@
 /* js/services/promptBuilder.js - Dynamic Prompt Payload Assembler */
 import { LorebookEngine } from './lorebookEngine.js';
+import { replaceMacros } from '../utils/macroReplacer.js';
 
 export class PromptBuilder {
   /**
@@ -13,19 +14,21 @@ export class PromptBuilder {
     contextLimit = 25
   }) {
     const payload = [];
+    const userName = persona?.name || 'User';
+    const charName = character?.name || 'Character';
 
     // 1. Build System Instruction Block
     let systemContent = globalSystemPrompt ? `${globalSystemPrompt.trim()}\n\n` : '';
 
     // Character Card Definitions
-    systemContent += `[Character Profile: ${character.name}]\n`;
+    systemContent += `[Character Profile: ${charName}]\n`;
     if (character.description) systemContent += `Description: ${character.description}\n`;
     if (character.personality) systemContent += `Personality: ${character.personality}\n`;
     if (character.scenario) systemContent += `Scenario: ${character.scenario}\n`;
 
     // Active User Persona Definitions
     if (persona) {
-      systemContent += `\n[User Persona: ${persona.name}]\n`;
+      systemContent += `\n[User Persona: ${userName}]\n`;
       if (persona.description) systemContent += `User Info: ${persona.description}\n`;
     }
 
@@ -40,12 +43,15 @@ export class PromptBuilder {
       systemContent += `\n[Example Dialogue / Style Guide]\n${character.example_dialogue.trim()}\n`;
     }
 
+    // Replace {{user}} and {{char}} macros in system content
+    systemContent = replaceMacros(systemContent, userName, charName);
+
     // Push system message
     payload.push({ role: 'system', content: systemContent.trim() });
 
-    // First Message (Greeting) injection if history is empty or at the start
-    if (character.first_mes) {
-      payload.push({ role: 'assistant', content: character.first_mes });
+    // First Message (Greeting) injection if history is empty
+    if (character.first_mes && messages.length === 0) {
+      payload.push({ role: 'assistant', content: replaceMacros(character.first_mes, userName, charName) });
     }
 
     // Slice recent chat messages according to contextLimit
@@ -53,10 +59,11 @@ export class PromptBuilder {
     for (const msg of recentMessages) {
       payload.push({
         role: msg.role === 'user' ? 'user' : 'assistant',
-        content: msg.content
+        content: replaceMacros(msg.content, userName, charName)
       });
     }
 
     return payload;
   }
 }
+

@@ -10,10 +10,10 @@ export class CharactersView {
     const characters = await CharacterStore.getAll();
 
     container.innerHTML = `
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1.5rem;">
+      <div class="view-header-row">
         <div>
           <h2 style="font-size:1.5rem; margin-bottom:0.25rem;">AI Character Library</h2>
-          <p style="color:var(--text-muted); font-size:0.88rem;">Pilih karakter untuk memulai roleplay, buat karakter baru, atau import Character Card.</p>
+          <p style="color:var(--text-muted); font-size:0.88rem;">Select a character to start roleplaying, create a new character, or import a Character Card.</p>
         </div>
         <div style="display:flex; gap:0.75rem;">
           <label class="btn btn-secondary btn-sm" style="cursor:pointer;">
@@ -23,7 +23,7 @@ export class CharactersView {
           </label>
           <button class="btn btn-primary btn-sm" id="btn-create-character">
             <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 4v16m8-8H4"></path></svg>
-            Buat Karakter
+            Create Character
           </button>
         </div>
       </div>
@@ -39,8 +39,8 @@ export class CharactersView {
               </div>
             </div>
 
-            <p style="font-size:0.85rem; color:var(--text-muted); display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; margin-bottom:1rem; min-height:3.8em;">
-              ${escapeHtml(char.description) || 'Tidak ada deskripsi.'}
+            <p style="font-size:0.85rem; color:var(--text-muted); display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; word-break:break-word; overflow-wrap:anywhere; margin-bottom:1rem; min-height:3.8em;">
+              ${escapeHtml(char.description) || 'No description provided.'}
             </p>
 
             <div style="display:flex; flex-wrap:wrap; gap:0.3rem; margin-bottom:1.2rem;">
@@ -49,7 +49,7 @@ export class CharactersView {
 
             <div style="display:flex; gap:0.5rem; border-top:1px solid var(--border-light); padding-top:0.8rem;">
               <button class="btn btn-primary btn-sm btn-chat-now" data-id="${char.id}" style="flex:1;">
-                Chat Sesi Roleplay
+                Start Chat
               </button>
               <button class="btn btn-secondary btn-sm btn-edit-char" data-id="${char.id}">
                 Edit
@@ -75,7 +75,7 @@ export class CharactersView {
       try {
         const parsed = await CardImporter.parseJSONFile(file);
         await CharacterStore.save(parsed);
-        Toast.success(`Karakter "${parsed.name}" berhasil di-import!`);
+        Toast.success(`Character "${parsed.name}" imported successfully.`);
         this.render(container, onStartChat);
       } catch (err) {
         Toast.error(err.message);
@@ -126,14 +126,14 @@ export class CharactersView {
     const contentHTML = `
       <form id="form-character">
         <div class="form-group">
-          <label class="form-label">Nama Karakter *</label>
-          <input class="input" id="char-name" value="${escapeAttr(charData.name)}" required placeholder="misal: Vespera Zenith">
+          <label class="form-label">Character Name *</label>
+          <input class="input" id="char-name" value="${escapeAttr(charData.name)}" required placeholder="e.g. Vespera Zenith">
         </div>
 
         <div style="display:grid; grid-template-columns: 1fr 1fr; gap:1rem;">
           <div class="form-group">
             <label class="form-label">Tagline / Subtitle</label>
-            <input class="input" id="char-tagline" value="${escapeAttr(charData.tagline)}" placeholder="misal: Cyberpunk Rogue Hacker">
+            <input class="input" id="char-tagline" value="${escapeAttr(charData.tagline)}" placeholder="e.g. Cyberpunk Rogue Hacker">
           </div>
           <div class="form-group">
             <label class="form-label">Avatar Image URL</label>
@@ -142,49 +142,49 @@ export class CharactersView {
         </div>
 
         <div class="form-group">
-          <label class="form-label">Deskripsi Karakter</label>
-          <textarea class="textarea" id="char-description" placeholder="Penjelasan singkat latar belakang karakter...">${escapeHtml(charData.description)}</textarea>
+          <label class="form-label">Character Description</label>
+          <textarea class="textarea" id="char-description" placeholder="Brief backstory and summary of the character...">${escapeHtml(charData.description)}</textarea>
         </div>
 
         <div class="form-group">
-          <label class="form-label">Sifat & Personality Traits</label>
+          <label class="form-label">Personality Traits</label>
           <textarea class="textarea" id="char-personality" placeholder="Cynical, witty, fiercely independent...">${escapeHtml(charData.personality)}</textarea>
         </div>
 
         <div class="form-group">
-          <label class="form-label">Scenario (Konteks Awal Situasi)</label>
-          <textarea class="textarea" id="char-scenario" placeholder="Situasi tempat pertama kali user & AI bertemu...">${escapeHtml(charData.scenario)}</textarea>
+          <label class="form-label">Scenario (Starting Context)</label>
+          <textarea class="textarea" id="char-scenario" placeholder="Initial setting where the user and AI meet...">${escapeHtml(charData.scenario)}</textarea>
         </div>
 
         <div class="form-group">
-          <label class="form-label">First Message / Pesan Sapaan Pertama *</label>
-          <textarea class="textarea" id="char-first-mes" required placeholder="*Dia menatapmu...* 'Ada apa?'">${escapeHtml(charData.first_mes)}</textarea>
+          <label class="form-label">First Message / Greeting *</label>
+          <textarea class="textarea" id="char-first-mes" required placeholder="*She glances up at you...* 'What do you want?'">${escapeHtml(charData.first_mes)}</textarea>
         </div>
 
         <div class="form-group">
           <label class="form-label">Example Dialogue (&lt;START&gt; format)</label>
-          <textarea class="textarea" id="char-example" placeholder="<START>\n<user>: Halo\n<${charData.name || 'Char'}>: *Tersenyum* Halo!">${escapeHtml(charData.example_dialogue)}</textarea>
+          <textarea class="textarea" id="char-example" placeholder="<START>\n<user>: Hello\n<${charData.name || 'Char'}>: *Smirks* Hey there.">${escapeHtml(charData.example_dialogue)}</textarea>
         </div>
 
         <div class="form-group">
-          <label class="form-label">Tags (pisahkan dengan koma)</label>
+          <label class="form-label">Tags (comma separated)</label>
           <input class="input" id="char-tags" value="${escapeAttr((charData.tags || []).join(', '))}" placeholder="Cyberpunk, Action, Sci-Fi">
         </div>
       </form>
     `;
 
     Modal.open({
-      title: isEdit ? `Edit Karakter: ${escapeHtml(charData.name)}` : 'Buat Karakter AI Baru',
+      title: isEdit ? `Edit Character: ${escapeHtml(charData.name)}` : 'Create New AI Character',
       contentHTML,
       buttons: [
         ...(isEdit ? [{
           id: 'btn-delete-char',
-          label: 'Hapus Karakter',
+          label: 'Delete Character',
           className: 'btn-danger',
           onClick: async () => {
-            if (confirm(`Yakin ingin menghapus ${charData.name}? Semua sesi chat karakter ini akan terhapus!`)) {
+            if (confirm(`Are you sure you want to delete ${charData.name}? All chat sessions for this character will be permanently deleted.`)) {
               await CharacterStore.delete(charData.id);
-              Toast.info('Karakter terhapus.');
+              Toast.info('Character deleted.');
               Modal.close();
               onSaved();
             }
@@ -192,19 +192,19 @@ export class CharactersView {
         }] : []),
         {
           id: 'btn-cancel-char',
-          label: 'Batal',
+          label: 'Cancel',
           className: 'btn-secondary',
           onClick: () => Modal.close()
         },
         {
           id: 'btn-save-char',
-          label: 'Simpan Karakter',
+          label: 'Save Character',
           className: 'btn-primary',
           onClick: async () => {
             const name = document.getElementById('char-name').value.trim();
             const first_mes = document.getElementById('char-first-mes').value.trim();
             if (!name || !first_mes) {
-              Toast.error('Nama dan First Message wajib diisi!');
+              Toast.error('Character name and first message are required.');
               return;
             }
 
@@ -222,7 +222,7 @@ export class CharactersView {
             };
 
             await CharacterStore.save(updatedData);
-            Toast.success('Karakter berhasil disimpan!');
+            Toast.success('Character saved successfully.');
             Modal.close();
             onSaved();
           }
@@ -231,3 +231,4 @@ export class CharactersView {
     });
   }
 }
+

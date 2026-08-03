@@ -17,7 +17,7 @@ class NoCacheHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
         super().end_headers()
 
 print(f"===================================================")
-print(f"  Aetheria RP Studio Server Running on Port {PORT}")
+print(f"  NnzRP Server Running on Port {PORT}")
 print(f"  Cache-Control: Disabled (Always Fresh Code)")
 print(f"===================================================")
 

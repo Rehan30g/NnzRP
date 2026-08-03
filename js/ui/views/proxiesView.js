@@ -10,13 +10,13 @@ export class ProxiesView {
     const proxies = await ProxyStore.getAll();
 
     container.innerHTML = `
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1.5rem;">
+      <div class="view-header-row">
         <div>
           <h2 style="font-size:1.5rem; margin-bottom:0.25rem;">Multi-Proxy Provider Configurations</h2>
-          <p style="color:var(--text-muted); font-size:0.88rem;">Kelola multiple AI providers, API Keys, dan model endpoint (OpenAI, Anthropic, Gemini, OpenRouter, Custom Local Proxy).</p>
+          <p style="color:var(--text-muted); font-size:0.88rem;">Manage AI providers, API keys, and model endpoints (OpenAI, Anthropic, Gemini, OpenRouter, Custom Local Proxy).</p>
         </div>
         <button class="btn btn-primary btn-sm" id="btn-create-proxy">
-          + Tambah Proxy Profile
+          + Add Proxy Profile
         </button>
       </div>
 
@@ -26,7 +26,7 @@ export class ProxiesView {
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem;">
               <h3 style="font-size:1.1rem; display:flex; align-items:center; gap:0.5rem;">
                 ${escapeHtml(p.name)}
-                ${p.isDefault ? `<span class="badge badge-emerald">Aktif Default</span>` : ''}
+                ${p.isDefault ? `<span class="badge badge-emerald">Active Default</span>` : ''}
               </h3>
               <span class="badge badge-cyan">${escapeHtml(p.provider.toUpperCase())}</span>
             </div>
@@ -68,7 +68,7 @@ export class ProxiesView {
     container.querySelectorAll('.btn-test-proxy').forEach(btn => {
       btn.onclick = async () => {
         const proxy = await ProxyStore.getById(btn.dataset.id);
-        Toast.info(`Testing koneksi ke ${proxy.name}...`);
+        Toast.info(`Testing connection to ${proxy.name}...`);
         const res = await ProviderManager.testConnection(proxy);
         if (res.success) {
           Toast.success(res.message);
@@ -84,7 +84,7 @@ export class ProxiesView {
         if (proxy) {
           proxy.isDefault = true;
           await ProxyStore.save(proxy);
-          Toast.success(`Proxy "${proxy.name}" diset sebagai aktif default.`);
+          Toast.success(`Proxy "${proxy.name}" set as active default.`);
           this.render(container);
         }
       };
@@ -112,8 +112,8 @@ export class ProxiesView {
     const contentHTML = `
       <form id="form-proxy">
         <div class="form-group">
-          <label class="form-label">Nama Profile Proxy *</label>
-          <input class="input" id="proxy-name" value="${escapeAttr(data.name)}" required placeholder="misal: OpenRouter Claude 3.5">
+          <label class="form-label">Proxy Profile Name *</label>
+          <input class="input" id="proxy-name" value="${escapeAttr(data.name)}" required placeholder="e.g. OpenRouter Claude 3.5">
         </div>
 
         <div style="display:grid; grid-template-columns: 1fr 1fr; gap:1rem;">
@@ -129,7 +129,7 @@ export class ProxiesView {
           </div>
           <div class="form-group">
             <label class="form-label">Selected Model ID</label>
-            <input class="input" id="proxy-model" value="${escapeAttr(data.selectedModel)}" placeholder="misal: gemini-2.5-flash">
+            <input class="input" id="proxy-model" value="${escapeAttr(data.selectedModel)}" placeholder="e.g. gemini-2.5-flash">
           </div>
         </div>
 
@@ -145,40 +145,40 @@ export class ProxiesView {
 
         <div style="display:flex; align-items:center; gap:0.5rem; margin-top:0.5rem;">
           <input type="checkbox" id="proxy-default" ${data.isDefault ? 'checked' : ''}>
-          <label for="proxy-default" style="font-size:0.85rem; cursor:pointer;">Jadikan sebagai Active Default Proxy</label>
+          <label for="proxy-default" style="font-size:0.85rem; cursor:pointer;">Set as Active Default Proxy</label>
         </div>
       </form>
     `;
 
     Modal.open({
-      title: isEdit ? `Edit Proxy Profile: ${escapeHtml(data.name)}` : 'Tambah Proxy Profile Baru',
+      title: isEdit ? `Edit Proxy Profile: ${escapeHtml(data.name)}` : 'Add New Proxy Profile',
       contentHTML,
       buttons: [
         ...(isEdit ? [{
           id: 'btn-del-proxy',
-          label: 'Hapus Proxy',
+          label: 'Delete Proxy',
           className: 'btn-danger',
           onClick: async () => {
             await ProxyStore.delete(data.id);
-            Toast.info('Proxy terhapus.');
+            Toast.info('Proxy deleted.');
             Modal.close();
             onSaved();
           }
         }] : []),
         {
           id: 'btn-cancel-prx',
-          label: 'Batal',
+          label: 'Cancel',
           className: 'btn-secondary',
           onClick: () => Modal.close()
         },
         {
           id: 'btn-save-prx',
-          label: 'Simpan Profile',
+          label: 'Save Profile',
           className: 'btn-primary',
           onClick: async () => {
             const name = document.getElementById('proxy-name').value.trim();
             const baseUrl = document.getElementById('proxy-url').value.trim();
-            if (!name || !baseUrl) return Toast.error('Nama dan Base URL wajib diisi!');
+            if (!name || !baseUrl) return Toast.error('Proxy name and Base URL are required.');
 
             await ProxyStore.save({
               ...data,
@@ -190,7 +190,7 @@ export class ProxiesView {
               isDefault: document.getElementById('proxy-default').checked
             });
 
-            Toast.success('Proxy profile tersimpan!');
+            Toast.success('Proxy profile saved.');
             Modal.close();
             onSaved();
           }
@@ -199,3 +199,4 @@ export class ProxiesView {
     });
   }
 }
+
