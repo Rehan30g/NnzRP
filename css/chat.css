@@ -435,11 +435,16 @@
 }
 
 .btn-send-icon.generating {
-  background: var(--accent-rose);
+  background: #ffffff;
+  color: var(--accent-rose, #e11d48);
+  border: 1.5px solid var(--accent-rose, #e11d48);
+  box-shadow: 0 1px 3px rgba(225, 29, 72, 0.15);
 }
 
 .btn-send-icon.generating:hover {
-  background: #be123c;
+  background: #fff1f2;
+  border-color: #be123c;
+  color: #be123c;
 }
 
 /* Locks message-level actions while a generation is in flight, so a

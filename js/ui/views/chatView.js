@@ -33,15 +33,15 @@ function setGeneratingState(generating) {
 
   if (generating) {
     sendBtn.classList.add('generating');
-    sendBtn.title = 'Hentikan Generate';
-    sendBtn.setAttribute('aria-label', 'Hentikan Generate');
-    sendBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2"></rect></svg>';
+    sendBtn.title = 'Stop Generation';
+    sendBtn.setAttribute('aria-label', 'Stop Generation');
+    sendBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"></rect></svg>';
     if (sendInput) sendInput.disabled = true;
     if (messagesEl) messagesEl.classList.add('generating-lock');
   } else {
     sendBtn.classList.remove('generating');
-    sendBtn.title = 'Kirim Pesan';
-    sendBtn.setAttribute('aria-label', 'Kirim Pesan');
+    sendBtn.title = 'Send Message';
+    sendBtn.setAttribute('aria-label', 'Send Message');
     sendBtn.innerHTML = '<svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"></path></svg>';
     if (sendInput) sendInput.disabled = false;
     if (messagesEl) messagesEl.classList.remove('generating-lock');
