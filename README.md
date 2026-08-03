@@ -22,26 +22,21 @@ Inside NnzRP, you get:
 
 ---
 
-## How It Works
+## Deployment & Execution
 
-1. Launch NnzRP locally with 1-click `run.bat` or via Python's built-in HTTP server.
-2. Open `http://localhost:8080` in any web browser.
-3. Configure your active AI Provider & API Key under **Multi-Proxy Config** (e.g., OpenRouter, Gemini, or local Ollama).
-4. Select or create an AI Character, pick a User Persona, and start roleplaying in full screen.
-5. Customize global generation settings, context limits, response prefill, and system instruction presets under **Global Settings**.
+### Standalone Client-Side Web App
+NnzRP is a **100% standalone client-side web application**. It runs natively inside any modern browser without requiring any backend server or database setup. You can deploy it to static web hosting (GitHub Pages, Vercel, Netlify, Cloudflare Pages) or run it directly.
 
----
+### Local Testing & Development
 
-## Quick Start
-
-### Windows (1-Click Execution)
+#### Windows (1-Click Execution)
 Double-click `run.bat` in the project root:
 ```cmd
 run.bat
 ```
 
-### Manual Execution (Python HTTP Server)
-NnzRP requires no external dependencies. Run Python's built-in HTTP server with no-cache headers:
+#### Manual Execution (Python HTTP Server)
+NnzRP requires zero external dependencies. For local testing, run Python's built-in HTTP server:
 ```cmd
 python server.py 8080
 ```

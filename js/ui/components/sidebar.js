@@ -16,7 +16,7 @@ export class Sidebar {
     container.innerHTML = `
       <div class="sidebar-header">
         <div class="brand-wrapper">
-          <img src="src/icon.png" style="width:36px; height:36px; image-rendering:pixelated; flex-shrink:0;" alt="NnzRP Icon">
+          <img src="src/icon.png" class="pixel-art" style="width:36px; height:36px; flex-shrink:0;" alt="NnzRP Icon">
           <div class="brand-text">
             <div style="font-weight:800; font-size:1.1rem; background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); -webkit-background-clip:text; -webkit-text-fill-color:transparent;">NnzRP</div>
           </div>

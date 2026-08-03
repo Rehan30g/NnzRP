@@ -1,4 +1,13 @@
 /* css/base.css - Reset & Global Typography (Flat Grayish Theme) */
+
+/* Image Utilities & Pixel Art Sharp Rendering */
+img.pixel-art, .pixel-art {
+  image-rendering: pixelated;
+  image-rendering: -moz-crisp-edges;
+  image-rendering: crisp-edges;
+  -ms-interpolation-mode: nearest-neighbor;
+}
+
 *, *::before, *::after {
   box-sizing: border-box;
   margin: 0;
