@@ -598,3 +598,37 @@
 .btn-rename-session:hover {
   color: var(--accent-primary);
 }
+
+/* ===================================================
+   Mobile Responsive Chat Layout Adjustments
+   =================================================== */
+@media (max-width: 768px) {
+  .chat-header {
+    height: 52px;
+    padding: 0 0.75rem;
+  }
+
+  .message-block {
+    padding: 1rem 0.85rem;
+  }
+
+  .messages-container {
+    padding: 0 0 110px 0;
+    height: calc(100% - 52px);
+  }
+
+  .chat-input-container {
+    bottom: 12px;
+    width: calc(100% - 20px);
+  }
+
+  .chat-input-wrapper {
+    padding: 0.65rem 0.85rem;
+    border-radius: var(--radius-md);
+  }
+
+  .chat-textarea {
+    font-size: 0.9rem;
+    max-height: 120px;
+  }
+}
