@@ -22,6 +22,21 @@ Inside NnzRP, you get:
 
 ---
 
+## Screenshots
+
+<p align="center">
+  <img src="src/screenshot_desktop.png" width="860" alt="AI Character Library Dashboard">
+  <br><em>AI Character Library Dashboard</em><br><br>
+  <img src="src/screenshot_chat.png" width="860" alt="Fullscreen Story Roleplay Workspace">
+  <br><em>Dedicated Fullscreen Story Roleplay Workspace with Per-Block Messaging & Thinking Extraction</em><br><br>
+  <img src="src/screenshot_proxy.png" width="860" alt="Multi-Proxy Provider Configuration Modal">
+  <br><em>Multi-Proxy Provider Configuration & API Key Setup</em><br><br>
+  <img src="src/screenshot_mobile.png" width="420" alt="Mobile App Responsive Interface">
+  <br><em>Mobile Responsive UI with Sticky Navigation Bar</em>
+</p>
+
+---
+
 ## Deployment & Execution
 
 ### Standalone Client-Side Web App
