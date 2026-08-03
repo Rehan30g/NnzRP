@@ -89,10 +89,12 @@ class App {
     if (this.currentView === 'chat') {
       sidebarContainer.style.display = 'none';
       headerContainer.style.display = 'none';
+      viewContainer.classList.add('chat-mode');
       viewContainer.style.padding = '0';
     } else {
       sidebarContainer.style.display = 'flex';
       headerContainer.style.display = 'flex';
+      viewContainer.classList.remove('chat-mode');
       viewContainer.style.padding = '1.75rem 2rem';
 
       await Sidebar.render(sidebarContainer, this.currentView, (targetView) => this.navigate(targetView));
