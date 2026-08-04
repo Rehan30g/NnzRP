@@ -11,7 +11,8 @@ export class PromptBuilder {
     persona,
     globalSystemPrompt = '',
     messages = [],
-    contextLimit = 25
+    contextLimit = 25,
+    mcpServers = []
   }) {
     const payload = [];
     const userName = persona?.name || 'User';
@@ -41,6 +42,14 @@ export class PromptBuilder {
     // Example Dialogue Injection
     if (character.example_dialogue) {
       systemContent += `\n[Example Dialogue / Style Guide]\n${character.example_dialogue.trim()}\n`;
+    }
+
+    // Custom MCP Server Tool Registry Injection (Experimental)
+    if (Array.isArray(mcpServers) && mcpServers.length > 0) {
+      systemContent += `\n[Active Custom MCP Tools & Extensions]\n`;
+      mcpServers.forEach(s => {
+        systemContent += `- MCP Server "${s.name}" (Type: ${s.type.toUpperCase()}, Endpoint: ${s.endpointUrl}): ${s.description || 'Custom tool capability'}\n`;
+      });
     }
 
     // Replace {{user}} and {{char}} macros in system content

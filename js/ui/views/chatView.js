@@ -3,12 +3,14 @@ import { CharacterStore } from '../../storage/characterStore.js';
 import { ChatStore } from '../../storage/chatStore.js';
 import { PersonaStore } from '../../storage/personaStore.js';
 import { ProxyStore } from '../../storage/proxyStore.js';
+import { MCPStore } from '../../storage/mcpStore.js';
 import { PromptBuilder } from '../../services/promptBuilder.js';
 import { ProviderManager } from '../../services/providerManager.js';
 import { Modal } from '../components/modal.js';
 import { Toast } from '../components/toast.js';
 import { ProxiesView } from './proxiesView.js';
 import { SettingsView } from './settingsView.js';
+import { MCPView } from './mcpView.js';
 import { escapeHtml, escapeAttr } from '../../utils/sanitize.js';
 import { extractThinking } from '../../utils/thinkingParser.js';
 import { replaceMacros } from '../../utils/macroReplacer.js';
@@ -244,8 +246,9 @@ export class ChatView {
         <div class="chat-right-drawer-overlay hidden" id="right-drawer-overlay">
           <div class="chat-right-drawer-content">
             <div class="drawer-tab-header">
-              <div class="drawer-tab active" id="tab-btn-sessions">Chat Sessions</div>
-              <div class="drawer-tab" id="tab-btn-options">Chat Options</div>
+              <div class="drawer-tab active" id="tab-btn-sessions">Sessions</div>
+              <div class="drawer-tab" id="tab-btn-options">Options</div>
+              <div class="drawer-tab" id="tab-btn-mcp">MCP (Exp)</div>
               <button class="btn-icon" id="btn-close-right-drawer" style="margin-right:0.5rem;" title="Close (Esc)">&times;</button>
             </div>
 
@@ -307,6 +310,18 @@ export class ChatView {
                 </button>
               </div>
             </div>
+
+            <!-- Tab 3 Content: Custom MCP Tools (Experimental) -->
+            <div class="drawer-body hidden" id="tab-content-mcp">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem;">
+                <div style="font-weight:700; font-size:0.9rem;">Active MCP Servers</div>
+                <button class="btn btn-secondary btn-sm" id="btn-drawer-manage-mcp">Manage All MCP</button>
+              </div>
+              <p style="color:var(--text-muted); font-size:0.78rem; margin-bottom:1rem;">
+                Toggle custom MCP tools ON/OFF for this roleplay session.
+              </p>
+              <div id="drawer-mcp-list" style="display:flex; flex-direction:column; gap:0.6rem;"></div>
+            </div>
           </div>
         </div>
       </div>
@@ -319,25 +334,24 @@ export class ChatView {
 
     const tabSessionsBtn = container.querySelector('#tab-btn-sessions');
     const tabOptionsBtn = container.querySelector('#tab-btn-options');
+    const tabMcpBtn = container.querySelector('#tab-btn-mcp');
     const tabSessionsContent = container.querySelector('#tab-content-sessions');
     const tabOptionsContent = container.querySelector('#tab-content-options');
+    const tabMcpContent = container.querySelector('#tab-content-mcp');
 
     const switchTab = (targetTab) => {
-      if (targetTab === 'sessions') {
-        tabSessionsBtn.classList.add('active');
-        tabOptionsBtn.classList.remove('active');
-        tabSessionsContent.classList.remove('hidden');
-        tabOptionsContent.classList.add('hidden');
-      } else {
-        tabOptionsBtn.classList.add('active');
-        tabSessionsBtn.classList.remove('active');
-        tabOptionsContent.classList.remove('hidden');
-        tabSessionsContent.classList.add('hidden');
-      }
+      tabSessionsBtn.classList.toggle('active', targetTab === 'sessions');
+      tabOptionsBtn.classList.toggle('active', targetTab === 'options');
+      tabMcpBtn.classList.toggle('active', targetTab === 'mcp');
+
+      tabSessionsContent.classList.toggle('hidden', targetTab !== 'sessions');
+      tabOptionsContent.classList.toggle('hidden', targetTab !== 'options');
+      tabMcpContent.classList.toggle('hidden', targetTab !== 'mcp');
     };
 
     tabSessionsBtn.onclick = () => switchTab('sessions');
     tabOptionsBtn.onclick = () => switchTab('options');
+    tabMcpBtn.onclick = () => switchTab('mcp');
 
     openDrawerBtn.onclick = () => {
       drawerOverlay.classList.remove('hidden');
@@ -463,7 +477,49 @@ export class ChatView {
       });
     };
 
+    const renderDrawerMCPList = async () => {
+      const mcpListEl = container.querySelector('#drawer-mcp-list');
+      if (!mcpListEl) return;
+      const servers = await MCPStore.getAll();
+
+      mcpListEl.innerHTML = servers.map(s => `
+        <div style="padding:0.65rem 0.85rem; background:#ffffff; border-radius:var(--radius-md); border:1px solid var(--border-light); font-size:0.82rem; display:flex; justify-content:space-between; align-items:center; box-shadow:var(--shadow-sm);">
+          <div>
+            <div style="font-weight:600; color:var(--text-main);">${escapeHtml(s.name)}</div>
+            <div style="font-size:0.72rem; color:var(--text-muted); font-family:var(--font-mono);">${escapeHtml(s.type.toUpperCase())}</div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" class="drawer-mcp-toggle" data-id="${s.id}" ${s.enabled ? 'checked' : ''}>
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+      `).join('');
+
+      mcpListEl.querySelectorAll('.drawer-mcp-toggle').forEach(chk => {
+        chk.onchange = async (e) => {
+          await MCPStore.toggleEnabled(e.target.dataset.id, e.target.checked);
+          Toast.info(`MCP Tool ${e.target.checked ? 'Diaktifkan' : 'Dinonaktifkan'}.`);
+        };
+      });
+    };
+
     await populateDrawerSelects();
+    await renderDrawerMCPList();
+
+    const manageMcpBtn = container.querySelector('#btn-drawer-manage-mcp');
+    if (manageMcpBtn) {
+      manageMcpBtn.onclick = () => {
+        const overlay = Modal.open({
+          title: 'Custom MCP Servers & Tools',
+          contentHTML: '<div id="embedded-mcp-view"></div>',
+          buttons: [{ id: 'btn-close-mcp-modal', label: 'Tutup', className: 'btn-secondary', onClick: async () => {
+            Modal.close();
+            await renderDrawerMCPList();
+          } }]
+        });
+        MCPView.render(overlay.querySelector('#embedded-mcp-view'));
+      };
+    }
 
     const showCharInfoModal = () => {
       Modal.open({
@@ -898,13 +954,15 @@ export class ChatView {
       const activePersonaObj = await PersonaStore.getDefault();
       const genSettings = await ProxyStore.getGenerationSettings();
       const globalPrompt = await ProxyStore.getGlobalSystemPrompt();
+      const enabledMcpServers = await MCPStore.getEnabledServers();
 
       const promptPayload = applyPrefill(genSettings, PromptBuilder.buildPromptPayload({
         character: activeChar,
         persona: activePersonaObj,
         globalSystemPrompt: globalPrompt,
         messages: currentMessages,
-        contextLimit: genSettings.contextLimit || 20
+        contextLimit: genSettings.contextLimit || 20,
+        mcpServers: enabledMcpServers
       }));
 
       const messagesEl = container.querySelector('#messages-container');
@@ -1080,6 +1138,7 @@ export class ChatView {
     const activePersonaObj = await PersonaStore.getDefault();
     const genSettings = await ProxyStore.getGenerationSettings();
     const globalPrompt = await ProxyStore.getGlobalSystemPrompt();
+    const enabledMcpServers = await MCPStore.getEnabledServers();
 
     // History up to the message before this assistant message
     const historyBefore = msgs.slice(0, msgIndex);
@@ -1088,7 +1147,8 @@ export class ChatView {
       persona: activePersonaObj,
       globalSystemPrompt: globalPrompt,
       messages: historyBefore,
-      contextLimit: genSettings.contextLimit || 20
+      contextLimit: genSettings.contextLimit || 20,
+      mcpServers: enabledMcpServers
     }));
 
     activeAbortController = new AbortController();
