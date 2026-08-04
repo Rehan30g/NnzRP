@@ -1,19 +1,29 @@
 /* js/services/cardImporter.js - Character Card V2 JSON Importer & Exporter */
+import { BackupService } from './backupService.js';
 
 export class CardImporter {
   /**
-   * Parse uploaded JSON character file
+   * Parse uploaded JSON character file or full NnzRP backup file
    */
   static async parseJSONFile(file) {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
-      reader.onload = (e) => {
+      reader.onload = async (e) => {
         try {
           const json = JSON.parse(e.target.result);
+          const dataObj = json.data ? json.data : json;
+
+          // Detect if this is a Full NnzRP Application Backup File
+          if (json.app === 'NnzRP' || (dataObj && (dataObj.proxies || dataObj.personas || dataObj.settings))) {
+            const stats = await BackupService.importAllData(file);
+            resolve({ isFullBackup: true, stats });
+            return;
+          }
+
           const character = CardImporter.normalizeCharacterCard(json);
           resolve(character);
         } catch (err) {
-          reject(new Error('Invalid Character Card JSON format: ' + err.message));
+          reject(new Error('Invalid JSON file format: ' + err.message));
         }
       };
       reader.onerror = () => reject(new Error('Failed to read file.'));

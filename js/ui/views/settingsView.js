@@ -1,5 +1,6 @@
 /* js/ui/views/settingsView.js - Global Instructions & Generation Settings */
 import { ProxyStore } from '../../storage/proxyStore.js';
+import { BackupService } from '../../services/backupService.js';
 import { Toast } from '../components/toast.js';
 import { escapeHtml } from '../../utils/sanitize.js';
 
@@ -160,6 +161,54 @@ export class SettingsView {
           </div>
         </div>
 
+        <div class="card" style="margin-bottom:1.5rem;">
+          <h3 style="font-size:1.1rem; margin-bottom:0.5rem;">Model Reasoning & Extended Thinking (OpenRouter / Thinking Models)</h3>
+          <p style="color:var(--text-muted); font-size:0.85rem; margin-bottom:1rem;">
+            Configure thinking effort & token budget for reasoning models (Claude 3.7 Sonnet, DeepSeek R1, OpenAI o1/o3, Gemini Flash Thinking, OpenRouter).
+          </p>
+
+          <div class="form-group" style="margin-bottom:1.25rem;">
+            <label class="form-label">Reasoning Effort</label>
+            <select class="select" id="setting-reasoning-effort">
+              <option value="off" ${settings.reasoningEffort === 'off' || !settings.reasoningEffort ? 'selected' : ''}>Off / Disabled (Standard Models)</option>
+              <option value="low" ${settings.reasoningEffort === 'low' ? 'selected' : ''}>Low Effort (reasoning.effort = "low")</option>
+              <option value="medium" ${settings.reasoningEffort === 'medium' ? 'selected' : ''}>Medium Effort (reasoning.effort = "medium")</option>
+              <option value="high" ${settings.reasoningEffort === 'high' ? 'selected' : ''}>High Effort (reasoning.effort = "high")</option>
+              <option value="budget" ${settings.reasoningEffort === 'budget' ? 'selected' : ''}>Token Budget Mode (reasoning.max_tokens)</option>
+            </select>
+            <span class="form-hint">Controls reasoning intensity sent to OpenRouter & Provider APIs.</span>
+          </div>
+
+          <div class="form-group" style="margin-bottom:0;">
+            <label class="form-label">
+              <span>Thinking Token Budget</span>
+              <span class="slider-value" id="val-reasoning-tokens">${settings.reasoningMaxTokens ?? 2048}</span>
+            </label>
+            <div class="slider-container">
+              <input type="range" class="range-slider" id="slider-reasoning-tokens" min="512" max="16384" step="512" value="${settings.reasoningMaxTokens ?? 2048}">
+            </div>
+            <span class="form-hint">Maximum token budget allocated for internal reasoning thoughts before generating text.</span>
+          </div>
+        </div>
+
+        <div class="card" style="margin-bottom:1.5rem;">
+          <h3 style="font-size:1.1rem; margin-bottom:0.5rem;">Data Backup & Migration (Export / Import All Data)</h3>
+          <p style="color:var(--text-muted); font-size:0.85rem; margin-bottom:1rem;">
+            Export or import all application data (Characters, Chat History, Personas, System Prompts, and Proxy API Keys) in a single JSON backup file.
+          </p>
+          <div style="display:flex; gap:0.75rem; flex-wrap:wrap; align-items:center;">
+            <button class="btn btn-secondary" id="btn-export-all-data">
+              <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+              Export All Data (Including API Keys)
+            </button>
+            <button class="btn btn-secondary" id="btn-trigger-import-data">
+              <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+              Import Backup File
+            </button>
+            <input type="file" id="input-import-data-file" accept=".json" style="display:none;">
+          </div>
+        </div>
+
         <div style="display:flex; justify-content:flex-end;">
           <button class="btn btn-primary" id="btn-save-settings">
             Save Settings
@@ -180,6 +229,7 @@ export class SettingsView {
     bindSlider('#slider-tokens', '#val-tokens');
     bindSlider('#slider-penalty', '#val-penalty');
     bindSlider('#slider-context', '#val-context');
+    bindSlider('#slider-reasoning-tokens', '#val-reasoning-tokens');
 
     // Bind Preset Dropdown & Action Controls
     const presetDropdown = container.querySelector('#select-preset-dropdown');
@@ -280,6 +330,8 @@ export class SettingsView {
         maxTokens: parseInt(container.querySelector('#slider-tokens').value),
         repetitionPenalty: parseFloat(container.querySelector('#slider-penalty').value),
         contextLimit: parseInt(container.querySelector('#slider-context').value),
+        reasoningEffort: container.querySelector('#setting-reasoning-effort').value,
+        reasoningMaxTokens: parseInt(container.querySelector('#slider-reasoning-tokens').value),
         streamingEnabled: container.querySelector('#setting-streaming-enabled').checked,
         prefillEnabled: container.querySelector('#setting-prefill-enabled').checked,
         prefillText: container.querySelector('#setting-prefill-text').value,
@@ -298,5 +350,41 @@ export class SettingsView {
 
       Toast.success('Global settings saved successfully.');
     };
+
+    // Bind Backup & Restore Events
+    const btnExportAll = container.querySelector('#btn-export-all-data');
+    const btnImportTrigger = container.querySelector('#btn-trigger-import-data');
+    const inputImportFile = container.querySelector('#input-import-data-file');
+
+    if (btnExportAll) {
+      btnExportAll.onclick = async () => {
+        try {
+          await BackupService.exportAllData();
+          Toast.success('Full application backup exported successfully.');
+        } catch (err) {
+          Toast.error('Export failed: ' + err.message);
+        }
+      };
+    }
+
+    if (btnImportTrigger && inputImportFile) {
+      btnImportTrigger.onclick = () => inputImportFile.click();
+
+      inputImportFile.onchange = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        try {
+          Toast.info('Restoring application backup data...');
+          const stats = await BackupService.importAllData(file);
+          Toast.success(`Backup imported! Restored: ${stats.characters} Characters, ${stats.chats} Chats, ${stats.proxies} Proxy Keys, ${stats.personas} Personas.`);
+          this.render(container);
+        } catch (err) {
+          Toast.error(err.message);
+        } finally {
+          inputImportFile.value = '';
+        }
+      };
+    }
   }
 }

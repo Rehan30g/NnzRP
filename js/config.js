@@ -16,7 +16,9 @@ export const APP_CONFIG = {
     contextLimit: 20,
     streamingEnabled: false,
     prefillEnabled: false,
-    prefillText: ''
+    prefillText: '',
+    reasoningEffort: 'off',
+    reasoningMaxTokens: 2048
   },
   DEFAULT_GLOBAL_SYSTEM_PROMPT: `# ROLEPLAY ENGINE — SYSTEM INSTRUCTIONS
 

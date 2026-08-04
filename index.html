@@ -5,14 +5,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>NnzRP - BYOK AI Roleplay Client</title>
   <link rel="icon" type="image/png" href="src/icon.png">
+  <link rel="shortcut icon" type="image/x-icon" href="src/icon.ico">
+  <link rel="apple-touch-icon" href="src/icon.png">
   
   <!-- Google Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@500;600;700;800&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
   
-  <!-- Markdown parser library (optional) -->
-  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js" onerror="console.warn('Marked library failed to load, falling back to basic formatter.')"></script>
+  <!-- Markdown parser library (Local offline copy) -->
+  <script src="js/vendor/marked.min.js"></script>
 
   <!-- CSS Design System (Direct AI Message Swiping & Clean Floating Input) -->
   <link rel="stylesheet" href="css/variables.css?v=1.1.4">
@@ -34,6 +36,26 @@
   </style>
 </head>
 <body>
+  <!-- Custom Desktop Window Header & Controls -->
+  <header id="custom-titlebar" class="custom-titlebar">
+    <div class="titlebar-left">
+      <img src="src/icon.png" class="titlebar-icon" alt="NnzRP Icon">
+      <span class="titlebar-title">NnzRP - BYOK AI Roleplay Client</span>
+    </div>
+    <div class="titlebar-drag-region"></div>
+    <div class="titlebar-controls" id="titlebar-controls">
+      <button class="titlebar-btn" id="btn-win-minimize" aria-label="Minimize" title="Minimize">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><rect y="5" width="12" height="1.5" rx="0.75"/></svg>
+      </button>
+      <button class="titlebar-btn" id="btn-win-maximize" aria-label="Maximize" title="Maximize">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1.75" y="1.75" width="8.5" height="8.5" rx="1"/></svg>
+      </button>
+      <button class="titlebar-btn titlebar-btn-close" id="btn-win-close" aria-label="Close" title="Close">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7"/></svg>
+      </button>
+    </div>
+  </header>
+
   <!-- App Mounting Shell -->
   <div id="app">
     <div class="app-loading-screen">

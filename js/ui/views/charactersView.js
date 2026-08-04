@@ -73,12 +73,19 @@ export class CharactersView {
       const file = e.target.files[0];
       if (!file) return;
       try {
-        const parsed = await CardImporter.parseJSONFile(file);
-        await CharacterStore.save(parsed);
-        Toast.success(`Character "${parsed.name}" imported successfully.`);
+        const result = await CardImporter.parseJSONFile(file);
+        if (result.isFullBackup) {
+          const s = result.stats;
+          Toast.success(`Full Backup imported! Restored: ${s.characters} Characters, ${s.proxies} Proxy Keys, ${s.personas} Personas, ${s.chats} Chats.`);
+        } else {
+          await CharacterStore.save(result);
+          Toast.success(`Character "${result.name}" imported successfully.`);
+        }
         this.render(container, onStartChat);
       } catch (err) {
         Toast.error(err.message);
+      } finally {
+        importInput.value = '';
       }
     };
 

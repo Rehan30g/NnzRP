@@ -5,7 +5,7 @@ export class Modal {
   // from inside another modal's contentHTML no longer clobbers the one beneath it).
   static stack = [];
 
-  static open({ title, contentHTML, buttons = [], onClose }) {
+  static open({ title, contentHTML, buttons = [], onClose, closeOnBackdropClick = false }) {
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
     overlay.style.zIndex = 1000 + this.stack.length;
@@ -37,12 +37,15 @@ export class Modal {
       if (onClose) onClose();
     };
 
-    overlay.onclick = (e) => {
-      if (e.target === overlay) {
-        this.closeOverlay(overlay);
-        if (onClose) onClose();
-      }
-    };
+    // Only close on backdrop click if explicitly enabled (default is false to prevent accidental progress loss)
+    if (closeOnBackdropClick) {
+      overlay.onclick = (e) => {
+        if (e.target === overlay) {
+          this.closeOverlay(overlay);
+          if (onClose) onClose();
+        }
+      };
+    }
 
     buttons.forEach(b => {
       const btnEl = overlay.querySelector(`#${b.id}`);

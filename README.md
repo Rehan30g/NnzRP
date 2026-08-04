@@ -39,23 +39,18 @@ Inside NnzRP, you get:
 
 ## Deployment & Execution
 
-### Standalone Client-Side Web App
-NnzRP is a **100% standalone client-side web application**. It runs natively inside any modern browser without requiring any backend server or database setup. You can deploy it to static web hosting (GitHub Pages, Vercel, Netlify, Cloudflare Pages) or run it directly.
-
-### Local Testing & Development
-
-#### Windows (1-Click Execution)
-Double-click `run.bat` in the project root:
+### Windows Desktop Application (Native WebView)
+Run NnzRP as a standalone native Windows Desktop App window (WebView2 / Edge App Mode) with zero external dependencies:
 ```cmd
 run.bat
 ```
-
-#### Manual Execution (Python HTTP Server)
-NnzRP requires zero external dependencies. For local testing, run Python's built-in HTTP server:
+or:
 ```cmd
-python server.py 8080
+python app.py
 ```
-Then open `http://localhost:8080` in your browser.
+
+### Standalone Web Deployment
+NnzRP is also a **100% standalone client-side web application**. You can deploy `index.html` and assets to any static web host (GitHub Pages, Vercel, Netlify, Cloudflare Pages).
 
 ---
 

@@ -1,6 +1,7 @@
 /* js/ui/views/proxiesView.js - Multi-Proxy & AI Provider Configuration (No Emojis) */
 import { ProxyStore } from '../../storage/proxyStore.js';
 import { ProviderManager } from '../../services/providerManager.js';
+import { BackupService } from '../../services/backupService.js';
 import { Modal } from '../components/modal.js';
 import { Toast } from '../components/toast.js';
 import { escapeHtml, escapeAttr } from '../../utils/sanitize.js';
@@ -15,9 +16,18 @@ export class ProxiesView {
           <h2 style="font-size:1.5rem; margin-bottom:0.25rem;">Multi-Proxy Provider Configurations</h2>
           <p style="color:var(--text-muted); font-size:0.88rem;">Manage AI providers, API keys, and model endpoints (OpenAI, Anthropic, Gemini, OpenRouter, Custom Local Proxy).</p>
         </div>
-        <button class="btn btn-primary btn-sm" id="btn-create-proxy">
-          + Add Proxy Profile
-        </button>
+        <div style="display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center;">
+          <button class="btn btn-secondary btn-sm" id="btn-export-all-proxies" title="Export all application data including API keys">
+            Export All Data
+          </button>
+          <button class="btn btn-secondary btn-sm" id="btn-import-all-proxies" title="Import backup JSON file">
+            Import Backup
+          </button>
+          <input type="file" id="input-proxies-import-file" accept=".json" style="display:none;">
+          <button class="btn btn-primary btn-sm" id="btn-create-proxy">
+            + Add Proxy Profile
+          </button>
+        </div>
       </div>
 
       <div class="grid-cards">
@@ -64,6 +74,39 @@ export class ProxiesView {
     container.querySelector('#btn-create-proxy').onclick = () => {
       this.openProxyModal(null, () => this.render(container));
     };
+
+    const btnExportProxies = container.querySelector('#btn-export-all-proxies');
+    const btnImportProxies = container.querySelector('#btn-import-all-proxies');
+    const inputProxiesFile = container.querySelector('#input-proxies-import-file');
+
+    if (btnExportProxies) {
+      btnExportProxies.onclick = async () => {
+        try {
+          await BackupService.exportAllData();
+          Toast.success('Full application backup exported successfully.');
+        } catch (err) {
+          Toast.error('Export failed: ' + err.message);
+        }
+      };
+    }
+
+    if (btnImportProxies && inputProxiesFile) {
+      btnImportProxies.onclick = () => inputProxiesFile.click();
+      inputProxiesFile.onchange = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        try {
+          Toast.info('Restoring application backup data...');
+          const stats = await BackupService.importAllData(file);
+          Toast.success(`Backup imported! Restored: ${stats.characters} Characters, ${stats.chats} Chats, ${stats.proxies} Proxy Keys.`);
+          this.render(container);
+        } catch (err) {
+          Toast.error(err.message);
+        } finally {
+          inputProxiesFile.value = '';
+        }
+      };
+    }
 
     container.querySelectorAll('.btn-test-proxy').forEach(btn => {
       btn.onclick = async () => {
@@ -143,6 +186,24 @@ export class ProxiesView {
           <input class="input" type="password" id="proxy-key" value="${escapeAttr(data.apiKey)}" placeholder="sk-...">
         </div>
 
+        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:1rem;">
+          <div class="form-group">
+            <label class="form-label">Reasoning Effort (Thinking)</label>
+            <select class="select" id="proxy-reasoning-effort">
+              <option value="" ${!data.reasoningEffort ? 'selected' : ''}>Use Global Setting</option>
+              <option value="off" ${data.reasoningEffort === 'off' ? 'selected' : ''}>Off / Disabled</option>
+              <option value="low" ${data.reasoningEffort === 'low' ? 'selected' : ''}>Low Effort (effort = "low")</option>
+              <option value="medium" ${data.reasoningEffort === 'medium' ? 'selected' : ''}>Medium Effort (effort = "medium")</option>
+              <option value="high" ${data.reasoningEffort === 'high' ? 'selected' : ''}>High Effort (effort = "high")</option>
+              <option value="budget" ${data.reasoningEffort === 'budget' ? 'selected' : ''}>Token Budget Mode (max_tokens)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Thinking Token Budget</label>
+            <input class="input" type="number" id="proxy-reasoning-tokens" value="${data.reasoningMaxTokens || 2048}" min="512" max="16384" step="512" placeholder="2048">
+          </div>
+        </div>
+
         <div style="display:flex; align-items:center; gap:0.5rem; margin-top:0.5rem;">
           <input type="checkbox" id="proxy-default" ${data.isDefault ? 'checked' : ''}>
           <label for="proxy-default" style="font-size:0.85rem; cursor:pointer;">Set as Active Default Proxy</label>
@@ -187,6 +248,8 @@ export class ProxiesView {
               selectedModel: document.getElementById('proxy-model').value.trim(),
               baseUrl,
               apiKey: document.getElementById('proxy-key').value.trim(),
+              reasoningEffort: document.getElementById('proxy-reasoning-effort').value,
+              reasoningMaxTokens: parseInt(document.getElementById('proxy-reasoning-tokens').value) || 2048,
               isDefault: document.getElementById('proxy-default').checked
             });
 

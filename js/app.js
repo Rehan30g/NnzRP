@@ -29,6 +29,34 @@ class App {
       this.navigate(view, params);
     });
 
+    // Global F11 Key Toggle for Fullscreen
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'F11') {
+        e.preventDefault();
+        if (!document.fullscreenElement) {
+          document.documentElement.requestFullscreen().catch(() => {});
+        } else {
+          document.exitFullscreen().catch(() => {});
+        }
+      }
+    });
+
+    // Bind Custom Titlebar Window Controls (Minimize, Maximize, Close)
+    const btnMinimize = document.getElementById('btn-win-minimize');
+    const btnMaximize = document.getElementById('btn-win-maximize');
+    const btnClose = document.getElementById('btn-win-close');
+
+    if (window.electronAPI) {
+      if (btnMinimize) btnMinimize.onclick = () => window.electronAPI.minimizeWindow();
+      if (btnMaximize) btnMaximize.onclick = () => window.electronAPI.maximizeWindow();
+      if (btnClose) btnClose.onclick = () => window.electronAPI.closeWindow();
+    } else {
+      // Hide window control buttons when running in standard browser
+      if (btnMinimize) btnMinimize.style.display = 'none';
+      if (btnMaximize) btnMaximize.style.display = 'none';
+      if (btnClose) btnClose.style.display = 'none';
+    }
+
     // Restore view from the URL hash (if any)
     const { view, params } = this.parseHash();
     await this.navigate(view, params);

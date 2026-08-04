@@ -76,6 +76,8 @@ export class ProviderManager {
     const topP = settings.topP !== undefined ? parseFloat(settings.topP) : 0.95;
     const maxTokens = settings.maxTokens ? parseInt(settings.maxTokens) : 1024;
     const repPenalty = settings.repetitionPenalty ? parseFloat(settings.repetitionPenalty) : 1.0;
+    const reasoningEffort = proxy.reasoningEffort || settings.reasoningEffort || 'off';
+    const reasoningMaxTokens = proxy.reasoningMaxTokens || settings.reasoningMaxTokens || 2048;
 
     /* 1. GOOGLE GEMINI */
     if (provider === 'gemini') {
@@ -183,6 +185,18 @@ export class ProviderManager {
       frequency_penalty: repPenalty > 1 ? repPenalty - 1 : 0
     };
 
+    if (reasoningEffort && reasoningEffort !== 'off') {
+      if (reasoningEffort === 'budget' || reasoningEffort === 'custom_tokens') {
+        bodyPayload.reasoning = {
+          max_tokens: parseInt(reasoningMaxTokens || 2048)
+        };
+      } else {
+        bodyPayload.reasoning = {
+          effort: reasoningEffort
+        };
+      }
+    }
+
     const res = await fetch(endpoint, {
       method: 'POST',
       headers,
@@ -254,6 +268,8 @@ export class ProviderManager {
     const topP = settings.topP !== undefined ? parseFloat(settings.topP) : 0.95;
     const maxTokens = settings.maxTokens ? parseInt(settings.maxTokens) : 1024;
     const repPenalty = settings.repetitionPenalty ? parseFloat(settings.repetitionPenalty) : 1.0;
+    const reasoningEffort = proxy.reasoningEffort || settings.reasoningEffort || 'off';
+    const reasoningMaxTokens = proxy.reasoningMaxTokens || settings.reasoningMaxTokens || 2048;
 
     let accumulatedContent = '';
     let accumulatedThinking = '';
@@ -397,6 +413,18 @@ export class ProviderManager {
       frequency_penalty: repPenalty > 1 ? repPenalty - 1 : 0,
       stream: true
     };
+
+    if (reasoningEffort && reasoningEffort !== 'off') {
+      if (reasoningEffort === 'budget' || reasoningEffort === 'custom_tokens') {
+        bodyPayload.reasoning = {
+          max_tokens: parseInt(reasoningMaxTokens || 2048)
+        };
+      } else {
+        bodyPayload.reasoning = {
+          effort: reasoningEffort
+        };
+      }
+    }
 
     const res = await fetch(endpoint, {
       method: 'POST',

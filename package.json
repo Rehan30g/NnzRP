@@ -1,0 +1,56 @@
+{
+  "name": "nnzrp",
+  "version": "1.0.0",
+  "description": "NnzRP - 100% Client-Side BYOK AI Roleplay Web Application",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build:exe": "electron-builder --win nsis zip portable"
+  },
+  "keywords": [
+    "ai",
+    "roleplay",
+    "electron",
+    "byok"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^31.2.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.nnzrp.app",
+    "productName": "NnzRP",
+    "compression": "store",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "index.html",
+      "main.js",
+      "preload.js",
+      "css/**/*",
+      "js/**/*",
+      "src/**/*"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "zip",
+        "portable"
+      ],
+      "icon": "src/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "NnzRP"
+    }
+  },
+  "allowScripts": {
+    "electron@31.7.7": true
+  }
+}

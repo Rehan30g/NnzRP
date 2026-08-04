@@ -9,15 +9,14 @@
 ## 🚀 Quick Start / How to Run
 
 ```cmd
-:: Double-click run.bat or start.bat in project root
+:: Double-click run.bat in project root to launch native Windows Desktop WebView App
 run.bat
 ```
 
-Or run Python server directly:
+Or run Python desktop launcher directly:
 ```cmd
-python server.py 8080
+python app.py
 ```
-Then open: `http://localhost:8080` (Server sends `Cache-Control: no-cache` to prevent browser caching issues).
 
 ---
 

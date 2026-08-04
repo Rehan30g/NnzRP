@@ -2,3 +2,9 @@
 .claude*
 *.log
 __pycache__/
+node_modules/
+dist/
+out/
+builder-debug.yml
+venv/
+data/

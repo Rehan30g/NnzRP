@@ -1,9 +1,82 @@
 /* css/layout.css - Flat Grayish Shell, Sidebar & Grid Layout */
 
+/* Custom Frameless Desktop Titlebar */
+.custom-titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 36px;
+  background-color: #ffffff;
+  border-bottom: 1px solid var(--border-light);
+  user-select: none;
+  -webkit-user-select: none;
+  position: relative;
+  z-index: 10000;
+  width: 100%;
+}
+
+.titlebar-left {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding-left: 0.85rem;
+  pointer-events: none;
+}
+
+.titlebar-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.titlebar-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-main);
+  font-family: var(--font-sans);
+  white-space: nowrap;
+}
+
+.titlebar-drag-region {
+  flex: 1;
+  height: 100%;
+  -webkit-app-region: drag;
+}
+
+.titlebar-controls {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  -webkit-app-region: no-drag;
+}
+
+.titlebar-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  width: 44px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  outline: none;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.titlebar-btn:hover {
+  background-color: #e2e8f0;
+  color: var(--text-main);
+}
+
+.titlebar-btn-close:hover {
+  background-color: #ef4444 !important;
+  color: #ffffff !important;
+}
+
 #app {
   display: flex;
   width: 100vw;
-  height: 100vh;
+  height: calc(100vh - 36px);
   overflow: hidden;
   background-color: var(--bg-primary);
 }
