@@ -571,6 +571,12 @@
   border-color: var(--border-subtle);
 }
 
+.btn-delete-message:hover {
+  background: #fef2f2 !important;
+  color: #ef4444 !important;
+  border-color: #fca5a5 !important;
+}
+
 .btn-msg-action svg {
   display: block;
 }

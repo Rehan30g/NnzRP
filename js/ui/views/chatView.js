@@ -613,9 +613,13 @@ export class ChatView {
 
       const assistantIndexes = msgs.map((m, i) => (m.role === 'assistant' ? i : -1)).filter(i => i >= 0);
       const lastAssistantIndex = assistantIndexes.length ? assistantIndexes[assistantIndexes.length - 1] : -1;
+      const lastMsg = msgs.length ? msgs[msgs.length - 1] : null;
+      const isLastMsgUser = lastMsg && lastMsg.role === 'user';
 
       messagesEl.innerHTML = msgs.map((m, idx) => {
         const isUser = m.role === 'user';
+        const isLastItem = idx === msgs.length - 1;
+        const isLastUserMsg = isUser && isLastItem;
         const senderName = isUser ? userName : charName;
         const avatar = isUser ? (activePersonaObj?.avatar || 'https://api.dicebear.com/7.x/bottts/svg?seed=User') : activeChar.avatar;
         const swipeCount = m.swipes ? m.swipes.length : 1;
@@ -656,6 +660,15 @@ export class ChatView {
                       <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="18" r="3"></circle><circle cx="6" cy="6" r="3"></circle><circle cx="18" cy="6" r="3"></circle><path d="M18 9v2a2 2 0 01-2 2H8a2 2 0 01-2-2V9"></path><path d="M12 12v3"></path></svg>
                     </button>
                   ` : ''}
+                  <button class="btn-msg-action btn-delete-message" data-id="${m.id}" title="Hapus pesan ini">
+                    <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"></path></svg>
+                  </button>
+                  ${isLastUserMsg ? `
+                    <button class="btn btn-primary btn-sm btn-generate-ai-response" style="gap:0.35rem; padding:0.2rem 0.55rem; font-size:0.78rem; margin-left:0.5rem;" title="Generate respon AI untuk pesan ini">
+                      <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+                      <span>Respon AI</span>
+                    </button>
+                  ` : ''}
                 </div>
 
                 ${!isUser ? `
@@ -670,6 +683,41 @@ export class ChatView {
           </div>
         `;
       }).join('');
+
+      // Update input toolbar with floating AI response button if last message is User
+      const inputToolbar = container.querySelector('.chat-input-toolbar');
+      if (inputToolbar) {
+        if (isLastMsgUser) {
+          inputToolbar.innerHTML = `
+            <button class="btn btn-secondary btn-sm" id="btn-floating-ai-response" style="gap:0.35rem; font-size:0.8rem; margin-right:auto;" title="Generate respon AI dari pesan user terakhir">
+              <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+              <span>⚡ Generate Respon AI</span>
+            </button>
+            <button class="btn-send-icon" id="btn-send-message" title="Send Message" aria-label="Send Message">
+              <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"></path></svg>
+            </button>
+          `;
+          const floatBtn = inputToolbar.querySelector('#btn-floating-ai-response');
+          if (floatBtn) floatBtn.onclick = () => triggerAIGeneration();
+        } else {
+          inputToolbar.innerHTML = `
+            <button class="btn-send-icon" id="btn-send-message" title="Send Message" aria-label="Send Message">
+              <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"></path></svg>
+            </button>
+          `;
+        }
+
+        const newSendBtn = inputToolbar.querySelector('#btn-send-message');
+        if (newSendBtn) {
+          newSendBtn.onclick = () => {
+            if (isGenerating) {
+              if (activeAbortController) activeAbortController.abort();
+            } else {
+              handleSendMessage();
+            }
+          };
+        }
+      }
 
       scrollToBottom(messagesEl);
 
@@ -723,6 +771,23 @@ export class ChatView {
             localStorage.setItem('aetheria_thinking_collapsed', isThinkingCollapsedDefault ? '1' : '0');
           }
         };
+      });
+
+      // Delete message handler
+      messagesEl.querySelectorAll('.btn-delete-message').forEach(btn => {
+        btn.onclick = async () => {
+          const msgId = btn.dataset.id;
+          if (confirm('Hapus pesan ini?')) {
+            await ChatStore.deleteMessage(msgId);
+            Toast.info('Pesan dihapus.');
+            await renderMessages();
+          }
+        };
+      });
+
+      // Generate AI response on last user message
+      messagesEl.querySelectorAll('.btn-generate-ai-response').forEach(btn => {
+        btn.onclick = () => triggerAIGeneration();
       });
 
       // Inline message editing (both user and assistant messages)
@@ -815,17 +880,15 @@ export class ChatView {
     const sendBtn = container.querySelector('#btn-send-message');
     const newSessionBtn = container.querySelector('#btn-new-session');
 
-    const handleSendMessage = async () => {
-      const text = sendInput.value.trim();
-      if (!text || isGenerating) return;
+    const triggerAIGeneration = async () => {
+      if (isGenerating) return;
 
-      sendInput.value = '';
+      const currentMessages = await ChatStore.getMessages(currentChatId);
+      if (!currentMessages.length) return;
 
-      // 1. Add User Message to ChatStore
-      await ChatStore.addMessage(currentChatId, 'user', text);
-      await renderMessages();
+      const lastMsg = currentMessages[currentMessages.length - 1];
+      if (lastMsg.role !== 'user') return; // AI only responds if last message is from user
 
-      // 2. Fetch Proxy, Generation Settings, and Global Prompt
       const proxyObj = await ProxyStore.getDefault();
       if (!proxyObj) {
         Toast.error('Silakan konfigurasi Multi-Proxy API terlebih dahulu di menu Multi-Proxy Config!');
@@ -835,9 +898,7 @@ export class ChatView {
       const activePersonaObj = await PersonaStore.getDefault();
       const genSettings = await ProxyStore.getGenerationSettings();
       const globalPrompt = await ProxyStore.getGlobalSystemPrompt();
-      const currentMessages = await ChatStore.getMessages(currentChatId);
 
-      // 3. Build Prompt Payload
       const promptPayload = applyPrefill(genSettings, PromptBuilder.buildPromptPayload({
         character: activeChar,
         persona: activePersonaObj,
@@ -846,7 +907,6 @@ export class ChatView {
         contextLimit: genSettings.contextLimit || 20
       }));
 
-      // 4. Show Typing Indicator Block
       const messagesEl = container.querySelector('#messages-container');
       const typingIndicator = document.createElement('div');
       typingIndicator.className = 'message-block assistant';
@@ -863,12 +923,10 @@ export class ChatView {
         </div>
       `;
       messagesEl.appendChild(typingIndicator);
-      messagesEl.scrollTop = messagesEl.scrollHeight;
+      scrollToBottom(messagesEl);
 
       activeAbortController = new AbortController();
       setGeneratingState(true);
-      // Seed the live preview with the prefill text so it's visible immediately,
-      // matching what the model will actually be continuing from.
       let liveContent = genSettings.prefillEnabled && genSettings.prefillText ? genSettings.prefillText : '';
       let liveThinking = '';
 
@@ -901,11 +959,9 @@ export class ChatView {
 
         typingIndicator.remove();
 
-        // 5. Add AI Message with initial swipe variation
         await ChatStore.addMessage(currentChatId, 'assistant', finalContent, finalThinking, [finalContent]);
         await renderMessages();
 
-        // 6. Auto-generate session title every 10 messages (unless manually renamed)
         const updatedMessages = await ChatStore.getMessages(currentChatId);
         const chatObj = await ChatStore.getChatById(currentChatId);
         if (chatObj && !chatObj.titleEdited && updatedMessages.length % 10 === 0) {
@@ -923,12 +979,27 @@ export class ChatView {
           }
         } else {
           Toast.error(`Gagal mendapatkan respon AI: ${err.message}`);
+          await renderMessages();
         }
       } finally {
         activeAbortController = null;
         setGeneratingState(false);
         sendInput.focus();
       }
+    };
+
+    const handleSendMessage = async () => {
+      const text = sendInput.value.trim();
+      if (!text || isGenerating) return;
+
+      sendInput.value = '';
+
+      // 1. Add User Message to ChatStore
+      await ChatStore.addMessage(currentChatId, 'user', text);
+      await renderMessages();
+
+      // 2. Trigger AI Generation
+      await triggerAIGeneration();
     };
 
     sendBtn.onclick = () => {
