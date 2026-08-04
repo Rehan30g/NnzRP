@@ -10,7 +10,12 @@ export class Modal {
     overlay.className = 'modal-overlay';
     overlay.style.zIndex = 1000 + this.stack.length;
 
-    const buttonsHTML = buttons.map(b => `
+    const resolvedButtons = buttons.map((b, i) => ({
+      ...b,
+      id: b.id || `modal-btn-${Date.now()}-${i}-${Math.random().toString(36).substr(2, 4)}`
+    }));
+
+    const buttonsHTML = resolvedButtons.map(b => `
       <button class="btn ${b.className || 'btn-secondary'}" id="${b.id}">${b.label}</button>
     `).join('');
 
@@ -23,7 +28,7 @@ export class Modal {
         <div class="modal-body">
           ${contentHTML}
         </div>
-        ${buttons.length ? `<div class="modal-footer">${buttonsHTML}</div>` : ''}
+        ${resolvedButtons.length ? `<div class="modal-footer">${buttonsHTML}</div>` : ''}
       </div>
     `;
 
@@ -47,7 +52,7 @@ export class Modal {
       };
     }
 
-    buttons.forEach(b => {
+    resolvedButtons.forEach(b => {
       const btnEl = overlay.querySelector(`#${b.id}`);
       if (btnEl && b.onClick) {
         btnEl.onclick = () => b.onClick(overlay);
