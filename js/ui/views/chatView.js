@@ -482,16 +482,42 @@ export class ChatView {
       if (!mcpListEl) return;
       const servers = await MCPStore.getAll();
 
-      mcpListEl.innerHTML = servers.map(s => `
-        <div style="padding:0.65rem 0.85rem; background:#ffffff; border-radius:var(--radius-md); border:1px solid var(--border-light); font-size:0.82rem; display:flex; justify-content:space-between; align-items:center; box-shadow:var(--shadow-sm);">
-          <div>
-            <div style="font-weight:600; color:var(--text-main);">${escapeHtml(s.name)}</div>
-            <div style="font-size:0.72rem; color:var(--text-muted); font-family:var(--font-mono);">${escapeHtml(s.type.toUpperCase())}</div>
+      if (servers.length === 0) {
+        mcpListEl.innerHTML = `
+          <div style="padding:1rem; text-align:center; background:#ffffff; border-radius:var(--radius-md); border:1px dashed var(--border-light); font-size:0.82rem; color:var(--text-muted);">
+            <div>Belum ada Custom MCP Server.</div>
+            <div style="display:flex; justify-content:center; gap:0.4rem; margin-top:0.6rem;">
+              <button class="btn btn-secondary btn-sm" id="btn-drawer-json-edit">Edit JSON Config</button>
+            </div>
           </div>
-          <label class="toggle-switch">
-            <input type="checkbox" class="drawer-mcp-toggle" data-id="${s.id}" ${s.enabled ? 'checked' : ''}>
-            <span class="toggle-slider"></span>
-          </label>
+        `;
+        const jsonBtn = mcpListEl.querySelector('#btn-drawer-json-edit');
+        if (jsonBtn) {
+          jsonBtn.onclick = () => {
+            MCPView.openJSONEditorModal(async () => {
+              await renderDrawerMCPList();
+            });
+          };
+        }
+        return;
+      }
+
+      mcpListEl.innerHTML = servers.map(s => `
+        <div style="padding:0.75rem; background:#ffffff; border-radius:var(--radius-md); border:1px solid var(--border-light); font-size:0.82rem; display:flex; flex-direction:column; gap:0.4rem; box-shadow:var(--shadow-sm);">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div>
+              <div style="font-weight:600; color:var(--text-main);">${escapeHtml(s.name)}</div>
+              <div style="font-size:0.72rem; color:var(--text-muted); font-family:var(--font-mono);">${escapeHtml(s.type.toUpperCase())}</div>
+            </div>
+            <label class="toggle-switch">
+              <input type="checkbox" class="drawer-mcp-toggle" data-id="${s.id}" ${s.enabled ? 'checked' : ''}>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div style="display:flex; justify-content:space-between; align-items:center; border-top:1px solid var(--border-light); padding-top:0.4rem; margin-top:0.2rem;">
+            <span class="badge" id="drawer-mcp-status-${s.id}" style="font-size:0.68rem; background:#f1f5f9; color:#475569;">Unknown</span>
+            <button class="btn btn-secondary btn-sm drawer-check-mcp" data-id="${s.id}" style="padding:0.15rem 0.45rem; font-size:0.72rem;">Check Status</button>
+          </div>
         </div>
       `).join('');
 
@@ -499,6 +525,34 @@ export class ChatView {
         chk.onchange = async (e) => {
           await MCPStore.toggleEnabled(e.target.dataset.id, e.target.checked);
           Toast.info(`MCP Tool ${e.target.checked ? 'Diaktifkan' : 'Dinonaktifkan'}.`);
+        };
+      });
+
+      mcpListEl.querySelectorAll('.drawer-check-mcp').forEach(btn => {
+        btn.onclick = async () => {
+          const id = btn.dataset.id;
+          const server = await MCPStore.getById(id);
+          const badgeEl = mcpListEl.querySelector(`#drawer-mcp-status-${id}`);
+          if (!server || !badgeEl) return;
+
+          badgeEl.textContent = 'Checking...';
+          badgeEl.style.background = '#fef08a';
+          badgeEl.style.color = '#854d0e';
+
+          try {
+            if (!server.endpointUrl) throw new Error('No URL');
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 2500);
+            await fetch(server.endpointUrl, { signal: controller.signal }).catch(() => ({ ok: true }));
+            clearTimeout(timeoutId);
+            badgeEl.textContent = 'Available';
+            badgeEl.style.background = '#dcfce7';
+            badgeEl.style.color = '#166534';
+          } catch (err) {
+            badgeEl.textContent = 'Offline';
+            badgeEl.style.background = '#fee2e2';
+            badgeEl.style.color = '#991b1b';
+          }
         };
       });
     };
@@ -720,9 +774,8 @@ export class ChatView {
                     <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"></path></svg>
                   </button>
                   ${isLastUserMsg ? `
-                    <button class="btn btn-primary btn-sm btn-generate-ai-response" style="gap:0.35rem; padding:0.2rem 0.55rem; font-size:0.78rem; margin-left:0.5rem;" title="Generate respon AI untuk pesan ini">
-                      <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
-                      <span>Respon AI</span>
+                    <button class="btn-msg-action btn-generate-ai-response" data-id="${m.id}" title="Generate respon AI dari pesan ini">
+                      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
                     </button>
                   ` : ''}
                 </div>
@@ -739,41 +792,6 @@ export class ChatView {
           </div>
         `;
       }).join('');
-
-      // Update input toolbar with floating AI response button if last message is User
-      const inputToolbar = container.querySelector('.chat-input-toolbar');
-      if (inputToolbar) {
-        if (isLastMsgUser) {
-          inputToolbar.innerHTML = `
-            <button class="btn btn-secondary btn-sm" id="btn-floating-ai-response" style="gap:0.35rem; font-size:0.8rem; margin-right:auto;" title="Generate respon AI dari pesan user terakhir">
-              <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
-              <span>⚡ Generate Respon AI</span>
-            </button>
-            <button class="btn-send-icon" id="btn-send-message" title="Send Message" aria-label="Send Message">
-              <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"></path></svg>
-            </button>
-          `;
-          const floatBtn = inputToolbar.querySelector('#btn-floating-ai-response');
-          if (floatBtn) floatBtn.onclick = () => triggerAIGeneration();
-        } else {
-          inputToolbar.innerHTML = `
-            <button class="btn-send-icon" id="btn-send-message" title="Send Message" aria-label="Send Message">
-              <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"></path></svg>
-            </button>
-          `;
-        }
-
-        const newSendBtn = inputToolbar.querySelector('#btn-send-message');
-        if (newSendBtn) {
-          newSendBtn.onclick = () => {
-            if (isGenerating) {
-              if (activeAbortController) activeAbortController.abort();
-            } else {
-              handleSendMessage();
-            }
-          };
-        }
-      }
 
       scrollToBottom(messagesEl);
 
