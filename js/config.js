@@ -18,7 +18,8 @@ export const APP_CONFIG = {
     prefillEnabled: false,
     prefillText: '',
     reasoningEffort: 'off',
-    reasoningMaxTokens: 2048
+    reasoningMaxTokens: 2048,
+    mcpMaxToolIterations: 6
   },
   DEFAULT_GLOBAL_SYSTEM_PROMPT: `# ROLEPLAY ENGINE — SYSTEM INSTRUCTIONS
 

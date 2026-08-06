@@ -7,6 +7,7 @@ import { ChatView } from './ui/views/chatView.js';
 import { PersonasView } from './ui/views/personasView.js';
 import { ProxiesView } from './ui/views/proxiesView.js';
 import { SettingsView } from './ui/views/settingsView.js';
+import { MCPView } from './ui/views/mcpView.js';
 
 class App {
   constructor() {
@@ -165,6 +166,10 @@ class App {
 
       case 'settings':
         await SettingsView.render(viewContainer);
+        break;
+
+      case 'mcp':
+        await MCPView.render(viewContainer);
         break;
 
       default:

@@ -520,6 +520,25 @@
   display: block;
 }
 
+/* Tool-trace block reuses the same inner toggle/content/badge/chevron classes
+   as the thinking block, but needs its own outer class (not .thinking-block)
+   so JS lookups like `container.querySelector('.thinking-block')` used for
+   live streaming updates never accidentally grab this block instead. */
+.tool-trace-block {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: #ecfeff;
+  overflow: hidden;
+}
+
+.tool-trace-block.expanded .thinking-chevron {
+  transform: rotate(180deg);
+}
+
+.tool-trace-block.expanded .thinking-content {
+  display: block;
+}
+
 /* ===================================================
    Swipe Slide Transition (flip technique)
    =================================================== */
