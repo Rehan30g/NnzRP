@@ -45,9 +45,21 @@ export class ProxiesView {
               URL: ${escapeHtml(p.baseUrl)}
             </div>
 
-            <div style="font-size:0.82rem; color:var(--text-accent); margin-bottom:0.8rem; font-weight:500;">
+            <div style="font-size:0.82rem; color:var(--text-accent); margin-bottom:0.4rem; font-weight:500;">
               Model: ${escapeHtml(p.selectedModel) || 'Default Model'}
             </div>
+
+            ${p.provider === 'openrouter' && p.openrouterProviders?.length ? `
+              <div style="margin-bottom:0.4rem;">
+                <span class="badge badge-emerald">${p.openrouterProviders.length} Preferred Provider${p.openrouterProviders.length > 1 ? 's' : ''}</span>
+              </div>
+            ` : ''}
+
+            ${p.models?.length > 1 ? `
+              <div style="margin-bottom:0.4rem;">
+                <span class="badge badge-emerald">${p.models.length} models available</span>
+              </div>
+            ` : ''}
 
             <div style="font-size:0.75rem; color:var(--text-dim); margin-bottom:1rem;">
               API Key: ${p.apiKey ? '••••••••' + escapeHtml(p.apiKey.slice(-4)) : '(No API Key Set)'}
@@ -152,6 +164,8 @@ export class ProxiesView {
       isDefault: false
     };
 
+    const selectedOpenrouterProviders = new Set(data.openrouterProviders || []);
+
     const contentHTML = `
       <form id="form-proxy">
         <div class="form-group">
@@ -173,6 +187,26 @@ export class ProxiesView {
           <div class="form-group">
             <label class="form-label">Selected Model ID</label>
             <input class="input" id="proxy-model" value="${escapeAttr(data.selectedModel)}" placeholder="e.g. gemini-2.5-flash">
+          </div>
+        </div>
+
+        <div class="form-group" id="proxy-models-section" style="${data.provider === 'custom' || data.provider === 'openrouter' ? '' : 'display:none;'}">
+          <label class="form-label">Additional Model IDs (comma separated)</label>
+          <input class="input" id="proxy-models" value="${escapeAttr((data.models || []).join(', '))}" placeholder="e.g. anthropic/claude-3.5-sonnet, openai/gpt-4o">
+        </div>
+
+        <div class="card" id="proxy-openrouter-section" style="background:#f8fafc; padding:0.85rem; margin-bottom:1rem; ${data.provider === 'openrouter' ? '' : 'display:none;'}">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
+            <span style="font-size:0.85rem; font-weight:600;">OpenRouter Underlying Providers</span>
+            <button type="button" class="btn btn-secondary btn-sm" id="proxy-openrouter-browse-btn">Browse Providers</button>
+          </div>
+          <div id="proxy-openrouter-result" style="font-size:0.8rem; color:var(--text-muted); margin-bottom:0.5rem;">
+            ${selectedOpenrouterProviders.size ? `Selected: ${Array.from(selectedOpenrouterProviders).map(escapeHtml).join(', ')}` : 'No preference set (default OpenRouter load balancing). Click Browse Providers to fetch and select.'}
+          </div>
+          <div id="proxy-openrouter-list"></div>
+          <div style="display:flex; align-items:center; gap:0.5rem; margin-top:0.6rem;">
+            <input type="checkbox" id="proxy-openrouter-allow-fallbacks" ${data.openrouterAllowFallbacks !== false ? 'checked' : ''}>
+            <label for="proxy-openrouter-allow-fallbacks" style="font-size:0.85rem; cursor:pointer;">Allow fallback to other providers if preferred ones are unavailable</label>
           </div>
         </div>
 
@@ -211,7 +245,7 @@ export class ProxiesView {
       </form>
     `;
 
-    Modal.open({
+    const overlay = Modal.open({
       title: isEdit ? `Edit Proxy Profile: ${escapeHtml(data.name)}` : 'Add New Proxy Profile',
       contentHTML,
       buttons: [
@@ -246,11 +280,14 @@ export class ProxiesView {
               name,
               provider: document.getElementById('proxy-provider').value,
               selectedModel: document.getElementById('proxy-model').value.trim(),
+              models: document.getElementById('proxy-models').value.split(',').map(m => m.trim()).filter(Boolean),
               baseUrl,
               apiKey: document.getElementById('proxy-key').value.trim(),
               reasoningEffort: document.getElementById('proxy-reasoning-effort').value,
               reasoningMaxTokens: parseInt(document.getElementById('proxy-reasoning-tokens').value) || 2048,
-              isDefault: document.getElementById('proxy-default').checked
+              isDefault: document.getElementById('proxy-default').checked,
+              openrouterProviders: Array.from(selectedOpenrouterProviders),
+              openrouterAllowFallbacks: document.getElementById('proxy-openrouter-allow-fallbacks').checked
             });
 
             Toast.success('Proxy profile saved.');
@@ -260,6 +297,82 @@ export class ProxiesView {
         }
       ]
     });
+
+    // OpenRouter provider-browsing section is only relevant/visible for provider === 'openrouter'.
+    overlay.querySelector('#proxy-provider').onchange = (e) => {
+      overlay.querySelector('#proxy-openrouter-section').style.display = e.target.value === 'openrouter' ? '' : 'none';
+      overlay.querySelector('#proxy-models-section').style.display = (e.target.value === 'custom' || e.target.value === 'openrouter') ? '' : 'none';
+    };
+
+    // Live "Browse Providers" fetch against OpenRouter's public (no API key needed)
+    // model-endpoints listing, so users can see per-provider context/pricing/uptime/throughput
+    // and pin preferred ones before saving.
+    overlay.querySelector('#proxy-openrouter-browse-btn').onclick = async () => {
+      const resultEl = overlay.querySelector('#proxy-openrouter-result');
+      const listEl = overlay.querySelector('#proxy-openrouter-list');
+      const modelId = document.getElementById('proxy-model').value.trim();
+      const [author, ...rest] = modelId.split('/');
+      const slug = rest.join('/');
+      if (!author || !slug) {
+        resultEl.textContent = 'Enter a valid OpenRouter Model ID first (format: author/slug).';
+        return;
+      }
+
+      resultEl.textContent = 'Fetching provider list from OpenRouter...';
+      listEl.innerHTML = '';
+
+      try {
+        const res = await fetch(`https://openrouter.ai/api/v1/models/${encodeURIComponent(author)}/${encodeURIComponent(slug)}/endpoints`);
+        if (!res.ok) throw new Error(`OpenRouter API Error (${res.status})`);
+        const json = await res.json();
+        const endpoints = json.data?.endpoints || [];
+        if (!endpoints.length) {
+          resultEl.textContent = 'No provider endpoints found for this model.';
+          return;
+        }
+
+        listEl.innerHTML = endpoints.map(ep => {
+          const promptPrice = parseFloat(ep.pricing?.prompt);
+          const completionPrice = parseFloat(ep.pricing?.completion);
+          const priceStr = (Number.isFinite(promptPrice) && Number.isFinite(completionPrice))
+            ? `$${(promptPrice * 1e6).toFixed(2)} / $${(completionPrice * 1e6).toFixed(2)} per 1M tok`
+            : 'Pricing N/A';
+          const uptimeStr = typeof ep.uptime_last_30m === 'number' ? `${ep.uptime_last_30m.toFixed(1)}% uptime` : 'Uptime N/A';
+          const tps = ep.throughput_last_30m?.p50;
+          const throughputStr = typeof tps === 'number' ? `${Math.round(tps)} tok/s` : 'Throughput N/A';
+          return `
+            <label style="display:flex; align-items:flex-start; gap:0.5rem; padding:0.4rem 0; border-bottom:1px solid var(--border-light); font-size:0.78rem; cursor:pointer;">
+              <input type="checkbox" class="proxy-openrouter-provider-cb" value="${escapeAttr(ep.provider_name)}" ${selectedOpenrouterProviders.has(ep.provider_name) ? 'checked' : ''}>
+              <span>
+                <strong>${escapeHtml(ep.provider_name)}</strong> &mdash;
+                ${(ep.context_length || 0).toLocaleString()} ctx &mdash;
+                ${priceStr} &mdash;
+                ${uptimeStr} &mdash;
+                ${throughputStr}
+              </span>
+            </label>
+          `;
+        }).join('');
+
+        const updateResultText = () => {
+          resultEl.textContent = selectedOpenrouterProviders.size
+            ? `Selected: ${Array.from(selectedOpenrouterProviders).join(', ')}`
+            : `Found ${endpoints.length} provider(s) - select preferred ones below.`;
+        };
+
+        listEl.querySelectorAll('.proxy-openrouter-provider-cb').forEach(cb => {
+          cb.onchange = () => {
+            if (cb.checked) selectedOpenrouterProviders.add(cb.value);
+            else selectedOpenrouterProviders.delete(cb.value);
+            updateResultText();
+          };
+        });
+
+        updateResultText();
+      } catch (err) {
+        resultEl.textContent = `Failed: ${err.message}`;
+      }
+    };
   }
 }
 
