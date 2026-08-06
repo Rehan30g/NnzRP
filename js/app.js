@@ -8,6 +8,7 @@ import { PersonasView } from './ui/views/personasView.js';
 import { ProxiesView } from './ui/views/proxiesView.js';
 import { SettingsView } from './ui/views/settingsView.js';
 import { MCPView } from './ui/views/mcpView.js';
+import { MCPToolRegistry } from './services/mcpToolRegistry.js';
 
 class App {
   constructor() {
@@ -20,6 +21,12 @@ class App {
 
     // Initialize Database & Sample Seeds
     await initDatabase();
+
+    // Warm up enabled MCP servers (populates the tool cache and, for stdio
+    // servers, spawns their child process) so the first chat message doesn't
+    // have to pay that cost - fire-and-forget, must never block app boot on
+    // a slow/unreachable MCP server.
+    MCPToolRegistry.getActiveTools().catch(err => console.warn('MCP warm-up failed:', err.message));
 
     // Render Shell Layout
     this.renderShell();

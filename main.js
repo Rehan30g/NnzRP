@@ -97,7 +97,13 @@ function createWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: false,
-      webSecurity: true
+      webSecurity: true,
+      // Chromium's default background throttling delays requestAnimationFrame
+      // and timers heavily once the window loses focus/visibility - exactly
+      // when a user alt-tabs away while a chat response is streaming. Without
+      // this, streaming text can appear to stall/catch-up in bursts purely
+      // from window focus state, unrelated to actual network/provider speed.
+      backgroundThrottling: false
     }
   });
 

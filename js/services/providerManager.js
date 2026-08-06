@@ -325,6 +325,13 @@ export class ProviderManager {
       }
     }
 
+    if (provider === 'openrouter' && Array.isArray(proxy.openrouterProviders) && proxy.openrouterProviders.length > 0) {
+      bodyPayload.provider = {
+        order: proxy.openrouterProviders,
+        allow_fallbacks: proxy.openrouterAllowFallbacks !== false
+      };
+    }
+
     const res = await fetch(endpoint, {
       method: 'POST',
       headers,
@@ -577,6 +584,13 @@ export class ProviderManager {
           effort: reasoningEffort
         };
       }
+    }
+
+    if (provider === 'openrouter' && Array.isArray(proxy.openrouterProviders) && proxy.openrouterProviders.length > 0) {
+      bodyPayload.provider = {
+        order: proxy.openrouterProviders,
+        allow_fallbacks: proxy.openrouterAllowFallbacks !== false
+      };
     }
 
     const res = await fetch(endpoint, {

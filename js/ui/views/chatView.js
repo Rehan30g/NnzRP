@@ -24,15 +24,35 @@ import { replaceMacros } from '../../utils/macroReplacer.js';
 let activeAbortController = null;
 let isGenerating = false;
 
+// A message typed/submitted while a generation is already in flight - kept
+// here (not disabling the composer) so the user can keep drafting instead of
+// waiting; auto-sent once the in-flight generation ends (success or abort).
+// `queuedMessageHandlers` is (re)bound by ChatView.render() to the currently
+// mounted chat's own send/refresh closures.
+let queuedMessage = null;
+let queuedMessageHandlers = null; // { flush(text): Promise<void>, refreshIndicator(): void }
+
+async function flushQueuedMessageIfAny() {
+  if (!queuedMessage || !queuedMessageHandlers) return;
+  const next = queuedMessage;
+  queuedMessage = null;
+  queuedMessageHandlers.refreshIndicator();
+  await queuedMessageHandlers.flush(next);
+}
+
+// Wrench icon used on the "Tools Used" chip so an MCP-tool-triggering message
+// is visually distinguishable from a plain thinking block at a glance.
+const WRENCH_ICON_SVG = '<svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z"></path></svg>';
+
 /**
- * Toggles the send button between "send" (arrow-up) and "stop" (square) look,
- * disables the composer while a generation is in flight, and locks down
- * per-message actions (edit/fork/swipe) so they can't race the request.
+ * Toggles the send button between "send" (arrow-up) and "stop" (square) look
+ * and locks down per-message actions (edit/fork/swipe) while a generation is
+ * in flight. The composer itself is intentionally left enabled throughout -
+ * see `queuedMessage` above - so the user can keep typing instead of waiting.
  */
 function setGeneratingState(generating) {
   isGenerating = generating;
   const sendBtn = document.getElementById('btn-send-message');
-  const sendInput = document.getElementById('chat-input');
   const messagesEl = document.getElementById('messages-container');
   if (!sendBtn) return;
 
@@ -41,14 +61,12 @@ function setGeneratingState(generating) {
     sendBtn.title = 'Stop Generation';
     sendBtn.setAttribute('aria-label', 'Stop Generation');
     sendBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"></rect></svg>';
-    if (sendInput) sendInput.disabled = true;
     if (messagesEl) messagesEl.classList.add('generating-lock');
   } else {
     sendBtn.classList.remove('generating');
     sendBtn.title = 'Send Message';
     sendBtn.setAttribute('aria-label', 'Send Message');
     sendBtn.innerHTML = '<svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"></path></svg>';
-    if (sendInput) sendInput.disabled = false;
     if (messagesEl) messagesEl.classList.remove('generating-lock');
   }
 }
@@ -147,6 +165,7 @@ function syncToolTraceBlock(containerEl, toolTrace = []) {
     block.className = 'tool-trace-block';
     block.innerHTML = `
       <button class="thinking-toggle" type="button">
+        ${WRENCH_ICON_SVG}
         <svg class="thinking-chevron" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"></path></svg>
         <span>Tools Used</span>
         <span class="thinking-token-badge"></span>
@@ -160,6 +179,77 @@ function syncToolTraceBlock(containerEl, toolTrace = []) {
 
   block.querySelector('.thinking-token-badge').textContent = `${toolTrace.length} call${toolTrace.length > 1 ? 's' : ''}`;
   block.querySelector('.thinking-content').textContent = toolTrace.map(t => `${t.name}(${JSON.stringify(t.args)})\n→ ${t.result}`).join('\n\n');
+}
+
+/**
+ * Creates/updates/removes a LIVE "Tools Used" box shown mid-generation while
+ * tool call(s) are executing - deliberately its own element (not merged into
+ * the thinking block, and not the persisted `.tool-trace-block`) with a
+ * spinner per in-flight call so tool use is visible in real time instead of
+ * silently happening behind the typing indicator. Purely transient: it's torn
+ * down with the rest of the typing indicator once the round commits, at which
+ * point `syncToolTraceBlock` renders the permanent record on the saved message.
+ */
+function syncLiveToolBox(containerEl, calls = []) {
+  if (!containerEl) return;
+  const contentEl = containerEl.querySelector('.message-content');
+  let block = containerEl.querySelector('.tool-live-block');
+
+  if (!calls.length) {
+    if (block) block.remove();
+    return;
+  }
+
+  if (!block) {
+    block = document.createElement('div');
+    block.className = 'tool-live-block';
+    if (contentEl) containerEl.insertBefore(block, contentEl);
+    else containerEl.appendChild(block);
+  }
+
+  block.innerHTML = `
+    <div class="tool-live-header">${WRENCH_ICON_SVG}<span>Tools Used</span></div>
+    ${calls.map(c => `
+      <div class="tool-live-item">
+        ${c.done ? '<span class="tool-live-check">&#10003;</span>' : '<span class="tool-live-spinner"></span>'}
+        <span>${c.done ? 'Used' : 'Using'} tool: ${escapeHtml(c.name)}...</span>
+      </div>
+    `).join('')}
+  `;
+}
+
+/**
+ * Wraps a render function so it runs at most once per `minIntervalMs`, no
+ * matter how many times `schedule()` is called in between. Streaming re-runs
+ * `formatRoleplayMarkdown()` (markdown re-parse of the WHOLE accumulated
+ * reply so far, not incremental) on every call - cheap for a short reply, but
+ * its cost grows with reply length, and bursty chunk delivery (a client
+ * recovering from a network stall delivers many buffered chunks back to
+ * back) can fire it dozens of times in a tight loop with no gap to paint.
+ *
+ * This deliberately does NOT use `requestAnimationFrame`: rAF (and timers)
+ * get heavily throttled by Chromium once a window loses focus/visibility,
+ * which made an earlier rAF-based version of this helper *worse* - text
+ * would stall for seconds while the window was unfocused, then dump in a
+ * burst on refocus, which is a bigger regression than the bursty-chunks
+ * problem it was meant to fix. A plain wall-clock gate checked synchronously
+ * inside the normal chunk-arrival flow has no such dependency on the
+ * renderer being foregrounded (`main.js` also sets `backgroundThrottling:
+ * false` on the window, but this helper does not rely on that either).
+ *
+ * A skipped render is harmless: `liveContent`/`liveThinking` are always kept
+ * current (cheap string concat happens before `schedule()` is even called),
+ * and the true final text is always shown via the authoritative commit
+ * (`onIntermediateMessage`/final `renderMessages()`), not this live mirror.
+ */
+function createThrottledRenderer(renderFn, minIntervalMs = 50) {
+  let lastRun = 0;
+  return function schedule() {
+    const now = Date.now();
+    if (now - lastRun < minIntervalMs) return;
+    lastRun = now;
+    renderFn();
+  };
 }
 
 /**
@@ -271,8 +361,14 @@ export class ChatView {
           <!-- Chat Input Container (Clean Floating Box) -->
           <div class="chat-input-container">
             <div class="chat-input-wrapper">
+              <div class="queued-message-indicator hidden" id="queued-message-indicator" style="display:flex; align-items:center; gap:0.5rem; padding:0.4rem 0.75rem; margin-bottom:0.4rem; background:#eef2ff; border:1px solid var(--border-light); border-radius:var(--radius-md); font-size:0.78rem; color:var(--text-accent);">
+                <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="flex-shrink:0;"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                <span id="queued-message-text" style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"></span>
+                <button type="button" id="btn-cancel-queued" title="Batalkan" aria-label="Batalkan pesan yang diantrikan" style="background:none; border:none; cursor:pointer; color:var(--text-accent); font-size:1rem; line-height:1; padding:0 0.2rem;">&times;</button>
+              </div>
               <textarea class="chat-textarea" id="chat-input" rows="2" placeholder="Type action (*looks around*) or dialogue (&quot;Hello...&quot;)... (Shift+Enter for new line)"></textarea>
-              <div class="chat-input-toolbar" style="justify-content:flex-end;">
+              <div class="chat-input-toolbar" style="justify-content:space-between;">
+                <select class="select" id="chat-model-select" title="Active Model" aria-label="Active Model" style="max-width:220px; font-size:0.78rem; padding:0.3rem 0.6rem; height:auto;"></select>
                 <button class="btn-send-icon" id="btn-send-message" title="Send Message" aria-label="Send Message">
                   <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"></path></svg>
                 </button>
@@ -457,6 +553,7 @@ export class ChatView {
           proxy.isDefault = true;
           await ProxyStore.save(proxy);
           Toast.success(`Active Proxy: ${proxy.name}`);
+          await populateModelSelect();
           if (onProxyChanged) onProxyChanged();
         }
       };
@@ -516,6 +613,38 @@ export class ChatView {
       });
     };
 
+    // Compact model switcher next to the send button (Claude-style) - reads
+    // the active proxy's `models` list (js/ui/views/proxiesView.js lets you
+    // configure more than one for custom/openrouter proxies) and falls back
+    // to just showing the single `selectedModel` when no list is configured.
+    const populateModelSelect = async () => {
+      const modelSelect = container.querySelector('#chat-model-select');
+      if (!modelSelect) return;
+      const proxy = await ProxyStore.getDefault();
+      if (!proxy) {
+        modelSelect.innerHTML = '<option>No Proxy</option>';
+        modelSelect.disabled = true;
+        modelSelect.onchange = null;
+        return;
+      }
+
+      const candidates = Array.isArray(proxy.models) ? [...proxy.models] : [];
+      if (proxy.selectedModel && !candidates.includes(proxy.selectedModel)) candidates.unshift(proxy.selectedModel);
+      if (candidates.length === 0) candidates.push(proxy.selectedModel || proxy.provider);
+
+      modelSelect.innerHTML = candidates.map(m => `<option value="${escapeAttr(m)}" ${m === proxy.selectedModel ? 'selected' : ''}>${escapeHtml(m)}</option>`).join('');
+      modelSelect.disabled = candidates.length <= 1;
+
+      modelSelect.onchange = async (e) => {
+        const updatedProxy = await ProxyStore.getById(proxy.id);
+        if (!updatedProxy) return;
+        updatedProxy.selectedModel = e.target.value;
+        await ProxyStore.save(updatedProxy);
+        Toast.info(`Model diset ke: ${e.target.value}`);
+        if (onProxyChanged) onProxyChanged();
+      };
+    };
+
     const renderDrawerMCPList = async () => {
       const mcpListEl = container.querySelector('#drawer-mcp-list');
       if (!mcpListEl) return;
@@ -565,30 +694,37 @@ export class ChatView {
         };
       });
 
+      const checkDrawerServerStatus = async (server, { silent = false } = {}) => {
+        const badgeEl = mcpListEl.querySelector(`#drawer-mcp-status-${server.id}`);
+        if (!badgeEl) return;
+        badgeEl.textContent = 'Checking...';
+        badgeEl.className = 'badge';
+
+        const status = await MCPClient.checkStatus(server);
+        if (status.online) {
+          badgeEl.textContent = `Online (${status.toolCount})`;
+          badgeEl.className = 'badge badge-emerald';
+        } else {
+          badgeEl.textContent = 'Offline';
+          badgeEl.className = 'badge badge-rose';
+          if (!silent) Toast.error(`"${server.name}" unreachable: ${status.error}`);
+        }
+      };
+
       mcpListEl.querySelectorAll('.drawer-check-mcp').forEach(btn => {
         btn.onclick = async () => {
-          const id = btn.dataset.id;
-          const server = await MCPStore.getById(id);
-          const badgeEl = mcpListEl.querySelector(`#drawer-mcp-status-${id}`);
-          if (!server || !badgeEl) return;
-
-          badgeEl.textContent = 'Checking...';
-          badgeEl.className = 'badge';
-
-          const status = await MCPClient.checkStatus(server);
-          if (status.online) {
-            badgeEl.textContent = `Online (${status.toolCount})`;
-            badgeEl.className = 'badge badge-emerald';
-          } else {
-            badgeEl.textContent = 'Offline';
-            badgeEl.className = 'badge badge-rose';
-            Toast.error(`"${server.name}" unreachable: ${status.error}`);
-          }
+          const server = await MCPStore.getById(btn.dataset.id);
+          if (server) await checkDrawerServerStatus(server);
         };
       });
+
+      // Check status as soon as the drawer's MCP tab is populated, so it's
+      // ready without a manual click.
+      servers.forEach(s => { checkDrawerServerStatus(s, { silent: true }); });
     };
 
     await populateDrawerSelects();
+    await populateModelSelect();
     await renderDrawerMCPList();
 
     const manageMcpBtn = container.querySelector('#btn-drawer-manage-mcp');
@@ -636,6 +772,7 @@ export class ChatView {
         buttons: [{ id: 'btn-close-proxies-modal', label: 'Tutup', className: 'btn-secondary', onClick: async () => {
           Modal.close();
           await populateDrawerSelects();
+          await populateModelSelect();
           if (onProxyChanged) onProxyChanged();
         } }]
       });
@@ -662,6 +799,7 @@ export class ChatView {
           const newSession = await createChatWithGreeting(defaultPersona?.id, `Session 1 - ${activeChar.name}`);
           currentChatId = newSession.id;
         }
+        clearQueuedMessage();
         await updateSessionList();
         await renderMessages();
         drawerOverlay.classList.add('hidden');
@@ -692,6 +830,7 @@ export class ChatView {
         item.onclick = async (e) => {
           if (e.target.closest('.btn-del-session') || e.target.closest('.btn-rename-session')) return;
           currentChatId = item.dataset.id;
+          clearQueuedMessage();
           drawerOverlay.classList.add('hidden');
           await updateSessionList();
           await renderMessages();
@@ -719,6 +858,7 @@ export class ChatView {
             await ChatStore.deleteChat(targetId);
             const remaining = await ChatStore.getChatsByCharacter(selectedCharId);
             if (remaining.length > 0) currentChatId = remaining[0].id;
+            clearQueuedMessage();
             await updateSessionList();
             await renderMessages();
           }
@@ -791,6 +931,7 @@ export class ChatView {
               ${!isUser && toolTrace.length > 0 ? `
                 <div class="tool-trace-block" data-msgid="${m.id}">
                   <button class="thinking-toggle" type="button">
+                    ${WRENCH_ICON_SVG}
                     <svg class="thinking-chevron" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"></path></svg>
                     <span>Tools Used</span>
                     <span class="thinking-token-badge">${toolTrace.length} call${toolTrace.length > 1 ? 's' : ''}</span>
@@ -863,6 +1004,7 @@ export class ChatView {
         // fresh variation's actual data, instead of leaving stale ones behind.
         syncThinkingBlock(innerEl, (freshMsg.thoughts || '').trim(), { streaming: false });
         syncToolTraceBlock(innerEl, Array.isArray(freshMsg.toolTrace) ? freshMsg.toolTrace : []);
+        syncLiveToolBox(innerEl, []); // clear the transient live box now that the real trace is shown
 
         contentEl.classList.remove(outClass);
         contentEl.classList.add(inClass);
@@ -1050,9 +1192,28 @@ export class ChatView {
       let liveContent = genSettings.prefillEnabled && genSettings.prefillText ? genSettings.prefillText : '';
       let liveThinking = '';
       let liveToolTrace = [];
+      let liveToolCalls = []; // [{id, name, done}] - drives the live "Tools Used" box
+      // Tool calls from round(s) that had NO narration text of their own -
+      // many tool-calling models call a tool with empty content, which used
+      // to become its own near-blank message immediately followed by the
+      // real reply. Instead these accumulate here and get attached to
+      // whichever next message actually has text (or the final reply),
+      // merging what would otherwise be two messages into one.
+      let pendingToolTrace = [];
 
       const typingInnerEl = typingIndicator.querySelector('.message-block-inner');
       const typingContentEl = typingIndicator.querySelector('#typing-indicator-content');
+
+      // Coalesce rapid/bursty chunk delivery into at most one DOM update per
+      // ~50ms - see createThrottledRenderer's comment.
+      const scheduleContentRender = createThrottledRenderer(() => {
+        typingContentEl.innerHTML = this.formatRoleplayMarkdown(liveContent);
+        scrollToBottom(messagesEl);
+      });
+      const scheduleThinkingRender = createThrottledRenderer(() => {
+        syncThinkingBlock(typingInnerEl, liveThinking, { streaming: true });
+        scrollToBottom(messagesEl);
+      });
 
       try {
         if (genSettings.streamingEnabled) {
@@ -1060,7 +1221,7 @@ export class ChatView {
           typingContentEl.innerHTML = liveContent ? this.formatRoleplayMarkdown(liveContent) : '';
         }
 
-        const { content: finalContent, thinking: finalThinking, toolTrace } = await AgentRunner.run({
+        const { content: finalContent, thinking: finalThinking } = await AgentRunner.run({
           proxy: proxyObj,
           initialPayload: promptPayload,
           settings: genSettings,
@@ -1071,28 +1232,75 @@ export class ChatView {
           callbacks: {
             onContentChunk: (delta) => {
               liveContent += delta;
-              typingContentEl.innerHTML = this.formatRoleplayMarkdown(liveContent);
-              scrollToBottom(messagesEl);
+              scheduleContentRender();
             },
             onThinkingChunk: (delta) => {
               liveThinking += delta;
-              syncThinkingBlock(typingInnerEl, liveThinking, { streaming: true });
-              scrollToBottom(messagesEl);
+              scheduleThinkingRender();
             },
             onToolExecuting: (call) => {
-              typingContentEl.removeAttribute('style');
-              typingContentEl.innerHTML = `<em style="color:var(--text-dim);">${escapeHtml(activeChar.name)} is using tool: ${escapeHtml(call.name)}...</em>`;
+              // Own live box, outside the thinking block, so it's never
+              // confused with the model's actual reasoning - and never
+              // overwrites the streamed reply text like it briefly did.
+              liveToolCalls.push({ id: call.id, name: call.name, done: false });
+              syncLiveToolBox(typingInnerEl, liveToolCalls);
               scrollToBottom(messagesEl);
             },
             onToolResult: (call, result) => {
               liveToolTrace.push({ name: call.name, args: call.args, result });
+              const entry = liveToolCalls.find(c => c.id === call.id);
+              if (entry) entry.done = true;
+              syncLiveToolBox(typingInnerEl, liveToolCalls);
+              scrollToBottom(messagesEl);
+            },
+            onIntermediateMessage: async ({ content, thinking, toolTrace: roundTrace }) => {
+              pendingToolTrace.push(...roundTrace);
+
+              // Claude-Code-style interleaving only makes sense when the model
+              // actually wrote something before calling the tool - many
+              // tool-calling models call with empty content, and splitting
+              // that into its own near-blank message just reads as a bug.
+              // When there's no real narration, keep the tool trace queued
+              // and fold it into whichever message comes next instead.
+              if (!content || !content.trim()) {
+                liveContent = '';
+                liveThinking = '';
+                liveToolTrace = [];
+                liveToolCalls = [];
+                syncThinkingBlock(typingInnerEl, '', { streaming: false });
+                syncLiveToolBox(typingInnerEl, []);
+                typingContentEl.removeAttribute('style');
+                typingContentEl.innerHTML = `<em>${escapeHtml(activeChar.name)} sedang mengetik...</em>`;
+                scrollToBottom(messagesEl);
+                return;
+              }
+
+              if (typingIndicator.parentNode) typingIndicator.remove();
+              await ChatStore.addMessage(currentChatId, 'assistant', content, thinking, [content], pendingToolTrace);
+              await renderMessages();
+              pendingToolTrace = [];
+
+              // Reset the shared typing-indicator element for the next round.
+              liveContent = '';
+              liveThinking = '';
+              liveToolTrace = [];
+              liveToolCalls = [];
+              syncThinkingBlock(typingInnerEl, '', { streaming: false });
+              syncLiveToolBox(typingInnerEl, []);
+              messagesEl.appendChild(typingIndicator);
+              typingContentEl.removeAttribute('style');
+              typingContentEl.innerHTML = `<em>${escapeHtml(activeChar.name)} sedang mengetik...</em>`;
+              scrollToBottom(messagesEl);
             }
           }
         });
 
         typingIndicator.remove();
 
-        await ChatStore.addMessage(currentChatId, 'assistant', finalContent, finalThinking, [finalContent], toolTrace);
+        // Any tool(s) used in earlier round(s) with no narration of their own
+        // are carried in `pendingToolTrace` and land on this final message;
+        // rounds that DID narrate were already committed separately above.
+        await ChatStore.addMessage(currentChatId, 'assistant', finalContent, finalThinking, [finalContent], pendingToolTrace);
         await renderMessages();
 
         const updatedMessages = await ChatStore.getMessages(currentChatId);
@@ -1103,8 +1311,9 @@ export class ChatView {
       } catch (err) {
         typingIndicator.remove();
         if (err.name === 'AbortError') {
-          if (liveContent.trim()) {
-            await ChatStore.addMessage(currentChatId, 'assistant', liveContent, liveThinking, [liveContent], liveToolTrace);
+          const combinedTrace = [...pendingToolTrace, ...liveToolTrace];
+          if (liveContent.trim() || combinedTrace.length) {
+            await ChatStore.addMessage(currentChatId, 'assistant', liveContent, liveThinking, [liveContent], combinedTrace);
             await renderMessages();
             Toast.info('Generasi dihentikan - jawaban sebagian tersimpan.');
           } else {
@@ -1118,21 +1327,55 @@ export class ChatView {
         activeAbortController = null;
         setGeneratingState(false);
         sendInput.focus();
+        await flushQueuedMessageIfAny();
       }
     };
 
-    const handleSendMessage = async () => {
-      const text = sendInput.value.trim();
-      if (!text || isGenerating) return;
-
-      sendInput.value = '';
-
-      // 1. Add User Message to ChatStore
+    const sendMessageText = async (text) => {
       await ChatStore.addMessage(currentChatId, 'user', text);
       await renderMessages();
-
-      // 2. Trigger AI Generation
       await triggerAIGeneration();
+    };
+
+    const refreshQueuedIndicator = () => {
+      const indicatorEl = container.querySelector('#queued-message-indicator');
+      const textEl = container.querySelector('#queued-message-text');
+      if (!indicatorEl || !textEl) return;
+      indicatorEl.classList.toggle('hidden', !queuedMessage);
+      if (queuedMessage) textEl.textContent = queuedMessage;
+    };
+
+    // A queued draft belongs to the session it was typed in - drop it
+    // whenever `currentChatId` changes so it can never fire into a
+    // different session than the one the user was looking at.
+    const clearQueuedMessage = () => {
+      queuedMessage = null;
+      refreshQueuedIndicator();
+    };
+
+    // Bind this chat's own send/refresh closures as the target for the
+    // module-level queue - a message queued while generating is in flight
+    // gets flushed through here once the response finishes (see
+    // flushQueuedMessageIfAny above).
+    queuedMessageHandlers = { flush: sendMessageText, refreshIndicator: refreshQueuedIndicator };
+    queuedMessage = null; // discard any leftover queue from a previous render/session
+    refreshQueuedIndicator();
+
+    const handleSendMessage = async () => {
+      const text = sendInput.value.trim();
+      if (!text) return;
+      sendInput.value = '';
+
+      if (isGenerating) {
+        // Don't block drafting while the AI is responding - queue it and
+        // send automatically once the in-flight generation ends.
+        queuedMessage = text;
+        refreshQueuedIndicator();
+        Toast.info('Pesan diantrikan, akan dikirim setelah respons ini selesai.');
+        return;
+      }
+
+      await sendMessageText(text);
     };
 
     sendBtn.onclick = () => {
@@ -1149,11 +1392,20 @@ export class ChatView {
       }
     };
 
+    container.querySelector('#btn-cancel-queued').onclick = () => {
+      if (!queuedMessage) return;
+      sendInput.value = queuedMessage;
+      queuedMessage = null;
+      refreshQueuedIndicator();
+      sendInput.focus();
+    };
+
     newSessionBtn.onclick = async () => {
       const activePersonaObj = await PersonaStore.getDefault();
       const chatSessions = await ChatStore.getChatsByCharacter(selectedCharId);
       const newSession = await createChatWithGreeting(activePersonaObj?.id, `Session ${chatSessions.length + 1} - ${activeChar.name}`);
       currentChatId = newSession.id;
+      clearQueuedMessage();
       await updateSessionList();
       await renderMessages();
       Toast.success('New roleplay session created!');
@@ -1233,12 +1485,14 @@ export class ChatView {
     const contentEl = document.querySelector(`.message-content[data-msgid="${messageId}"]`);
     const blockInnerEl = document.querySelector(`.message-block[data-id="${messageId}"] .message-block-inner`);
 
-    // Remove any stale thinking/tool-trace blocks from the previous variation before starting generation
+    // Remove any stale thinking/tool blocks from the previous variation before starting generation
     if (blockInnerEl) {
       const staleThinking = blockInnerEl.querySelector('.thinking-block');
       if (staleThinking) staleThinking.remove();
       const staleTrace = blockInnerEl.querySelector('.tool-trace-block');
       if (staleTrace) staleTrace.remove();
+      const staleLive = blockInnerEl.querySelector('.tool-live-block');
+      if (staleLive) staleLive.remove();
     }
 
     const restoreOriginal = () => {
@@ -1246,11 +1500,24 @@ export class ChatView {
       if (blockInnerEl) {
         syncThinkingBlock(blockInnerEl, (msg.thoughts || '').trim(), { streaming: false });
         syncToolTraceBlock(blockInnerEl, Array.isArray(msg.toolTrace) ? msg.toolTrace : []);
+        syncLiveToolBox(blockInnerEl, []);
       }
     };
     let liveContent = genSettings.prefillEnabled && genSettings.prefillText ? genSettings.prefillText : '';
     let liveThinking = '';
     let liveToolTrace = [];
+    let liveToolCalls = []; // [{id, name, done}] - drives the live "Tools Used" box
+
+    // Coalesce rapid/bursty chunk delivery into at most one DOM update per
+    // ~50ms - see createThrottledRenderer's comment.
+    const scheduleContentRender = createThrottledRenderer(() => {
+      if (contentEl) contentEl.innerHTML = ChatView.formatRoleplayMarkdown(liveContent);
+      scrollToBottom(messagesEl);
+    });
+    const scheduleThinkingRender = createThrottledRenderer(() => {
+      if (blockInnerEl) syncThinkingBlock(blockInnerEl, liveThinking, { streaming: true });
+      scrollToBottom(messagesEl);
+    });
 
     try {
       if (genSettings.streamingEnabled && contentEl) {
@@ -1270,20 +1537,25 @@ export class ChatView {
         callbacks: {
           onContentChunk: (delta) => {
             liveContent += delta;
-            if (contentEl) contentEl.innerHTML = ChatView.formatRoleplayMarkdown(liveContent);
-            scrollToBottom(messagesEl);
+            scheduleContentRender();
           },
           onThinkingChunk: (delta) => {
             liveThinking += delta;
-            if (blockInnerEl) syncThinkingBlock(blockInnerEl, liveThinking, { streaming: true });
-            scrollToBottom(messagesEl);
+            scheduleThinkingRender();
           },
           onToolExecuting: (call) => {
-            if (contentEl) contentEl.innerHTML = `<em style="color:var(--text-dim);">Using tool: ${escapeHtml(call.name)}...</em>`;
+            // Own live box, outside the thinking block - never overwrites
+            // the streamed reply text in `contentEl`.
+            liveToolCalls.push({ id: call.id, name: call.name, done: false });
+            if (blockInnerEl) syncLiveToolBox(blockInnerEl, liveToolCalls);
             scrollToBottom(messagesEl);
           },
           onToolResult: (call, result) => {
             liveToolTrace.push({ name: call.name, args: call.args, result });
+            const entry = liveToolCalls.find(c => c.id === call.id);
+            if (entry) entry.done = true;
+            if (blockInnerEl) syncLiveToolBox(blockInnerEl, liveToolCalls);
+            scrollToBottom(messagesEl);
           }
         }
       });
@@ -1311,6 +1583,7 @@ export class ChatView {
     } finally {
       activeAbortController = null;
       setGeneratingState(false);
+      await flushQueuedMessageIfAny();
     }
   }
 

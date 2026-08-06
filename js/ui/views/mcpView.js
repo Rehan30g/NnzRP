@@ -86,25 +86,34 @@ export class MCPView {
       };
     });
 
+    const checkServerStatus = async (server, { silent = false } = {}) => {
+      const badgeEl = container.querySelector(`#status-badge-${server.id}`);
+      if (!badgeEl) return;
+      badgeEl.textContent = 'Checking...';
+      badgeEl.className = 'badge';
+      const status = await MCPClient.checkStatus(server);
+      if (status.online) {
+        badgeEl.textContent = `Online (${status.toolCount} tools)`;
+        badgeEl.className = 'badge badge-emerald';
+        if (!silent) Toast.success(`"${server.name}": ${status.toolCount} tool(s) discovered.`);
+      } else {
+        badgeEl.textContent = 'Offline';
+        badgeEl.className = 'badge badge-rose';
+        if (!silent) Toast.error(`"${server.name}" unreachable: ${status.error}`);
+      }
+    };
+
     container.querySelectorAll('.btn-check-mcp-status').forEach(btn => {
       btn.onclick = async () => {
         const server = await MCPStore.getById(btn.dataset.id);
-        const badgeEl = container.querySelector(`#status-badge-${btn.dataset.id}`);
-        if (!server || !badgeEl) return;
-        badgeEl.textContent = 'Checking...';
-        badgeEl.className = 'badge';
-        const status = await MCPClient.checkStatus(server);
-        if (status.online) {
-          badgeEl.textContent = `Online (${status.toolCount} tools)`;
-          badgeEl.className = 'badge badge-emerald';
-          Toast.success(`"${server.name}": ${status.toolCount} tool(s) discovered.`);
-        } else {
-          badgeEl.textContent = 'Offline';
-          badgeEl.className = 'badge badge-rose';
-          Toast.error(`"${server.name}" unreachable: ${status.error}`);
-        }
+        if (server) await checkServerStatus(server);
       };
     });
+
+    // Check every listed server's status as soon as this view opens, so
+    // reachability is visible immediately instead of showing "Unknown" until
+    // the user clicks each "Check Status" button by hand.
+    servers.forEach(s => { checkServerStatus(s, { silent: true }); });
 
     container.querySelectorAll('.btn-edit-mcp').forEach(btn => {
       btn.onclick = async () => {

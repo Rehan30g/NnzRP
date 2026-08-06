@@ -523,12 +523,25 @@
 /* Tool-trace block reuses the same inner toggle/content/badge/chevron classes
    as the thinking block, but needs its own outer class (not .thinking-block)
    so JS lookups like `container.querySelector('.thinking-block')` used for
-   live streaming updates never accidentally grab this block instead. */
+   live streaming updates never accidentally grab this block instead.
+   Deliberately small/neutral-gray (not the violet of the live in-progress
+   box) - this is the quiet, permanent record of what happened, not something
+   that needs to grab attention the way the live loading state does. */
 .tool-trace-block {
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
-  background: #ecfeff;
+  background: #f8fafc;
   overflow: hidden;
+}
+
+.tool-trace-block .thinking-toggle {
+  padding: 0.35rem 0.65rem;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+}
+
+.tool-trace-block .thinking-content {
+  font-size: 0.78rem;
 }
 
 .tool-trace-block.expanded .thinking-chevron {
@@ -537,6 +550,59 @@
 
 .tool-trace-block.expanded .thinking-content {
   display: block;
+}
+
+/* Live "Tools Used" box shown mid-generation while tool calls are actually
+   executing - separate from the thinking block on purpose (was previously
+   merged into it, which read as buried/easy to miss), with its own violet
+   accent color + spinner so it's immediately distinguishable at a glance. */
+.tool-live-block {
+  border: 1px solid var(--accent-secondary);
+  border-radius: var(--radius-md);
+  background: #f5f3ff;
+  padding: 0.5rem 0.75rem;
+  margin-bottom: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.tool-live-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--accent-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.tool-live-item {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.83rem;
+  color: var(--accent-secondary);
+}
+
+.tool-live-spinner {
+  width: 11px;
+  height: 11px;
+  border: 2px solid #ddd6fe;
+  border-top-color: var(--accent-secondary);
+  border-radius: 50%;
+  flex-shrink: 0;
+  animation: toolLiveSpin 0.7s linear infinite;
+}
+
+.tool-live-check {
+  color: var(--accent-emerald);
+  font-weight: 700;
+}
+
+@keyframes toolLiveSpin {
+  to { transform: rotate(360deg); }
 }
 
 /* ===================================================

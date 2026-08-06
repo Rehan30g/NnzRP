@@ -14,7 +14,13 @@ export class AgentRunner {
    * @param {Array} opts.tools - MCPToolRegistry.getActiveTools() result (may be empty)
    * @param {boolean} opts.streaming
    * @param {AbortSignal} [opts.signal]
-   * @param {object} [opts.callbacks] - onContentChunk/onThinkingChunk/onToolExecuting/onToolResult
+   * @param {object} [opts.callbacks] - onContentChunk/onThinkingChunk/onToolExecuting/onToolResult/onIntermediateMessage
+   * @param {(round: {content, thinking, toolTrace}) => Promise<void>|void} [opts.callbacks.onIntermediateMessage] -
+   *   fired after each round that called tool(s), with that round's own lead-in text and the
+   *   tool(s) it used - lets the caller persist/render it as its own real chat message
+   *   (Claude-Code-style interleaved text+tool turns) instead of only ever seeing the final
+   *   round's text. Optional - callers that don't care (e.g. swipe-regenerate) can omit it and
+   *   just use the aggregated `toolTrace` in the return value instead.
    * @param {number} [opts.maxIterations]
    * @param {(result: {content,thinking,toolCalls}) => {content,thinking}} [opts.transformFirstResult] -
    *   optional post-processing applied only to the very first round's result (before checking for
@@ -49,6 +55,7 @@ export class AgentRunner {
       // Assistant turn that decided to call tool(s) - keep any lead-in text it wrote.
       payload = [...payload, { role: 'assistant', content: result.content || '', toolCalls }];
 
+      const roundTrace = [];
       for (const call of toolCalls) {
         callbacks.onToolExecuting?.(call);
         let content;
@@ -57,10 +64,18 @@ export class AgentRunner {
         } catch (err) {
           content = `Error: ${err.message}`;
         }
-        toolTrace.push({ name: call.name, args: call.args, result: content });
+        const entry = { name: call.name, args: call.args, result: content };
+        roundTrace.push(entry);
+        toolTrace.push(entry);
         callbacks.onToolResult?.(call, content);
         payload = [...payload, { role: 'tool', toolCallId: call.id, toolName: call.name, content }];
       }
+
+      // Claude-Code-style: surface this round's lead-in text + which tools it
+      // used as its own visible chat turn (if the caller wants that), instead
+      // of only ever showing the FINAL round's text and folding everything
+      // else silently into the thinking block.
+      await callbacks.onIntermediateMessage?.({ content: result.content || '', thinking: result.thinking || '', toolTrace: roundTrace });
       // Loop again - the model gets the tool result(s) and decides whether it
       // needs to call more tools or is ready to write the final reply.
     }
