@@ -1,6 +1,7 @@
 const { app, BrowserWindow, shell, Menu, ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { spawn } = require('child_process');
 
 // Remove default menu bar for clean custom header app design
 Menu.setApplicationMenu(null);
@@ -128,6 +129,136 @@ function createWindow() {
   // Load local HTML file
   mainWindow.loadFile(path.join(__dirname, 'index.html'));
 }
+
+/* -----------------------------------------------------------------------
+ * Custom MCP (Model Context Protocol) stdio server bridge.
+ *
+ * Trust boundary: `command`/`args`/`env` here are always the user's own MCP
+ * settings-UI configuration (never model output) - the model can only later
+ * ask to call an already-listed tool by name with JSON arguments, which get
+ * written to this already-running process's stdin, never to spawn().
+ * ---------------------------------------------------------------------- */
+const mcpProcesses = new Map(); // serverId -> { proc, pending: Map<reqId,{resolve,reject,timer}>, buffer, nextId }
+const MCP_REQUEST_TIMEOUT_MS = 15000;
+
+function startMcpProcess({ id, command, args, env }) {
+  if (mcpProcesses.has(id)) return { started: false, alreadyRunning: true };
+  if (!command || typeof command !== 'string') throw new Error('MCP server is missing a command to run.');
+
+  const proc = spawn(command, Array.isArray(args) ? args : [], {
+    env: { ...process.env, ...(env || {}) },
+    stdio: ['pipe', 'pipe', 'pipe'],
+    // Resolves .cmd shims (e.g. npx.cmd) on Windows - command/args are always
+    // user-authored config from the MCP settings UI, never model output.
+    shell: process.platform === 'win32'
+  });
+
+  const entry = { proc, pending: new Map(), buffer: '', nextId: 1 };
+  mcpProcesses.set(id, entry);
+
+  proc.stdout.on('data', (chunk) => {
+    entry.buffer += chunk.toString('utf-8');
+    let newlineIdx;
+    while ((newlineIdx = entry.buffer.indexOf('\n')) !== -1) {
+      const line = entry.buffer.slice(0, newlineIdx).trim();
+      entry.buffer = entry.buffer.slice(newlineIdx + 1);
+      if (!line) continue;
+      let msg;
+      try {
+        msg = JSON.parse(line);
+      } catch {
+        continue; // ignore non-JSON-RPC stdout noise some servers print on startup
+      }
+      if (msg.id !== undefined && entry.pending.has(msg.id)) {
+        const { resolve, reject, timer } = entry.pending.get(msg.id);
+        clearTimeout(timer);
+        entry.pending.delete(msg.id);
+        if (msg.error) reject(new Error(msg.error.message || 'MCP server returned an error.'));
+        else resolve(msg.result);
+      }
+      // Messages with unmatched/no id (e.g. server-initiated notifications) are intentionally ignored.
+    }
+  });
+
+  proc.stderr.on('data', (chunk) => {
+    console.warn(`[MCP:${id}] stderr:`, chunk.toString('utf-8').trim());
+  });
+
+  proc.on('exit', (code) => {
+    console.warn(`[MCP:${id}] process exited (code ${code}).`);
+    for (const { reject, timer } of entry.pending.values()) {
+      clearTimeout(timer);
+      reject(new Error('MCP server process exited before responding.'));
+    }
+    mcpProcesses.delete(id);
+  });
+
+  proc.on('error', (err) => {
+    console.error(`[MCP:${id}] failed to start:`, err.message);
+    for (const { reject, timer } of entry.pending.values()) {
+      clearTimeout(timer);
+      reject(err);
+    }
+    mcpProcesses.delete(id);
+  });
+
+  return { started: true };
+}
+
+function stopMcpProcess(id) {
+  const entry = mcpProcesses.get(id);
+  if (!entry) return;
+  for (const { reject, timer } of entry.pending.values()) {
+    clearTimeout(timer);
+    reject(new Error('MCP server stopped.'));
+  }
+  entry.proc.kill();
+  mcpProcesses.delete(id);
+}
+
+function stopAllMcpProcesses() {
+  for (const id of Array.from(mcpProcesses.keys())) stopMcpProcess(id);
+}
+
+function sendMcpRequest(id, method, params, isNotification) {
+  const entry = mcpProcesses.get(id);
+  if (!entry) return Promise.reject(new Error('MCP server is not running.'));
+
+  const payload = { jsonrpc: '2.0', method, params: params || {} };
+  if (!isNotification) payload.id = entry.nextId++;
+
+  return new Promise((resolve, reject) => {
+    if (!isNotification) {
+      const timer = setTimeout(() => {
+        entry.pending.delete(payload.id);
+        reject(new Error('MCP server request timed out.'));
+      }, MCP_REQUEST_TIMEOUT_MS);
+      entry.pending.set(payload.id, { resolve, reject, timer });
+    }
+    try {
+      entry.proc.stdin.write(JSON.stringify(payload) + '\n');
+      if (isNotification) resolve(null);
+    } catch (err) {
+      const pending = entry.pending.get(payload.id);
+      if (pending) {
+        clearTimeout(pending.timer);
+        entry.pending.delete(payload.id);
+      }
+      reject(err);
+    }
+  });
+}
+
+ipcMain.handle('mcp:start', (event, config) => startMcpProcess(config || {}));
+ipcMain.handle('mcp:stop', (event, id) => {
+  stopMcpProcess(id);
+  return true;
+});
+ipcMain.handle('mcp:request', (event, { id, method, params, isNotification } = {}) => {
+  return sendMcpRequest(id, method, params, isNotification);
+});
+
+app.on('before-quit', stopAllMcpProcesses);
 
 // IPC Handlers for Custom Titlebar Window Controls
 ipcMain.on('window-minimize', () => {

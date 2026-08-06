@@ -1,6 +1,127 @@
 /* js/services/providerManager.js - Multi-Proxy AI Provider API Abstraction */
 
 import { extractThinking, ThinkingStreamParser } from '../utils/thinkingParser.js';
+import { ToolCallAccumulator } from '../utils/toolCallAccumulator.js';
+
+function safeParseJSON(str) {
+  if (!str) return {};
+  try {
+    return JSON.parse(str);
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Groups consecutive {role:'tool'} entries into a single {role:'tool-batch', results}
+ * marker. Anthropic and Gemini both require every tool result answering one assistant
+ * tool-call turn to land in a single subsequent message/turn (unlike OpenAI, which is
+ * happy with one `role:'tool'` message per result).
+ */
+function groupConsecutiveToolMessages(payload) {
+  const out = [];
+  for (let i = 0; i < payload.length; i++) {
+    const msg = payload[i];
+    if (msg.role === 'tool') {
+      const results = [msg];
+      while (i + 1 < payload.length && payload[i + 1].role === 'tool') {
+        i++;
+        results.push(payload[i]);
+      }
+      out.push({ role: 'tool-batch', results });
+    } else {
+      out.push(msg);
+    }
+  }
+  return out;
+}
+
+/** Builds the `tools` request field for OpenAI-compatible Chat Completions APIs. */
+function buildOpenAIToolsParam(tools) {
+  if (!tools || tools.length === 0) return undefined;
+  return tools.map(t => ({
+    type: 'function',
+    function: { name: t.qualifiedName, description: t.description || '', parameters: t.inputSchema }
+  }));
+}
+
+/** Translates the internal payload (role/content + optional toolCalls/tool role) into
+ * OpenAI-compatible `messages`. A no-tool-calls payload maps through unchanged. */
+function toOpenAIMessages(payload) {
+  return payload.map(m => {
+    if (m.role === 'tool') {
+      return { role: 'tool', tool_call_id: m.toolCallId, content: m.content };
+    }
+    if (m.role === 'assistant' && m.toolCalls?.length) {
+      return {
+        role: 'assistant',
+        content: m.content || null,
+        tool_calls: m.toolCalls.map(tc => ({
+          id: tc.id,
+          type: 'function',
+          function: { name: tc.name, arguments: JSON.stringify(tc.args || {}) }
+        }))
+      };
+    }
+    return { role: m.role, content: m.content };
+  });
+}
+
+function buildAnthropicToolsParam(tools) {
+  if (!tools || tools.length === 0) return undefined;
+  return tools.map(t => ({ name: t.qualifiedName, description: t.description || '', input_schema: t.inputSchema }));
+}
+
+/** Translates the internal payload into Anthropic `messages` (system messages excluded - caller joins those separately). */
+function toAnthropicMessages(payload) {
+  const nonSystem = payload.filter(m => m.role !== 'system');
+  const grouped = groupConsecutiveToolMessages(nonSystem);
+
+  return grouped.map(m => {
+    if (m.role === 'tool-batch') {
+      return {
+        role: 'user',
+        content: m.results.map(r => ({ type: 'tool_result', tool_use_id: r.toolCallId, content: r.content }))
+      };
+    }
+    if (m.role === 'assistant' && m.toolCalls?.length) {
+      const blocks = [];
+      if (m.content) blocks.push({ type: 'text', text: m.content });
+      for (const tc of m.toolCalls) blocks.push({ type: 'tool_use', id: tc.id, name: tc.name, input: tc.args || {} });
+      return { role: 'assistant', content: blocks };
+    }
+    return { role: m.role, content: m.content };
+  });
+}
+
+function buildGeminiToolsParam(tools) {
+  if (!tools || tools.length === 0) return undefined;
+  return [{
+    functionDeclarations: tools.map(t => ({ name: t.qualifiedName, description: t.description || '', parameters: t.inputSchema }))
+  }];
+}
+
+/** Translates the internal payload into Gemini `contents` (system messages excluded - caller joins those into systemInstruction). */
+function toGeminiContents(payload) {
+  const nonSystem = payload.filter(m => m.role !== 'system');
+  const grouped = groupConsecutiveToolMessages(nonSystem);
+
+  return grouped.map(m => {
+    if (m.role === 'tool-batch') {
+      return {
+        role: 'function',
+        parts: m.results.map(r => ({ functionResponse: { name: r.toolName, response: { content: r.content } } }))
+      };
+    }
+    if (m.role === 'assistant' && m.toolCalls?.length) {
+      const parts = [];
+      if (m.content) parts.push({ text: m.content });
+      for (const tc of m.toolCalls) parts.push({ functionCall: { name: tc.name, args: tc.args || {} } });
+      return { role: 'model', parts };
+    }
+    return { role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] };
+  });
+}
 
 export class ProviderManager {
   /**
@@ -65,9 +186,11 @@ export class ProviderManager {
   }
 
   /**
-   * Send Chat Completion Request to Proxy
+   * Send Chat Completion Request to Proxy. `tools` (optional, from MCPToolRegistry.getActiveTools())
+   * enables native function-calling; the returned `toolCalls` array is empty when the model
+   * didn't call anything, which is the exact existing behavior for tool-less sessions.
    */
-  static async sendChatCompletion(proxy, promptPayload, settings, { signal } = {}) {
+  static async sendChatCompletion(proxy, promptPayload, settings, { signal, tools = [] } = {}) {
     if (!proxy) throw new Error('No active AI Proxy selected.');
     const { provider, baseUrl, apiKey, selectedModel } = proxy;
     const model = selectedModel || 'gpt-4o-mini';
@@ -81,21 +204,12 @@ export class ProviderManager {
 
     /* 1. GOOGLE GEMINI */
     if (provider === 'gemini') {
-      const contents = promptPayload.map(msg => ({
-        role: msg.role === 'assistant' ? 'model' : 'user',
-        parts: [{ text: msg.content }]
-      }));
-
-      // Combine system messages into systemInstruction
       const systemMsgs = promptPayload.filter(m => m.role === 'system').map(m => m.content).join('\n\n');
-      const nonSystemContents = promptPayload.filter(m => m.role !== 'system').map(m => ({
-        role: m.role === 'assistant' ? 'model' : 'user',
-        parts: [{ text: m.content }]
-      }));
+      const contents = toGeminiContents(promptPayload);
 
       const url = `${baseUrl.replace(/\/$/, '')}/v1beta/models/${model}:generateContent?key=${apiKey}`;
       const bodyPayload = {
-        contents: nonSystemContents,
+        contents,
         generationConfig: {
           temperature: temp,
           topP: topP,
@@ -105,6 +219,8 @@ export class ProviderManager {
       if (systemMsgs) {
         bodyPayload.systemInstruction = { parts: [{ text: systemMsgs }] };
       }
+      const toolsParam = buildGeminiToolsParam(tools);
+      if (toolsParam) bodyPayload.tools = toolsParam;
 
       const res = await fetch(url, {
         method: 'POST',
@@ -119,21 +235,35 @@ export class ProviderManager {
       const parts = data.candidates?.[0]?.content?.parts || [];
       let rawText = '';
       let nativeThinking = '';
+      const toolCalls = [];
       for (const part of parts) {
-        if (typeof part.text !== 'string' || !part.text) continue;
-        if (part.thought) nativeThinking += (nativeThinking ? '\n\n' : '') + part.text;
-        else rawText += part.text;
+        if (typeof part.text === 'string' && part.text) {
+          if (part.thought) nativeThinking += (nativeThinking ? '\n\n' : '') + part.text;
+          else rawText += part.text;
+        }
+        if (part.functionCall) {
+          toolCalls.push({ id: `${part.functionCall.name}_${toolCalls.length}`, name: part.functionCall.name, args: part.functionCall.args || {} });
+        }
       }
       const { thinking: tagThinking, content } = extractThinking(rawText);
-      return { content, thinking: [nativeThinking, tagThinking].filter(Boolean).join('\n\n') };
+      return { content, thinking: [nativeThinking, tagThinking].filter(Boolean).join('\n\n'), toolCalls };
     }
 
     /* 2. ANTHROPIC CLAUDE */
     if (provider === 'anthropic') {
       const systemMsgs = promptPayload.filter(m => m.role === 'system').map(m => m.content).join('\n\n');
-      const messages = promptPayload
-        .filter(m => m.role !== 'system')
-        .map(m => ({ role: m.role, content: m.content }));
+      const messages = toAnthropicMessages(promptPayload);
+      const toolsParam = buildAnthropicToolsParam(tools);
+
+      const bodyPayload = {
+        model,
+        system: systemMsgs,
+        messages,
+        max_tokens: maxTokens,
+        temperature: temp,
+        top_p: topP
+      };
+      if (toolsParam) bodyPayload.tools = toolsParam;
 
       const res = await fetch(`${baseUrl.replace(/\/$/, '')}/v1/messages`, {
         method: 'POST',
@@ -143,14 +273,7 @@ export class ProviderManager {
           'content-type': 'application/json',
           'dangerously-allow-browser': 'true'
         },
-        body: JSON.stringify({
-          model,
-          system: systemMsgs,
-          messages,
-          max_tokens: maxTokens,
-          temperature: temp,
-          top_p: topP
-        }),
+        body: JSON.stringify(bodyPayload),
         signal
       });
       if (!res.ok) throw new Error(`Anthropic Error (${res.status}): ${await res.text()}`);
@@ -160,15 +283,18 @@ export class ProviderManager {
       const blocks = data.content || [];
       let rawText = '';
       let nativeThinking = '';
+      const toolCalls = [];
       for (const block of blocks) {
         if (block.type === 'thinking' && block.thinking) {
           nativeThinking += (nativeThinking ? '\n\n' : '') + block.thinking;
         } else if (block.type === 'text' && block.text) {
           rawText += block.text;
+        } else if (block.type === 'tool_use') {
+          toolCalls.push({ id: block.id, name: block.name, args: block.input || {} });
         }
       }
       const { thinking: tagThinking, content } = extractThinking(rawText);
-      return { content, thinking: [nativeThinking, tagThinking].filter(Boolean).join('\n\n') };
+      return { content, thinking: [nativeThinking, tagThinking].filter(Boolean).join('\n\n'), toolCalls };
     }
 
     /* 3. OPENAI / OPENROUTER / CUSTOM OPENAI COMPATIBLE */
@@ -178,12 +304,14 @@ export class ProviderManager {
 
     const bodyPayload = {
       model,
-      messages: promptPayload,
+      messages: toOpenAIMessages(promptPayload),
       temperature: temp,
       top_p: topP,
       max_tokens: maxTokens,
       frequency_penalty: repPenalty > 1 ? repPenalty - 1 : 0
     };
+    const toolsParam = buildOpenAIToolsParam(tools);
+    if (toolsParam) bodyPayload.tools = toolsParam;
 
     if (reasoningEffort && reasoningEffort !== 'off') {
       if (reasoningEffort === 'budget' || reasoningEffort === 'custom_tokens') {
@@ -211,7 +339,12 @@ export class ProviderManager {
     const message = data.choices?.[0]?.message || {};
     const nativeThinking = message.reasoning || message.reasoning_content || '';
     const { thinking: tagThinking, content } = extractThinking(message.content || '');
-    return { content, thinking: [nativeThinking, tagThinking].filter(Boolean).join('\n\n') };
+    const toolCalls = (message.tool_calls || []).map(tc => ({
+      id: tc.id,
+      name: tc.function?.name,
+      args: safeParseJSON(tc.function?.arguments)
+    }));
+    return { content, thinking: [nativeThinking, tagThinking].filter(Boolean).join('\n\n'), toolCalls };
   }
 
   /**
@@ -255,11 +388,13 @@ export class ProviderManager {
 
   /**
    * Streaming Chat Completion Request to Proxy.
-   * Returns { content, thinking } - the full final accumulated text after the
-   * stream completes. onContentChunk(deltaText) / onThinkingChunk(deltaText)
-   * (both optional) fire incrementally as chunks arrive.
+   * Returns { content, thinking, toolCalls } - the full final accumulated text after the
+   * stream completes (toolCalls populated only if the model invoked one/more mid-stream).
+   * onContentChunk(deltaText) / onThinkingChunk(deltaText) (both optional) fire incrementally
+   * as chunks arrive. Tool-call argument JSON streams in fragments (per provider) and is only
+   * surfaced once fully assembled at the end - there is no live "partial tool call" callback.
    */
-  static async streamChatCompletion(proxy, promptPayload, settings, { onContentChunk, onThinkingChunk, signal } = {}) {
+  static async streamChatCompletion(proxy, promptPayload, settings, { onContentChunk, onThinkingChunk, signal, tools = [] } = {}) {
     if (!proxy) throw new Error('No active AI Proxy selected.');
     const { provider, baseUrl, apiKey, selectedModel } = proxy;
     const model = selectedModel || 'gpt-4o-mini';
@@ -273,6 +408,7 @@ export class ProviderManager {
 
     let accumulatedContent = '';
     let accumulatedThinking = '';
+    const toolAccumulator = new ToolCallAccumulator();
     const parser = new ThinkingStreamParser({
       onContentChunk: (chunk) => {
         accumulatedContent += chunk;
@@ -287,14 +423,11 @@ export class ProviderManager {
     /* 1. GOOGLE GEMINI */
     if (provider === 'gemini') {
       const systemMsgs = promptPayload.filter(m => m.role === 'system').map(m => m.content).join('\n\n');
-      const nonSystemContents = promptPayload.filter(m => m.role !== 'system').map(m => ({
-        role: m.role === 'assistant' ? 'model' : 'user',
-        parts: [{ text: m.content }]
-      }));
+      const contents = toGeminiContents(promptPayload);
 
       const url = `${baseUrl.replace(/\/$/, '')}/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${apiKey}`;
       const bodyPayload = {
-        contents: nonSystemContents,
+        contents,
         generationConfig: {
           temperature: temp,
           topP: topP,
@@ -304,6 +437,8 @@ export class ProviderManager {
       if (systemMsgs) {
         bodyPayload.systemInstruction = { parts: [{ text: systemMsgs }] };
       }
+      const toolsParam = buildGeminiToolsParam(tools);
+      if (toolsParam) bodyPayload.tools = toolsParam;
 
       const res = await fetch(url, {
         method: 'POST',
@@ -325,26 +460,40 @@ export class ProviderManager {
         }
         const parts = payload?.candidates?.[0]?.content?.parts || [];
         for (const part of parts) {
-          if (typeof part.text !== 'string' || !part.text) continue;
-          if (part.thought) {
-            accumulatedThinking += part.text;
-            if (onThinkingChunk) onThinkingChunk(part.text);
-          } else {
-            parser.push(part.text);
+          if (typeof part.text === 'string' && part.text) {
+            if (part.thought) {
+              accumulatedThinking += part.text;
+              if (onThinkingChunk) onThinkingChunk(part.text);
+            } else {
+              parser.push(part.text);
+            }
+          }
+          if (part.functionCall) {
+            toolAccumulator.addComplete({ name: part.functionCall.name, args: part.functionCall.args });
           }
         }
       });
 
       parser.end();
-      return { content: accumulatedContent, thinking: accumulatedThinking };
+      return { content: accumulatedContent, thinking: accumulatedThinking, toolCalls: toolAccumulator.finalize() };
     }
 
     /* 2. ANTHROPIC CLAUDE */
     if (provider === 'anthropic') {
       const systemMsgs = promptPayload.filter(m => m.role === 'system').map(m => m.content).join('\n\n');
-      const messages = promptPayload
-        .filter(m => m.role !== 'system')
-        .map(m => ({ role: m.role, content: m.content }));
+      const messages = toAnthropicMessages(promptPayload);
+      const toolsParam = buildAnthropicToolsParam(tools);
+
+      const bodyPayload = {
+        model,
+        system: systemMsgs,
+        messages,
+        max_tokens: maxTokens,
+        temperature: temp,
+        top_p: topP,
+        stream: true
+      };
+      if (toolsParam) bodyPayload.tools = toolsParam;
 
       const res = await fetch(`${baseUrl.replace(/\/$/, '')}/v1/messages`, {
         method: 'POST',
@@ -354,15 +503,7 @@ export class ProviderManager {
           'content-type': 'application/json',
           'dangerously-allow-browser': 'true'
         },
-        body: JSON.stringify({
-          model,
-          system: systemMsgs,
-          messages,
-          max_tokens: maxTokens,
-          temperature: temp,
-          top_p: topP,
-          stream: true
-        }),
+        body: JSON.stringify(bodyPayload),
         signal
       });
       if (!res.ok) throw new Error(`Anthropic Error (${res.status}): ${await res.text()}`);
@@ -383,12 +524,22 @@ export class ProviderManager {
         } catch {
           return;
         }
+        if (currentEvent === 'content_block_start') {
+          // A tool_use block announces its id+name here; its input JSON streams
+          // in afterward via content_block_delta (input_json_delta) events.
+          if (payload.content_block?.type === 'tool_use') {
+            toolAccumulator.startAnthropicBlock(payload.index, { id: payload.content_block.id, name: payload.content_block.name });
+          }
+          return;
+        }
         if (currentEvent === 'content_block_delta') {
           // Extended-thinking streams emit `thinking_delta` (field `.thinking`)
           // interleaved with regular `text_delta` (field `.text`) events.
           if (payload.delta?.type === 'thinking_delta' && typeof payload.delta.thinking === 'string') {
             accumulatedThinking += payload.delta.thinking;
             if (onThinkingChunk) onThinkingChunk(payload.delta.thinking);
+          } else if (payload.delta?.type === 'input_json_delta') {
+            toolAccumulator.appendAnthropicJsonDelta(payload.index, payload.delta.partial_json);
           } else if (typeof payload?.delta?.text === 'string') {
             parser.push(payload.delta.text);
           }
@@ -396,7 +547,7 @@ export class ProviderManager {
       });
 
       parser.end();
-      return { content: accumulatedContent, thinking: accumulatedThinking };
+      return { content: accumulatedContent, thinking: accumulatedThinking, toolCalls: toolAccumulator.finalize() };
     }
 
     /* 3. OPENAI / OPENROUTER / CUSTOM OPENAI COMPATIBLE */
@@ -406,13 +557,15 @@ export class ProviderManager {
 
     const bodyPayload = {
       model,
-      messages: promptPayload,
+      messages: toOpenAIMessages(promptPayload),
       temperature: temp,
       top_p: topP,
       max_tokens: maxTokens,
       frequency_penalty: repPenalty > 1 ? repPenalty - 1 : 0,
       stream: true
     };
+    const toolsParam = buildOpenAIToolsParam(tools);
+    if (toolsParam) bodyPayload.tools = toolsParam;
 
     if (reasoningEffort && reasoningEffort !== 'off') {
       if (reasoningEffort === 'budget' || reasoningEffort === 'custom_tokens') {
@@ -453,12 +606,15 @@ export class ProviderManager {
         accumulatedThinking += reasoningDelta;
         if (onThinkingChunk) onThinkingChunk(reasoningDelta);
       }
+      if (Array.isArray(deltaObj.tool_calls)) {
+        toolAccumulator.addOpenAIDelta(deltaObj.tool_calls);
+      }
       if (typeof deltaObj.content === 'string' && deltaObj.content) {
         parser.push(deltaObj.content);
       }
     });
 
     parser.end();
-    return { content: accumulatedContent, thinking: accumulatedThinking };
+    return { content: accumulatedContent, thinking: accumulatedThinking, toolCalls: toolAccumulator.finalize() };
   }
 }

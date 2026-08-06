@@ -74,6 +74,7 @@ export class ChatStore {
         thoughts: source.thoughts,
         swipeIndex: source.swipeIndex,
         swipes: source.swipes,
+        toolTrace: source.toolTrace || [],
         createdAt: source.createdAt
       };
       await db.put('messages', copy);
@@ -100,7 +101,7 @@ export class ChatStore {
     return await db.get('messages', messageId);
   }
 
-  static async addMessage(chatId, role, content, thoughts = '', swipes = []) {
+  static async addMessage(chatId, role, content, thoughts = '', swipes = [], toolTrace = []) {
     const now = Date.now();
     const message = {
       id: `msg-${now}-${Math.random().toString(36).substr(2, 4)}`,
@@ -110,6 +111,7 @@ export class ChatStore {
       thoughts,
       swipeIndex: 0,
       swipes: swipes.length ? swipes : [content],
+      toolTrace: toolTrace || [],
       createdAt: now
     };
     await db.put('messages', message);
@@ -121,7 +123,7 @@ export class ChatStore {
     return message;
   }
 
-  static async updateMessageSwipes(messageId, swipes, activeIndex, thoughts = '') {
+  static async updateMessageSwipes(messageId, swipes, activeIndex, thoughts = '', toolTrace = []) {
     const message = await db.get('messages', messageId);
     if (!message) return;
     const content = swipes[activeIndex] || message.content;
@@ -129,6 +131,7 @@ export class ChatStore {
     message.swipeIndex = activeIndex;
     message.content = content;
     message.thoughts = thoughts;
+    message.toolTrace = toolTrace || [];
     await db.put('messages', message);
   }
 

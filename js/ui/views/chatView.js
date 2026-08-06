@@ -5,10 +5,15 @@ import { PersonaStore } from '../../storage/personaStore.js';
 import { ProxyStore } from '../../storage/proxyStore.js';
 import { PromptBuilder } from '../../services/promptBuilder.js';
 import { ProviderManager } from '../../services/providerManager.js';
+import { MCPToolRegistry } from '../../services/mcpToolRegistry.js';
+import { AgentRunner } from '../../services/agentRunner.js';
+import { MCPStore } from '../../storage/mcpStore.js';
+import { MCPClient } from '../../services/mcpClient.js';
 import { Modal } from '../components/modal.js';
 import { Toast } from '../components/toast.js';
 import { ProxiesView } from './proxiesView.js';
 import { SettingsView } from './settingsView.js';
+import { MCPView } from './mcpView.js';
 import { escapeHtml, escapeAttr } from '../../utils/sanitize.js';
 import { extractThinking } from '../../utils/thinkingParser.js';
 import { replaceMacros } from '../../utils/macroReplacer.js';
@@ -119,6 +124,42 @@ function syncThinkingBlock(containerEl, thinkingText, { streaming = false } = {}
   if (block.classList.contains('expanded')) {
     textEl.scrollTop = textEl.scrollHeight;
   }
+}
+
+/**
+ * Creates/updates/removes a message's collapsible "Tools Used" block to match
+ * `toolTrace` (an array of {name,args,result}) - used when a swipe variation
+ * is switched to, so a stale tool-trace from a different variation isn't left
+ * displayed alongside the newly-shown content.
+ */
+function syncToolTraceBlock(containerEl, toolTrace = []) {
+  if (!containerEl) return;
+  const contentEl = containerEl.querySelector('.message-content');
+  let block = containerEl.querySelector('.tool-trace-block');
+
+  if (!toolTrace || toolTrace.length === 0) {
+    if (block) block.remove();
+    return;
+  }
+
+  if (!block) {
+    block = document.createElement('div');
+    block.className = 'tool-trace-block';
+    block.innerHTML = `
+      <button class="thinking-toggle" type="button">
+        <svg class="thinking-chevron" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"></path></svg>
+        <span>Tools Used</span>
+        <span class="thinking-token-badge"></span>
+      </button>
+      <div class="thinking-content"></div>
+    `;
+    block.querySelector('.thinking-toggle').onclick = () => block.classList.toggle('expanded');
+    if (contentEl) containerEl.insertBefore(block, contentEl);
+    else containerEl.appendChild(block);
+  }
+
+  block.querySelector('.thinking-token-badge').textContent = `${toolTrace.length} call${toolTrace.length > 1 ? 's' : ''}`;
+  block.querySelector('.thinking-content').textContent = toolTrace.map(t => `${t.name}(${JSON.stringify(t.args)})\n→ ${t.result}`).join('\n\n');
 }
 
 /**
@@ -246,6 +287,7 @@ export class ChatView {
             <div class="drawer-tab-header">
               <div class="drawer-tab active" id="tab-btn-sessions">Sessions</div>
               <div class="drawer-tab" id="tab-btn-options">Options</div>
+              <div class="drawer-tab" id="tab-btn-mcp">MCP (Exp)</div>
               <button class="btn-icon" id="btn-close-right-drawer" style="margin-right:0.5rem;" title="Close (Esc)">&times;</button>
             </div>
 
@@ -307,6 +349,18 @@ export class ChatView {
                 </button>
               </div>
             </div>
+
+            <!-- Tab 3 Content: Custom MCP Tools (Experimental) -->
+            <div class="drawer-body hidden" id="tab-content-mcp">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem;">
+                <div style="font-weight:700; font-size:0.9rem;">Active MCP Servers</div>
+                <button class="btn btn-secondary btn-sm" id="btn-drawer-manage-mcp">Manage All MCP</button>
+              </div>
+              <p style="color:var(--text-muted); font-size:0.78rem; margin-bottom:1rem;">
+                Toggle custom MCP tools ON/OFF for this roleplay session. Enabled + reachable servers let ${escapeHtml(activeChar.name)} call real tools mid-reply.
+              </p>
+              <div id="drawer-mcp-list" style="display:flex; flex-direction:column; gap:0.6rem;"></div>
+            </div>
           </div>
         </div>
       </div>
@@ -319,25 +373,24 @@ export class ChatView {
 
     const tabSessionsBtn = container.querySelector('#tab-btn-sessions');
     const tabOptionsBtn = container.querySelector('#tab-btn-options');
+    const tabMcpBtn = container.querySelector('#tab-btn-mcp');
     const tabSessionsContent = container.querySelector('#tab-content-sessions');
     const tabOptionsContent = container.querySelector('#tab-content-options');
+    const tabMcpContent = container.querySelector('#tab-content-mcp');
 
     const switchTab = (targetTab) => {
-      if (targetTab === 'sessions') {
-        tabSessionsBtn.classList.add('active');
-        tabOptionsBtn.classList.remove('active');
-        tabSessionsContent.classList.remove('hidden');
-        tabOptionsContent.classList.add('hidden');
-      } else {
-        tabOptionsBtn.classList.add('active');
-        tabSessionsBtn.classList.remove('active');
-        tabOptionsContent.classList.remove('hidden');
-        tabSessionsContent.classList.add('hidden');
-      }
+      tabSessionsBtn.classList.toggle('active', targetTab === 'sessions');
+      tabOptionsBtn.classList.toggle('active', targetTab === 'options');
+      tabMcpBtn.classList.toggle('active', targetTab === 'mcp');
+
+      tabSessionsContent.classList.toggle('hidden', targetTab !== 'sessions');
+      tabOptionsContent.classList.toggle('hidden', targetTab !== 'options');
+      tabMcpContent.classList.toggle('hidden', targetTab !== 'mcp');
     };
 
     tabSessionsBtn.onclick = () => switchTab('sessions');
     tabOptionsBtn.onclick = () => switchTab('options');
+    tabMcpBtn.onclick = () => switchTab('mcp');
 
     openDrawerBtn.onclick = () => {
       drawerOverlay.classList.remove('hidden');
@@ -493,15 +546,12 @@ export class ChatView {
           <div style="display:flex; justify-content:space-between; align-items:center;">
             <div>
               <div style="font-weight:600; color:var(--text-main);">${escapeHtml(s.name)}</div>
-              <div style="font-size:0.72rem; color:var(--text-muted); font-family:var(--font-mono);">${escapeHtml(s.type.toUpperCase())}</div>
+              <div style="font-size:0.72rem; color:var(--text-muted); font-family:var(--font-mono);">${s.transport === 'command' ? 'STDIO' : 'HTTP'}</div>
             </div>
-            <label class="toggle-switch">
-              <input type="checkbox" class="drawer-mcp-toggle" data-id="${s.id}" ${s.enabled ? 'checked' : ''}>
-              <span class="toggle-slider"></span>
-            </label>
+            <input type="checkbox" class="drawer-mcp-toggle" data-id="${s.id}" ${s.enabled ? 'checked' : ''} title="Enable this server for roleplay sessions">
           </div>
           <div style="display:flex; justify-content:space-between; align-items:center; border-top:1px solid var(--border-light); padding-top:0.4rem; margin-top:0.2rem;">
-            <span class="badge" id="drawer-mcp-status-${s.id}" style="font-size:0.68rem; background:#f1f5f9; color:#475569;">Unknown</span>
+            <span class="badge" id="drawer-mcp-status-${s.id}">Unknown</span>
             <button class="btn btn-secondary btn-sm drawer-check-mcp" data-id="${s.id}" style="padding:0.15rem 0.45rem; font-size:0.72rem;">Check Status</button>
           </div>
         </div>
@@ -510,6 +560,7 @@ export class ChatView {
       mcpListEl.querySelectorAll('.drawer-mcp-toggle').forEach(chk => {
         chk.onchange = async (e) => {
           await MCPStore.toggleEnabled(e.target.dataset.id, e.target.checked);
+          MCPToolRegistry.invalidate(e.target.dataset.id);
           Toast.info(`MCP Tool ${e.target.checked ? 'Diaktifkan' : 'Dinonaktifkan'}.`);
         };
       });
@@ -522,22 +573,16 @@ export class ChatView {
           if (!server || !badgeEl) return;
 
           badgeEl.textContent = 'Checking...';
-          badgeEl.style.background = '#fef08a';
-          badgeEl.style.color = '#854d0e';
+          badgeEl.className = 'badge';
 
-          try {
-            if (!server.endpointUrl) throw new Error('No URL');
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 2500);
-            await fetch(server.endpointUrl, { signal: controller.signal }).catch(() => ({ ok: true }));
-            clearTimeout(timeoutId);
-            badgeEl.textContent = 'Available';
-            badgeEl.style.background = '#dcfce7';
-            badgeEl.style.color = '#166534';
-          } catch (err) {
+          const status = await MCPClient.checkStatus(server);
+          if (status.online) {
+            badgeEl.textContent = `Online (${status.toolCount})`;
+            badgeEl.className = 'badge badge-emerald';
+          } else {
             badgeEl.textContent = 'Offline';
-            badgeEl.style.background = '#fee2e2';
-            badgeEl.style.color = '#991b1b';
+            badgeEl.className = 'badge badge-rose';
+            Toast.error(`"${server.name}" unreachable: ${status.error}`);
           }
         };
       });
@@ -722,6 +767,7 @@ export class ChatView {
         const swipeIdx = m.swipeIndex || 0;
         const isLastAssistant = !isUser && idx === lastAssistantIndex;
         const thoughtsText = (m.thoughts || '').trim();
+        const toolTrace = Array.isArray(m.toolTrace) ? m.toolTrace : [];
 
         return `
           <div class="message-block ${isUser ? 'user' : 'assistant'}" data-id="${m.id}">
@@ -739,6 +785,17 @@ export class ChatView {
                     <span class="thinking-token-badge">${estimateThinkingTokens(thoughtsText).toLocaleString()} tokens</span>
                   </button>
                   <div class="thinking-content">${escapeHtml(thoughtsText)}</div>
+                </div>
+              ` : ''}
+
+              ${!isUser && toolTrace.length > 0 ? `
+                <div class="tool-trace-block" data-msgid="${m.id}">
+                  <button class="thinking-toggle" type="button">
+                    <svg class="thinking-chevron" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"></path></svg>
+                    <span>Tools Used</span>
+                    <span class="thinking-token-badge">${toolTrace.length} call${toolTrace.length > 1 ? 's' : ''}</span>
+                  </button>
+                  <div class="thinking-content">${escapeHtml(toolTrace.map(t => `${t.name}(${JSON.stringify(t.args)})\n→ ${t.result}`).join('\n\n'))}</div>
                 </div>
               ` : ''}
 
@@ -802,9 +859,10 @@ export class ChatView {
           const count = freshMsg.swipes ? freshMsg.swipes.length : 1;
           counterEl.textContent = `${(freshMsg.swipeIndex || 0) + 1} / ${count}`;
         }
-        // Creates/updates/removes the thinking block based on the fresh
-        // variation's actual thoughts, instead of leaving a stale one behind.
+        // Creates/updates/removes the thinking/tool-trace blocks based on the
+        // fresh variation's actual data, instead of leaving stale ones behind.
         syncThinkingBlock(innerEl, (freshMsg.thoughts || '').trim(), { streaming: false });
+        syncToolTraceBlock(innerEl, Array.isArray(freshMsg.toolTrace) ? freshMsg.toolTrace : []);
 
         contentEl.classList.remove(outClass);
         contentEl.classList.add(inClass);
@@ -821,10 +879,10 @@ export class ChatView {
         btn.onclick = async () => this.handleSwipeNext(btn.dataset.id, currentChatId, activeChar, () => refreshMessageBlock(btn.dataset.id, 'next'));
       });
 
-      // Thinking block collapse/expand toggle
+      // Thinking / tool-trace block collapse/expand toggle
       messagesEl.querySelectorAll('.thinking-toggle').forEach(btn => {
         btn.onclick = () => {
-          const block = btn.closest('.thinking-block');
+          const block = btn.closest('.thinking-block, .tool-trace-block');
           if (block) {
             const isExpanded = block.classList.toggle('expanded');
             isThinkingCollapsedDefault = !isExpanded;
@@ -958,13 +1016,15 @@ export class ChatView {
       const activePersonaObj = await PersonaStore.getDefault();
       const genSettings = await ProxyStore.getGenerationSettings();
       const globalPrompt = await ProxyStore.getGlobalSystemPrompt();
+      const activeTools = await MCPToolRegistry.getActiveTools();
 
       const promptPayload = applyPrefill(genSettings, PromptBuilder.buildPromptPayload({
         character: activeChar,
         persona: activePersonaObj,
         globalSystemPrompt: globalPrompt,
         messages: currentMessages,
-        contextLimit: genSettings.contextLimit || 20
+        contextLimit: genSettings.contextLimit || 20,
+        tools: activeTools
       }));
 
       const messagesEl = container.querySelector('#messages-container');
@@ -989,17 +1049,26 @@ export class ChatView {
       setGeneratingState(true);
       let liveContent = genSettings.prefillEnabled && genSettings.prefillText ? genSettings.prefillText : '';
       let liveThinking = '';
+      let liveToolTrace = [];
+
+      const typingInnerEl = typingIndicator.querySelector('.message-block-inner');
+      const typingContentEl = typingIndicator.querySelector('#typing-indicator-content');
 
       try {
-        let finalContent, finalThinking;
-
         if (genSettings.streamingEnabled) {
-          const typingInnerEl = typingIndicator.querySelector('.message-block-inner');
-          const typingContentEl = typingIndicator.querySelector('#typing-indicator-content');
           typingContentEl.removeAttribute('style');
           typingContentEl.innerHTML = liveContent ? this.formatRoleplayMarkdown(liveContent) : '';
-          const result = await ProviderManager.streamChatCompletion(proxyObj, promptPayload, genSettings, {
-            signal: activeAbortController.signal,
+        }
+
+        const { content: finalContent, thinking: finalThinking, toolTrace } = await AgentRunner.run({
+          proxy: proxyObj,
+          initialPayload: promptPayload,
+          settings: genSettings,
+          tools: activeTools,
+          streaming: genSettings.streamingEnabled,
+          signal: activeAbortController.signal,
+          transformFirstResult: (result) => mergePrefillResult(genSettings, result),
+          callbacks: {
             onContentChunk: (delta) => {
               liveContent += delta;
               typingContentEl.innerHTML = this.formatRoleplayMarkdown(liveContent);
@@ -1009,17 +1078,21 @@ export class ChatView {
               liveThinking += delta;
               syncThinkingBlock(typingInnerEl, liveThinking, { streaming: true });
               scrollToBottom(messagesEl);
+            },
+            onToolExecuting: (call) => {
+              typingContentEl.removeAttribute('style');
+              typingContentEl.innerHTML = `<em style="color:var(--text-dim);">${escapeHtml(activeChar.name)} is using tool: ${escapeHtml(call.name)}...</em>`;
+              scrollToBottom(messagesEl);
+            },
+            onToolResult: (call, result) => {
+              liveToolTrace.push({ name: call.name, args: call.args, result });
             }
-          });
-          ({ content: finalContent, thinking: finalThinking } = mergePrefillResult(genSettings, result));
-        } else {
-          const result = await ProviderManager.sendChatCompletion(proxyObj, promptPayload, genSettings, { signal: activeAbortController.signal });
-          ({ content: finalContent, thinking: finalThinking } = mergePrefillResult(genSettings, result));
-        }
+          }
+        });
 
         typingIndicator.remove();
 
-        await ChatStore.addMessage(currentChatId, 'assistant', finalContent, finalThinking, [finalContent]);
+        await ChatStore.addMessage(currentChatId, 'assistant', finalContent, finalThinking, [finalContent], toolTrace);
         await renderMessages();
 
         const updatedMessages = await ChatStore.getMessages(currentChatId);
@@ -1031,7 +1104,7 @@ export class ChatView {
         typingIndicator.remove();
         if (err.name === 'AbortError') {
           if (liveContent.trim()) {
-            await ChatStore.addMessage(currentChatId, 'assistant', liveContent, liveThinking, [liveContent]);
+            await ChatStore.addMessage(currentChatId, 'assistant', liveContent, liveThinking, [liveContent], liveToolTrace);
             await renderMessages();
             Toast.info('Generasi dihentikan - jawaban sebagian tersimpan.');
           } else {
@@ -1140,6 +1213,7 @@ export class ChatView {
     const activePersonaObj = await PersonaStore.getDefault();
     const genSettings = await ProxyStore.getGenerationSettings();
     const globalPrompt = await ProxyStore.getGlobalSystemPrompt();
+    const activeTools = await MCPToolRegistry.getActiveTools();
 
     // History up to the message before this assistant message
     const historyBefore = msgs.slice(0, msgIndex);
@@ -1148,7 +1222,8 @@ export class ChatView {
       persona: activePersonaObj,
       globalSystemPrompt: globalPrompt,
       messages: historyBefore,
-      contextLimit: genSettings.contextLimit || 20
+      contextLimit: genSettings.contextLimit || 20,
+      tools: activeTools
     }));
 
     activeAbortController = new AbortController();
@@ -1158,26 +1233,41 @@ export class ChatView {
     const contentEl = document.querySelector(`.message-content[data-msgid="${messageId}"]`);
     const blockInnerEl = document.querySelector(`.message-block[data-id="${messageId}"] .message-block-inner`);
 
-    // Remove any stale thinking block from previous variation before starting generation
+    // Remove any stale thinking/tool-trace blocks from the previous variation before starting generation
     if (blockInnerEl) {
       const staleThinking = blockInnerEl.querySelector('.thinking-block');
       if (staleThinking) staleThinking.remove();
+      const staleTrace = blockInnerEl.querySelector('.tool-trace-block');
+      if (staleTrace) staleTrace.remove();
     }
 
     const restoreOriginal = () => {
       if (contentEl) contentEl.innerHTML = ChatView.formatRoleplayMarkdown(msg.content);
-      if (blockInnerEl) syncThinkingBlock(blockInnerEl, (msg.thoughts || '').trim(), { streaming: false });
+      if (blockInnerEl) {
+        syncThinkingBlock(blockInnerEl, (msg.thoughts || '').trim(), { streaming: false });
+        syncToolTraceBlock(blockInnerEl, Array.isArray(msg.toolTrace) ? msg.toolTrace : []);
+      }
     };
     let liveContent = genSettings.prefillEnabled && genSettings.prefillText ? genSettings.prefillText : '';
     let liveThinking = '';
+    let liveToolTrace = [];
 
     try {
-      let newContent, newThinking;
+      if (genSettings.streamingEnabled && contentEl) {
+        contentEl.innerHTML = liveContent ? ChatView.formatRoleplayMarkdown(liveContent) : '';
+      } else if (contentEl) {
+        contentEl.innerHTML = '<em style="color:var(--text-dim);">Menggenerasi variasi baru...</em>';
+      }
 
-      if (genSettings.streamingEnabled) {
-        if (contentEl) contentEl.innerHTML = liveContent ? ChatView.formatRoleplayMarkdown(liveContent) : '';
-        const result = await ProviderManager.streamChatCompletion(activeProxy, promptPayload, genSettings, {
-          signal: activeAbortController.signal,
+      const { content: newContent, thinking: newThinking, toolTrace } = await AgentRunner.run({
+        proxy: activeProxy,
+        initialPayload: promptPayload,
+        settings: genSettings,
+        tools: activeTools,
+        streaming: genSettings.streamingEnabled,
+        signal: activeAbortController.signal,
+        transformFirstResult: (result) => mergePrefillResult(genSettings, result),
+        callbacks: {
           onContentChunk: (delta) => {
             liveContent += delta;
             if (contentEl) contentEl.innerHTML = ChatView.formatRoleplayMarkdown(liveContent);
@@ -1187,25 +1277,27 @@ export class ChatView {
             liveThinking += delta;
             if (blockInnerEl) syncThinkingBlock(blockInnerEl, liveThinking, { streaming: true });
             scrollToBottom(messagesEl);
+          },
+          onToolExecuting: (call) => {
+            if (contentEl) contentEl.innerHTML = `<em style="color:var(--text-dim);">Using tool: ${escapeHtml(call.name)}...</em>`;
+            scrollToBottom(messagesEl);
+          },
+          onToolResult: (call, result) => {
+            liveToolTrace.push({ name: call.name, args: call.args, result });
           }
-        });
-        ({ content: newContent, thinking: newThinking } = mergePrefillResult(genSettings, result));
-      } else {
-        if (contentEl) contentEl.innerHTML = '<em style="color:var(--text-dim);">Menggenerasi variasi baru...</em>';
-        const result = await ProviderManager.sendChatCompletion(activeProxy, promptPayload, genSettings, { signal: activeAbortController.signal });
-        ({ content: newContent, thinking: newThinking } = mergePrefillResult(genSettings, result));
-      }
+        }
+      });
 
       const updatedSwipes = [...(msg.swipes || [msg.content]), newContent];
       const newIndex = updatedSwipes.length - 1;
-      await ChatStore.updateMessageSwipes(messageId, updatedSwipes, newIndex, newThinking);
+      await ChatStore.updateMessageSwipes(messageId, updatedSwipes, newIndex, newThinking, toolTrace);
       onDone();
     } catch (err) {
       if (err.name === 'AbortError') {
         if (liveContent.trim()) {
           const updatedSwipes = [...(msg.swipes || [msg.content]), liveContent];
           const newIndex = updatedSwipes.length - 1;
-          await ChatStore.updateMessageSwipes(messageId, updatedSwipes, newIndex, liveThinking);
+          await ChatStore.updateMessageSwipes(messageId, updatedSwipes, newIndex, liveThinking, liveToolTrace);
           onDone();
           Toast.info('Generasi dihentikan - jawaban sebagian tersimpan.');
         } else {
