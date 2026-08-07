@@ -1,7 +1,7 @@
 {
   "name": "nnzrp",
   "version": "1.0.0",
-  "description": "NnzRP - 100% Client-Side BYOK AI Roleplay Web Application",
+  "description": "NnzRP - 100% Client-Side BYOK AI Roleplay Desktop App",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -13,8 +13,12 @@
     "electron",
     "byok"
   ],
-  "author": "",
+  "author": "Rehan",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Rehan30g/NnzRP.git"
+  },
   "devDependencies": {
     "electron": "^31.2.0",
     "electron-builder": "^24.13.3"
