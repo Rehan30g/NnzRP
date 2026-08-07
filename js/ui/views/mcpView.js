@@ -4,6 +4,8 @@ import { MCPClient } from '../../services/mcpClient.js';
 import { MCPToolRegistry } from '../../services/mcpToolRegistry.js';
 import { Modal } from '../components/modal.js';
 import { Toast } from '../components/toast.js';
+import { dropdownHTML, wireDropdown } from '../components/dropdown.js';
+import { toggleSwitchHTML, toggleRowHTML } from '../components/toggle.js';
 import { escapeHtml, escapeAttr } from '../../utils/sanitize.js';
 
 export class MCPView {
@@ -22,26 +24,26 @@ export class MCPView {
         </div>
       </div>
 
-      <div class="card" style="margin-bottom:1.5rem; background:#f8fafc;">
+      <div class="card card-muted" style="margin-bottom:1.5rem;">
         <p style="color:var(--text-muted); font-size:0.85rem; line-height:1.5; margin:0;">
           Servers you add here are only reachable by name+arguments the model chooses at runtime - the model can never configure or launch a new server itself. Stdio/command servers run as local child processes of this desktop app.
         </p>
       </div>
 
-      <div class="card" style="margin-bottom:1.5rem; display:flex; flex-direction:column; gap:0.85rem;">
-        <div style="display:flex; justify-content:space-between; align-items:center; gap:1rem;">
-          <div>
-            <div style="font-weight:700; font-size:0.95rem;">MCP Tools</div>
-            <div style="font-size:0.78rem; color:var(--text-muted); margin-top:0.15rem;">Master switch - turns all MCP tool-calling on/off across every chat. Same switch is also in the chat drawer's MCP tab.</div>
-          </div>
-          <input type="checkbox" id="mcp-global-toggle" title="Enable MCP tools globally">
-        </div>
-        <div style="display:flex; justify-content:space-between; align-items:center; gap:1rem; border-top:1px solid var(--border-light); padding-top:0.75rem;">
-          <div>
-            <div style="font-weight:700; font-size:0.95rem;">Immersive Roleplay</div>
-            <div style="font-size:0.78rem; color:var(--text-muted); margin-top:0.15rem;">Tells the model to proactively use connected tools in-character (e.g. a websearch tool while a character is browsing, or to pull up-to-date info during the scene) instead of only calling them when explicitly asked.</div>
-          </div>
-          <input type="checkbox" id="mcp-immersive-toggle" title="Enable immersive proactive tool use">
+      <div class="card" style="margin-bottom:1.5rem; display:flex; flex-direction:column; gap:1rem;">
+        ${toggleRowHTML({
+          id: 'mcp-global-toggle',
+          title: 'MCP Tools',
+          description: "Master switch - turns all MCP tool-calling on/off across every chat. Same switch is also in the chat drawer's MCP tab.",
+          ariaLabel: 'Enable MCP tools globally'
+        })}
+        <div style="border-top:1px solid var(--border-light); padding-top:1rem;">
+          ${toggleRowHTML({
+            id: 'mcp-immersive-toggle',
+            title: 'Immersive Roleplay',
+            description: 'Tells the model to proactively use connected tools in-character (e.g. a websearch tool while a character is browsing, or to pull up-to-date info during the scene) instead of only calling them when explicitly asked.',
+            ariaLabel: 'Enable immersive proactive tool use'
+          })}
         </div>
       </div>
 
@@ -64,7 +66,12 @@ export class MCPView {
                     </div>
                   </div>
                   <div style="display:flex; align-items:center; gap:0.4rem;">
-                    <input type="checkbox" class="mcp-enabled-check" data-id="${s.id}" ${s.enabled ? 'checked' : ''} title="Enable this server for roleplay sessions">
+                    ${toggleSwitchHTML({
+                      inputClass: 'mcp-enabled-check',
+                      data: { id: s.id },
+                      checked: !!s.enabled,
+                      title: 'Enable this server for roleplay sessions'
+                    })}
                   </div>
                 </div>
 
@@ -76,13 +83,20 @@ export class MCPView {
 
                 <p style="color:var(--text-muted); font-size:0.85rem; margin-bottom:1rem;">${escapeHtml(s.description) || 'Tidak ada deskripsi.'}</p>
 
-                <div style="display:flex; justify-content:space-between; gap:0.5rem; border-top:1px solid var(--border-light); padding-top:0.8rem;">
-                  <button class="btn btn-secondary btn-sm btn-check-mcp-status" data-id="${s.id}">Check Status</button>
+                <div style="display:flex; flex-direction:column; gap:0.5rem; border-top:1px solid var(--border-light); padding-top:0.8rem;">
                   <div style="display:flex; gap:0.4rem;">
-                    <button class="btn btn-secondary btn-sm btn-edit-mcp" data-id="${s.id}">Edit</button>
-                    <button class="btn btn-danger btn-sm btn-del-mcp" data-id="${s.id}">Delete</button>
+                    <button class="btn btn-secondary btn-sm btn-check-mcp-status" data-id="${s.id}" style="flex:1;">Check Status</button>
+                    <button class="btn btn-secondary btn-sm btn-mcp-perms" data-id="${s.id}" style="flex:1;">Tool Permissions</button>
+                  </div>
+                  <div style="display:flex; gap:0.4rem;">
+                    <button class="btn btn-secondary btn-sm btn-edit-mcp" data-id="${s.id}" style="flex:1;">Edit</button>
+                    <button class="btn btn-danger btn-sm btn-del-mcp" data-id="${s.id}" style="flex:1;">Delete</button>
                   </div>
                 </div>
+
+                <!-- Per-tool Ask/Allow/Decline editor - populated lazily on
+                     first expand (it needs a live tools/list round trip). -->
+                <div class="mcp-perm-host hidden" id="mcp-perm-host-${s.id}" style="margin-top:0.8rem; border-top:1px solid var(--border-light); padding-top:0.8rem;"></div>
               </div>
             `).join('')}
           </div>
@@ -163,6 +177,26 @@ export class MCPView {
     // the user clicks each "Check Status" button by hand.
     servers.forEach(s => { checkServerStatus(s, { silent: true }); });
 
+    // Per-server tool permission editor, expanded on demand (loading it for
+    // every card up front would fire a tools/list round trip per server on
+    // every render of this view).
+    container.querySelectorAll('.btn-mcp-perms').forEach(btn => {
+      btn.onclick = async () => {
+        const hostEl = container.querySelector(`#mcp-perm-host-${btn.dataset.id}`);
+        if (!hostEl) return;
+        const nowHidden = hostEl.classList.toggle('hidden');
+        // The server cards sit in a narrow multi-column grid; a 12-row list of
+        // tool names + 3-way controls needs the full row width to stay readable.
+        const cardEl = btn.closest('.card');
+        if (cardEl) cardEl.style.gridColumn = nowHidden ? '' : '1 / -1';
+        if (nowHidden) return;
+        if (!hostEl.dataset.loaded) {
+          hostEl.dataset.loaded = '1';
+          await MCPView.renderToolPermissions(hostEl, btn.dataset.id);
+        }
+      };
+    });
+
     container.querySelectorAll('.btn-edit-mcp').forEach(btn => {
       btn.onclick = async () => {
         const server = await MCPStore.getById(btn.dataset.id);
@@ -180,6 +214,115 @@ export class MCPView {
           Toast.info('MCP Server dihapus.');
           await MCPView.render(container);
         }
+      };
+    });
+  }
+
+  /**
+   * Renders the per-tool Ask / Allow / Decline permission editor for ONE MCP
+   * server into `hostEl`, including the one-click "set every tool of this
+   * server to X" bulk control.
+   *
+   * Shared deliberately: this is the primary settings surface (the `#mcp`
+   * route's server cards) AND the copy mirrored into the chat right-drawer's
+   * MCP tab, the same way the master/immersive switches are duplicated -
+   * having one implementation means the two can't drift.
+   *
+   * 'ask' is the default for anything unset, and is stored as ABSENCE of a
+   * key (see MCPStore) - so a tool this UI has never touched, and a tool
+   * explicitly set back to Ask, are the same state.
+   */
+  static async renderToolPermissions(hostEl, serverId) {
+    if (!hostEl) return;
+    hostEl.innerHTML = `<div style="font-size:0.8rem; color:var(--text-muted);">Memuat daftar tool...</div>`;
+
+    const server = await MCPStore.getById(serverId);
+    if (!server) {
+      hostEl.innerHTML = `<div style="font-size:0.8rem; color:var(--accent-rose);">Server tidak ditemukan.</div>`;
+      return;
+    }
+
+    const [status, stored] = await Promise.all([
+      MCPClient.checkStatus(server),
+      MCPStore.getToolPermissions(serverId)
+    ]);
+
+    const discovered = status.online
+      ? status.tools.map(t => t && t.name).filter(Boolean)
+      : [];
+    // Stored-but-not-currently-discoverable tools are still listed so an
+    // existing override stays visible/removable even while the server is
+    // offline or has dropped a tool from its listing.
+    const toolNames = [...new Set([...discovered, ...Object.keys(stored)])];
+
+    const permLabel = { ask: 'Ask', allow: 'Allow', decline: 'Decline' };
+    const segHTML = (toolName, current) => `
+      <div class="perm-seg" data-tool="${escapeAttr(toolName)}">
+        ${['ask', 'allow', 'decline'].map(p => `
+          <button type="button" data-perm="${p}" class="perm-seg-${p}${p === current ? ' active' : ''}">${permLabel[p]}</button>
+        `).join('')}
+      </div>
+    `;
+
+    hostEl.innerHTML = `
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:0.75rem; flex-wrap:wrap; margin-bottom:0.6rem;">
+        <div>
+          <div style="font-weight:700; font-size:0.85rem;">Tool Permissions</div>
+          <div style="font-size:0.75rem; color:var(--text-muted); margin-top:0.1rem;">
+            <strong>Ask</strong> (default) menampilkan dialog di atas kolom pesan tiap kali dipanggil. <strong>Allow</strong> jalan langsung, <strong>Decline</strong> selalu ditolak.
+          </div>
+        </div>
+        <div class="perm-bulk" style="display:flex; align-items:center; gap:0.4rem; flex-shrink:0;">
+          <span style="font-size:0.75rem; color:var(--text-muted);">Set semua:</span>
+          ${['ask', 'allow', 'decline'].map(p => `
+            <button type="button" class="btn btn-secondary btn-sm" data-bulk="${p}" style="padding:0.15rem 0.5rem; font-size:0.72rem;">${permLabel[p]}</button>
+          `).join('')}
+        </div>
+      </div>
+      ${!status.online ? `
+        <div style="font-size:0.75rem; color:var(--accent-rose); margin-bottom:0.5rem;">
+          Server offline (${escapeHtml(status.error || 'unknown error')}) - daftar tool tidak bisa dimuat. Tool tanpa pengaturan tersimpan tetap default <strong>Ask</strong>.
+        </div>
+      ` : ''}
+      ${toolNames.length === 0 ? `
+        <div style="font-size:0.8rem; color:var(--text-muted);">Tidak ada tool yang terdeteksi.</div>
+      ` : `
+        <div class="perm-list" style="display:flex; flex-direction:column; gap:0.35rem;">
+          ${toolNames.map(name => `
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:0.6rem;">
+              <span style="font-family:var(--font-mono); font-size:0.78rem; overflow-wrap:anywhere;">${escapeHtml(name)}${discovered.includes(name) ? '' : ' <span style="color:var(--text-muted); font-family:var(--font-family);">(tidak terdeteksi)</span>'}</span>
+              ${segHTML(name, stored[name] || 'ask')}
+            </div>
+          `).join('')}
+        </div>
+      `}
+    `;
+
+    const markActive = (segEl, permission) => {
+      segEl.querySelectorAll('button[data-perm]').forEach(b => {
+        b.classList.toggle('active', b.dataset.perm === permission);
+      });
+    };
+
+    hostEl.querySelectorAll('.perm-seg button[data-perm]').forEach(btn => {
+      btn.onclick = async () => {
+        const segEl = btn.closest('.perm-seg');
+        const toolName = segEl.dataset.tool;
+        const permission = btn.dataset.perm;
+        await MCPStore.setToolPermission(serverId, toolName, permission);
+        markActive(segEl, permission);
+        Toast.info(`"${toolName}" -> ${permLabel[permission]}`);
+      };
+    });
+
+    hostEl.querySelectorAll('button[data-bulk]').forEach(btn => {
+      btn.onclick = async () => {
+        const permission = btn.dataset.bulk;
+        await MCPStore.setAllToolPermissions(serverId, permission, toolNames);
+        // Update every row in place rather than re-rendering - a re-render
+        // would fire another tools/list round trip just to redraw buttons.
+        hostEl.querySelectorAll('.perm-seg').forEach(segEl => markActive(segEl, permission));
+        Toast.success(`Semua tool "${server.name}" diset ke ${permLabel[permission]}.`);
       };
     });
   }
@@ -247,10 +390,14 @@ export class MCPView {
 
         <div class="form-group">
           <label class="form-label">Transport</label>
-          <select class="select" id="mcp-transport">
-            <option value="http" ${data.transport !== 'command' ? 'selected' : ''}>HTTP (Streamable JSON-RPC)</option>
-            <option value="command" ${data.transport === 'command' ? 'selected' : ''}>Local Command / Stdio (e.g. npx)</option>
-          </select>
+          ${dropdownHTML({
+            id: 'mcp-transport',
+            value: data.transport === 'command' ? 'command' : 'http',
+            options: [
+              { value: 'http', label: 'HTTP', hint: 'Streamable JSON-RPC endpoint' },
+              { value: 'command', label: 'Local Command / Stdio', hint: 'Spawned child process (e.g. npx)' }
+            ]
+          })}
         </div>
 
         <div id="mcp-http-fields" style="${data.transport === 'command' ? 'display:none;' : ''}">
@@ -284,12 +431,16 @@ export class MCPView {
           <textarea class="textarea" id="mcp-desc" rows="2" placeholder="Ringkasan fungsi server MCP ini...">${escapeHtml(data.description)}</textarea>
         </div>
 
-        <div style="display:flex; align-items:center; gap:0.5rem; margin-top:0.5rem; margin-bottom:1rem;">
-          <input type="checkbox" id="mcp-enabled" ${data.enabled ? 'checked' : ''}>
-          <label for="mcp-enabled" style="font-size:0.85rem; cursor:pointer;">Aktifkan Server MCP ini</label>
+        <div style="margin-top:0.5rem; margin-bottom:1.25rem;">
+          ${toggleRowHTML({
+            id: 'mcp-enabled',
+            checked: !!data.enabled,
+            title: 'Aktifkan Server MCP ini',
+            description: 'Server yang aktif akan didiscover tool-nya saat chat dimulai.'
+          })}
         </div>
 
-        <div class="card" style="background:#f8fafc; padding:0.85rem;">
+        <div class="card card-muted" style="padding:1rem;">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
             <span style="font-size:0.85rem; font-weight:600;">Test Connection</span>
             <button type="button" class="btn btn-secondary btn-sm" id="mcp-discover-btn">Discover Tools</button>
@@ -358,11 +509,11 @@ export class MCPView {
     });
 
     // Transport toggle swaps visible field groups
-    overlay.querySelector('#mcp-transport').onchange = (e) => {
-      const isCommand = e.target.value === 'command';
+    wireDropdown(overlay, 'mcp-transport', (value) => {
+      const isCommand = value === 'command';
       overlay.querySelector('#mcp-http-fields').style.display = isCommand ? 'none' : '';
       overlay.querySelector('#mcp-command-fields').style.display = isCommand ? '' : 'none';
-    };
+    });
 
     // Live "Discover Tools" test using whatever is currently typed in the form.
     // Uses a stable preview id (not saved) so a stdio test process can be found and
@@ -392,12 +543,12 @@ export class MCPView {
         await MCPClient.stopIfRunning(testServer);
       }
       if (status.online) {
-        resultEl.style.color = 'var(--accent-emerald, #16a34a)';
+        resultEl.style.color = 'var(--accent-emerald)';
         resultEl.innerHTML = `Berhasil! ${status.toolCount} tool ditemukan: ${
           status.tools.slice(0, 8).map(t => `<code>${escapeHtml(t.name)}</code>`).join(', ') || '-'
         }`;
       } else {
-        resultEl.style.color = 'var(--accent-rose, #dc2626)';
+        resultEl.style.color = 'var(--accent-rose)';
         resultEl.textContent = `Gagal: ${status.error}`;
       }
     };

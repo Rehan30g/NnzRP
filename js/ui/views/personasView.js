@@ -3,6 +3,7 @@ import { PersonaStore } from '../../storage/personaStore.js';
 import { Modal } from '../components/modal.js';
 import { Toast } from '../components/toast.js';
 import { renderAvatarPickerHTML, wireAvatarPicker } from '../components/avatarPicker.js';
+import { toggleRowHTML } from '../components/toggle.js';
 import { escapeHtml, escapeAttr } from '../../utils/sanitize.js';
 
 export class PersonasView {
@@ -93,9 +94,13 @@ export class PersonasView {
           <textarea class="textarea" id="persona-desc" placeholder="Brief backstory and traits of your player persona...">${escapeHtml(data.description)}</textarea>
         </div>
 
-        <div style="display:flex; align-items:center; gap:0.5rem; margin-top:0.5rem;">
-          <input type="checkbox" id="persona-default" ${data.isDefault ? 'checked' : ''}>
-          <label for="persona-default" style="font-size:0.85rem; cursor:pointer;">Set as Default Player Persona</label>
+        <div style="margin-top:0.5rem;">
+          ${toggleRowHTML({
+            id: 'persona-default',
+            checked: !!data.isDefault,
+            title: 'Set as Default Player Persona',
+            description: 'New chat sessions will use this persona as {{user}}.'
+          })}
         </div>
       </form>
     `;

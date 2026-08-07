@@ -5,10 +5,24 @@ import { Sidebar } from './ui/components/sidebar.js';
 import { CharactersView } from './ui/views/charactersView.js';
 import { ChatView } from './ui/views/chatView.js';
 import { PersonasView } from './ui/views/personasView.js';
-import { ProxiesView } from './ui/views/proxiesView.js';
 import { SettingsView } from './ui/views/settingsView.js';
 import { MCPView } from './ui/views/mcpView.js';
 import { MCPToolRegistry } from './services/mcpToolRegistry.js';
+import { CharacterStore } from './storage/characterStore.js';
+import { initTheme } from './ui/theme.js';
+
+/**
+ * Window-title suffixes per route. `navigate()` composes these into
+ * "NnzRP - <suffix>"; the chat route substitutes the character's own name
+ * instead (see applyWindowTitle).
+ */
+const VIEW_TITLES = {
+  characters: 'AI Characters',
+  personas: 'User Personas',
+  settings: 'Settings',
+  mcp: 'Custom MCP',
+  chat: 'Roleplay Chat'
+};
 
 class App {
   constructor() {
@@ -21,6 +35,12 @@ class App {
 
     // Initialize Database & Sample Seeds
     await initDatabase();
+
+    // Re-apply the appearance preference from its IndexedDB source of truth.
+    // index.html's inline bootstrap already applied the localStorage mirror
+    // before first paint; this only corrects a divergence (e.g. after a backup
+    // restore, or if localStorage was cleared). Never blocks on network I/O.
+    await initTheme().catch(err => console.warn('Theme init failed:', err.message));
 
     // Warm up enabled MCP servers (populates the tool cache and, for stdio
     // servers, spawns their child process) so the first chat message doesn't
@@ -78,6 +98,17 @@ class App {
     if (view === 'chat' && rest[0]) {
       return { view: 'chat', params: { characterId: decodeURIComponent(rest[0]) } };
     }
+    // The standalone Multi-Proxy Config page was folded into Settings as its
+    // "Proxies" tab (the sidebar no longer links to it). The old #proxies route
+    // is kept alive as a redirect rather than deleted, so existing bookmarks,
+    // the restored-on-reload hash, and any stale link land on the right tab
+    // instead of a dead route.
+    if (view === 'proxies') {
+      return { view: 'settings', params: { tab: 'proxies' } };
+    }
+    if (view === 'settings' && rest[0]) {
+      return { view: 'settings', params: { tab: rest[0] } };
+    }
     return { view: view || 'characters', params: {} };
   }
 
@@ -89,6 +120,35 @@ class App {
     if (window.location.hash !== target) {
       window.location.hash = target;
     }
+  }
+
+  /**
+   * Sets the window title to "NnzRP - <context>", where context is the open
+   * view's label or, in a chat, the character being talked to.
+   *
+   * Both surfaces have to be updated: `document.title` (which Electron mirrors
+   * into the taskbar / alt-tab entry) AND the `.titlebar-title` span, since the
+   * BrowserWindow is frameless (`frame: false` in main.js) and draws its own
+   * titlebar in `index.html`. `textContent` - never innerHTML - because the
+   * character name is user/import-supplied.
+   */
+  async applyWindowTitle(viewName, params = {}) {
+    let context = VIEW_TITLES[viewName] || '';
+
+    if (viewName === 'chat') {
+      const charId = params.characterId || this.activeCharacterId;
+      try {
+        const character = charId ? await CharacterStore.getById(charId) : null;
+        if (character && character.name) context = `Chat with ${character.name}`;
+      } catch {
+        /* fall back to the generic "Roleplay Chat" label */
+      }
+    }
+
+    const title = context ? `NnzRP - ${context}` : 'NnzRP';
+    document.title = title;
+    const titlebarEl = document.getElementById('titlebar-title');
+    if (titlebarEl) titlebarEl.textContent = title;
   }
 
   renderShell() {
@@ -105,7 +165,13 @@ class App {
 
   async navigate(viewName, params = {}) {
     const targetCharId = params.characterId || this.activeCharacterId;
-    if (this.currentView === viewName && (viewName !== 'chat' || this.activeCharacterId === targetCharId)) {
+    // `params.tab` must break the "already here" short-circuit: arriving at
+    // #proxies while Settings is already open has to still switch to the
+    // Proxies tab rather than silently no-op.
+    const sameView = this.currentView === viewName
+      && (viewName !== 'chat' || this.activeCharacterId === targetCharId)
+      && !params.tab;
+    if (sameView) {
       return; // Already on requested view
     }
 
@@ -114,6 +180,10 @@ class App {
       this.activeCharacterId = params.characterId;
     }
     this.updateHash(viewName, params.characterId ? params : { characterId: this.activeCharacterId });
+
+    // Window/titlebar text follows the route. Fire-and-forget: it needs an async
+    // character lookup for the chat route, and nothing below depends on it.
+    this.applyWindowTitle(viewName, params);
 
     const sidebarContainer = document.getElementById('app-sidebar');
     const headerContainer = document.getElementById('main-header');
@@ -167,12 +237,8 @@ class App {
         await PersonasView.render(viewContainer);
         break;
 
-      case 'proxies':
-        await ProxiesView.render(viewContainer);
-        break;
-
       case 'settings':
-        await SettingsView.render(viewContainer);
+        await SettingsView.render(viewContainer, { tab: params.tab });
         break;
 
       case 'mcp':
@@ -193,9 +259,12 @@ function bootApp() {
     console.error('App initialization failed:', err);
     const appEl = document.getElementById('app');
     if (appEl) {
-      appEl.innerHTML = `<div style="padding:2rem; color:#e11d48; font-family:sans-serif;">
+      // Hex fallbacks kept deliberately: this screen has to render even if the
+      // failure happened before/around theme setup, so it must not depend on
+      // the custom properties resolving.
+      appEl.innerHTML = `<div style="padding:2rem; color:var(--accent-rose, #e11d48); font-family:sans-serif;">
         <h2>NnzRP Initialization Error</h2>
-        <pre style="background:#f1f5f9; padding:1rem; border-radius:8px; overflow:auto;">${err.stack || err.message || err}</pre>
+        <pre style="background:var(--bg-inset, #f1f5f9); color:var(--text-main, #0f172a); padding:1rem; border-radius:8px; overflow:auto;">${err.stack || err.message || err}</pre>
       </div>`;
     }
   });

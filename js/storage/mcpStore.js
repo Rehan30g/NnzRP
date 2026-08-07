@@ -39,6 +39,9 @@ export class MCPStore {
       env: {},
       description: '',
       enabled: true,
+      // Per-tool Ask/Allow/Decline map - see getToolPermission() below. An
+      // absent key (and an absent map entirely) always means 'ask'.
+      toolPermissions: {},
       ...mcpData,
       id: mcpData.id || `mcp-${now}-${Math.random().toString(36).substr(2, 4)}`,
       updatedAt: now
@@ -102,6 +105,88 @@ export class MCPStore {
 
   static async setImmersiveRoleplay(enabled) {
     await db.put('settings', { key: 'mcpImmersiveRoleplay', value: !!enabled });
+  }
+
+  /* ---------------------------------------------------------------------
+   * Per-tool execution permissions (Ask / Allow / Decline)
+   *
+   * Stored per server as `server.toolPermissions`, an object keyed by the
+   * tool's OWN raw name within that server (not the `server__tool` qualified
+   * name used for provider function-calling) - e.g.
+   *   { "browser_navigate": "allow", "browser_click": "decline" }
+   *
+   * SAFETY: 'ask' is the default for EVERY tool that has no explicit entry,
+   * and every read funnels through `normalizePermission()`, which only ever
+   * returns 'allow'/'decline' for those two exact literal strings and 'ask'
+   * for anything else (missing key, missing map, missing server, corrupted
+   * value, undefined, null). There is no code path where an unconfigured
+   * tool resolves to 'allow'.
+   * ------------------------------------------------------------------- */
+
+  /** The only three valid permission values, in UI display order. */
+  static TOOL_PERMISSIONS = ['ask', 'allow', 'decline'];
+
+  /** Coerces any stored/user-supplied value to a valid permission, defaulting to the safe 'ask'. */
+  static normalizePermission(permission) {
+    return (permission === 'allow' || permission === 'decline') ? permission : 'ask';
+  }
+
+  /** Returns 'ask' | 'allow' | 'decline' for one tool of one server. Unset/unknown -> 'ask'. */
+  static async getToolPermission(serverId, toolName) {
+    const server = await this.getById(serverId);
+    if (!server || !toolName) return 'ask';
+    const map = server.toolPermissions;
+    if (!map || typeof map !== 'object') return 'ask';
+    return this.normalizePermission(map[toolName]);
+  }
+
+  /** Whole map for one server, normalized. Used by the permission editor UI. */
+  static async getToolPermissions(serverId) {
+    const server = await this.getById(serverId);
+    const map = (server && server.toolPermissions && typeof server.toolPermissions === 'object')
+      ? server.toolPermissions
+      : {};
+    const normalized = {};
+    for (const [name, value] of Object.entries(map)) {
+      const perm = this.normalizePermission(value);
+      if (perm !== 'ask') normalized[name] = perm;
+    }
+    return normalized;
+  }
+
+  static async setToolPermission(serverId, toolName, permission) {
+    const server = await this.getById(serverId);
+    if (!server || !toolName) return null;
+    const perm = this.normalizePermission(permission);
+    const map = (server.toolPermissions && typeof server.toolPermissions === 'object')
+      ? { ...server.toolPermissions }
+      : {};
+    // 'ask' is the default, so it's stored as absence rather than a value -
+    // keeps the map small and makes "unset" and "explicitly ask" identical.
+    if (perm === 'ask') delete map[toolName];
+    else map[toolName] = perm;
+    return this.save({ ...server, toolPermissions: map });
+  }
+
+  /**
+   * Bulk one-click "set every tool of this server to X". `toolNames` is the
+   * currently-discovered tool list supplied by the caller (this layer has no
+   * way to discover tools itself - that's MCPClient/MCPToolRegistry's job).
+   */
+  static async setAllToolPermissions(serverId, permission, toolNames = []) {
+    const server = await this.getById(serverId);
+    if (!server) return null;
+    const perm = this.normalizePermission(permission);
+    if (perm === 'ask') {
+      // Reset to default = clear the map entirely (covers tools that are no
+      // longer discoverable but still had a stored override).
+      return this.save({ ...server, toolPermissions: {} });
+    }
+    const map = {};
+    for (const name of toolNames) {
+      if (name) map[name] = perm;
+    }
+    return this.save({ ...server, toolPermissions: map });
   }
 
   /**

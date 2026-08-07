@@ -14,6 +14,8 @@ import { Toast } from '../components/toast.js';
 import { ProxiesView } from './proxiesView.js';
 import { SettingsView } from './settingsView.js';
 import { MCPView } from './mcpView.js';
+import { dropdownHTML, wireDropdown, setDropdownOptions, setDropdownDisabled } from '../components/dropdown.js';
+import { toggleSwitchHTML, toggleRowHTML } from '../components/toggle.js';
 import { escapeHtml, escapeAttr } from '../../utils/sanitize.js';
 import { extractThinking } from '../../utils/thinkingParser.js';
 import { replaceMacros } from '../../utils/macroReplacer.js';
@@ -381,13 +383,178 @@ function syncLiveToolBox(containerEl, calls = []) {
 
   block.innerHTML = `
     <div class="tool-live-header">${WRENCH_ICON_SVG}<span>Tools Used</span></div>
-    ${calls.map(c => `
-      <div class="tool-live-item">
-        ${c.done ? '<span class="tool-live-check">&#10003;</span>' : '<span class="tool-live-spinner"></span>'}
-        <span>${c.done ? 'Used' : 'Using'} tool: ${escapeHtml(c.name)}...</span>
-      </div>
-    `).join('')}
+    ${calls.map(c => {
+      // A call the user refused never ran at all - shown here as a distinct
+      // third state (not a spinner, not a success check) so "I said no" is
+      // immediately legible in the same place the running calls appear.
+      if (c.declined) {
+        return `
+          <div class="tool-live-item tool-live-item-declined">
+            <span class="tool-live-cross">&times;</span>
+            <span>Declined tool: ${escapeHtml(c.name)}</span>
+          </div>
+        `;
+      }
+      return `
+        <div class="tool-live-item">
+          ${c.done ? '<span class="tool-live-check">&#10003;</span>' : '<span class="tool-live-spinner"></span>'}
+          <span>${c.done ? 'Used' : 'Using'} tool: ${escapeHtml(c.name)}...</span>
+        </div>
+      `;
+    }).join('')}
   `;
+}
+
+/* ---------------------------------------------------------------------------
+ * MCP tool permission prompt (rendered directly ABOVE the composer)
+ *
+ * Every MCP tool call the model makes passes through `requestToolPermission()`
+ * before it is allowed to run (wired into AgentRunner as `onPermissionRequest`
+ * by BOTH generation call sites). The stored per-tool setting decides whether
+ * the user is asked at all:
+ *   'allow'   -> runs silently
+ *   'decline' -> skipped silently (model is told it was refused)
+ *   'ask'     -> the DEFAULT for any tool with no explicit setting, and the
+ *                only outcome that surfaces this prompt.
+ * Deliberately NOT a `Modal` - a full-screen blocking overlay is the wrong
+ * shape for "a question about the reply currently streaming in"; this is a
+ * small card inserted as the first child of `.chat-input-container`, which is
+ * bottom-anchored (`bottom: 24px`) so an added child grows the box UPWARD,
+ * landing the prompt directly on top of the input box.
+ * ------------------------------------------------------------------------- */
+
+const PERMISSION_PROMPT_ID = 'tool-permission-prompt';
+// Set while a prompt is on screen; calling it resolves that prompt as a
+// refusal and tears down its DOM. Module-level for the same reason the other
+// generation state is (only one ChatView is ever mounted).
+let activePermissionCleanup = null;
+
+/** Pretty-prints model-supplied tool arguments for display (still escaped at the call site). */
+function formatToolArgsPreview(args) {
+  if (args === undefined || args === null) return '{}';
+  let text;
+  if (typeof args === 'string') {
+    text = args;
+  } else {
+    try {
+      text = JSON.stringify(args, null, 2);
+    } catch {
+      text = String(args);
+    }
+  }
+  if (typeof text !== 'string') text = String(text);
+  return text.length > 4000 ? `${text.slice(0, 4000)}\n... (dipotong)` : text;
+}
+
+/** Force-closes any open permission prompt, resolving it as a refusal (fail closed). */
+function removeToolPermissionPrompt() {
+  const cleanup = activePermissionCleanup;
+  activePermissionCleanup = null;
+  if (cleanup) cleanup();
+  const stray = document.getElementById(PERMISSION_PROMPT_ID);
+  if (stray) stray.remove();
+}
+
+/**
+ * Renders the Yes / No / Always Allow card above the composer and resolves
+ * once the user picks one. Resolves 'decline' if the generation is aborted
+ * while the prompt is open, so a pending call can never hang the tool loop.
+ */
+function showToolPermissionPrompt(call, signal) {
+  return new Promise((resolve) => {
+    // AgentRunner awaits each call sequentially so two prompts can't legitimately
+    // overlap - but tear down any stray one first so a prompt leaked by an
+    // earlier aborted turn can never stack up or answer on this one's behalf.
+    removeToolPermissionPrompt();
+
+    if (signal?.aborted) { resolve('decline'); return; }
+
+    const host = document.querySelector('.chat-input-container');
+    // No composer on screen = no way to ask the user = refuse. Failing closed
+    // is the only safe direction for this whole feature.
+    if (!host) { resolve('decline'); return; }
+
+    const promptEl = document.createElement('div');
+    promptEl.className = 'tool-permission-prompt';
+    promptEl.id = PERMISSION_PROMPT_ID;
+    // `call.name`/`call.args` are model-generated untrusted text - escaped
+    // before going anywhere near innerHTML, same as all chat content.
+    promptEl.innerHTML = `
+      <div class="tool-permission-head">
+        ${WRENCH_ICON_SVG}
+        <span>MCP Tool Permission</span>
+      </div>
+      <div class="tool-permission-question">AI ingin memanggil tool berikut. Izinkan?</div>
+      <div class="tool-permission-name">${escapeHtml(call.name)}</div>
+      <pre class="tool-permission-args">${escapeHtml(formatToolArgsPreview(call.args))}</pre>
+      <div class="tool-permission-actions">
+        <button type="button" class="btn btn-secondary btn-sm" data-decision="decline">No</button>
+        <button type="button" class="btn btn-secondary btn-sm" data-decision="always">Always Allow</button>
+        <button type="button" class="btn btn-primary btn-sm" data-decision="allow">Yes</button>
+      </div>
+    `;
+    host.insertBefore(promptEl, host.firstChild);
+
+    let settled = false;
+    const finish = (decision) => {
+      if (settled) return;
+      settled = true;
+      if (signal) signal.removeEventListener('abort', onAbort);
+      if (activePermissionCleanup === cleanup) activePermissionCleanup = null;
+      promptEl.remove();
+      resolve(decision);
+    };
+    const onAbort = () => finish('decline');
+    const cleanup = () => finish('decline');
+
+    if (signal) signal.addEventListener('abort', onAbort, { once: true });
+    activePermissionCleanup = cleanup;
+
+    promptEl.querySelectorAll('[data-decision]').forEach(btn => {
+      btn.onclick = async () => {
+        const choice = btn.dataset.decision;
+        if (choice !== 'always') {
+          // 'allow' here is a ONE-TIME allow - nothing is persisted, so the
+          // same tool asks again on its next call.
+          finish(choice === 'allow' ? 'allow' : 'decline');
+          return;
+        }
+        try {
+          await MCPToolRegistry.setToolPermission(call.name, 'allow');
+          Toast.info(`Tool "${call.name}" sekarang selalu diizinkan.`);
+        } catch (err) {
+          // Persisting failed - still honor the click for THIS call, but the
+          // tool will ask again next time rather than silently going quiet.
+          Toast.error(`Gagal menyimpan izin tool: ${err.message}`);
+        }
+        finish('allow');
+      };
+    });
+  });
+}
+
+/**
+ * The single permission decision point for chat-driven MCP tool calls, shared
+ * by `triggerAIGeneration` and `handleSwipeNext`. Resolves 'allow'/'decline'.
+ *
+ * SAFETY: every failure mode here resolves to asking or refusing, never to a
+ * silent allow - an unknown tool, an unreadable permission store, an aborted
+ * generation and a missing composer all end at 'ask' or 'decline'.
+ */
+async function requestToolPermission(call, signal) {
+  if (signal?.aborted) return 'decline';
+
+  let stored = 'ask';
+  try {
+    stored = await MCPToolRegistry.getToolPermission(call.name);
+  } catch (err) {
+    console.warn('[ChatView] Could not read MCP tool permission, asking the user instead:', err);
+    stored = 'ask';
+  }
+
+  if (stored === 'allow') return 'allow';
+  if (stored === 'decline') return 'decline';
+  return showToolPermissionPrompt(call, signal);
 }
 
 /**
@@ -545,14 +712,22 @@ export class ChatView {
           <!-- Chat Input Container (Clean Floating Box) -->
           <div class="chat-input-container">
             <div class="chat-input-wrapper">
-              <div class="queued-message-indicator hidden" id="queued-message-indicator" style="display:flex; align-items:center; gap:0.5rem; padding:0.4rem 0.75rem; margin-bottom:0.4rem; background:#eef2ff; border:1px solid var(--border-light); border-radius:var(--radius-md); font-size:0.78rem; color:var(--text-accent);">
+              <div class="queued-message-indicator hidden" id="queued-message-indicator" style="display:flex; align-items:center; gap:0.5rem; padding:0.4rem 0.75rem; margin-bottom:0.4rem; background:var(--accent-primary-softer); border:1px solid var(--border-light); border-radius:var(--radius-md); font-size:0.78rem; color:var(--text-accent);">
                 <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="flex-shrink:0;"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
                 <span id="queued-message-text" style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"></span>
                 <button type="button" id="btn-cancel-queued" title="Batalkan" aria-label="Batalkan pesan yang diantrikan" style="background:none; border:none; cursor:pointer; color:var(--text-accent); font-size:1rem; line-height:1; padding:0 0.2rem;">&times;</button>
               </div>
               <textarea class="chat-textarea" id="chat-input" rows="2" placeholder="Type action (*looks around*) or dialogue (&quot;Hello...&quot;)... (Shift+Enter for new line)"></textarea>
               <div class="chat-input-toolbar" style="justify-content:space-between;">
-                <select class="select" id="chat-model-select" title="Active Model" aria-label="Active Model" style="max-width:220px; font-size:0.78rem; padding:0.3rem 0.6rem; height:auto;"></select>
+                ${dropdownHTML({
+                  id: 'chat-model-select',
+                  options: [],
+                  title: 'Active Model',
+                  ariaLabel: 'Active Model',
+                  small: true,
+                  placeholder: 'No Proxy',
+                  wrapperStyle: 'max-width:260px; width:auto; min-width:150px;'
+                })}
                 <button class="btn-send-icon" id="btn-send-message" title="Send Message" aria-label="Send Message">
                   <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"></path></svg>
                 </button>
@@ -584,19 +759,19 @@ export class ChatView {
               <!-- Player Persona Switcher -->
               <div class="form-group">
                 <label class="form-label">Player Persona</label>
-                <select class="select" id="drawer-persona-select"></select>
+                ${dropdownHTML({ id: 'drawer-persona-select', options: [], placeholder: 'No personas' })}
               </div>
 
               <!-- AI Proxy Switcher -->
               <div class="form-group">
                 <label class="form-label">Active AI Proxy</label>
-                <select class="select" id="drawer-proxy-select"></select>
+                ${dropdownHTML({ id: 'drawer-proxy-select', options: [], placeholder: 'No proxies' })}
               </div>
 
               <!-- System Prompt Preset Switcher -->
               <div class="form-group">
                 <label class="form-label">System Prompt Preset</label>
-                <select class="select" id="drawer-preset-select"></select>
+                ${dropdownHTML({ id: 'drawer-preset-select', options: [], placeholder: '-- Select System Prompt Preset --' })}
               </div>
 
               <!-- Chat Font Size Selector -->
@@ -611,8 +786,8 @@ export class ChatView {
 
               <!-- Quick Config Shortcuts -->
               <div style="display:flex; flex-direction:column; gap:0.5rem; margin-top:0.25rem;">
-                <button class="btn btn-secondary btn-sm" id="btn-open-proxies-config" style="width:100%;">Multi-Proxy Config</button>
-                <button class="btn btn-secondary btn-sm" id="btn-open-global-settings" style="width:100%;">Global Settings</button>
+                <button class="btn btn-secondary btn-sm" id="btn-open-proxies-config" style="width:100%;">Proxy Profiles</button>
+                <button class="btn btn-secondary btn-sm" id="btn-open-global-settings" style="width:100%;">Settings</button>
               </div>
 
               <!-- Character Summary Card -->
@@ -632,20 +807,20 @@ export class ChatView {
 
             <!-- Tab 3 Content: Custom MCP Tools (Experimental) -->
             <div class="drawer-body hidden" id="tab-content-mcp">
-              <div class="card" style="padding:0.85rem; margin-bottom:1rem; display:flex; flex-direction:column; gap:0.75rem;">
-                <div style="display:flex; justify-content:space-between; align-items:center; gap:0.75rem;">
-                  <div>
-                    <div style="font-weight:700; font-size:0.85rem;">MCP Tools</div>
-                    <div style="font-size:0.72rem; color:var(--text-muted); margin-top:0.15rem;">Master switch - turns all MCP tool-calling on/off across the whole app.</div>
-                  </div>
-                  <input type="checkbox" id="drawer-mcp-global-toggle" title="Enable MCP tools globally">
-                </div>
-                <div style="display:flex; justify-content:space-between; align-items:center; gap:0.75rem; border-top:1px solid var(--border-light); padding-top:0.65rem;">
-                  <div>
-                    <div style="font-weight:700; font-size:0.85rem;">Immersive Roleplay</div>
-                    <div style="font-size:0.72rem; color:var(--text-muted); margin-top:0.15rem;">${escapeHtml(activeChar.name)} proactively uses tools in-character (e.g. websearch while browsing) without being explicitly asked.</div>
-                  </div>
-                  <input type="checkbox" id="drawer-mcp-immersive-toggle" title="Enable immersive proactive tool use">
+              <div class="card" style="padding:1rem; margin-bottom:1rem; display:flex; flex-direction:column; gap:0.9rem;">
+                ${toggleRowHTML({
+                  id: 'drawer-mcp-global-toggle',
+                  title: 'MCP Tools',
+                  description: 'Master switch - turns all MCP tool-calling on/off across the whole app.',
+                  ariaLabel: 'Enable MCP tools globally'
+                })}
+                <div style="border-top:1px solid var(--border-light); padding-top:0.9rem;">
+                  ${toggleRowHTML({
+                    id: 'drawer-mcp-immersive-toggle',
+                    title: 'Immersive Roleplay',
+                    description: `${escapeHtml(activeChar.name)} proactively uses tools in-character (e.g. websearch while browsing) without being explicitly asked.`,
+                    ariaLabel: 'Enable immersive proactive tool use'
+                  })}
                 </div>
               </div>
 
@@ -732,26 +907,32 @@ export class ChatView {
     const populateDrawerSelects = async () => {
       const personas = await PersonaStore.getAll();
       const currentPersona = await PersonaStore.getDefault();
-      const personaSelect = container.querySelector('#drawer-persona-select');
-      personaSelect.innerHTML = personas.map(p => `<option value="${p.id}" ${currentPersona && currentPersona.id === p.id ? 'selected' : ''}>${escapeHtml(p.name)}</option>`).join('');
-
-      personaSelect.onchange = async (e) => {
-        const persona = await PersonaStore.getById(e.target.value);
+      setDropdownOptions(
+        container,
+        'drawer-persona-select',
+        personas.map(p => ({ value: p.id, label: p.name })),
+        currentPersona ? currentPersona.id : undefined
+      );
+      wireDropdown(container, 'drawer-persona-select', async (value) => {
+        const persona = await PersonaStore.getById(value);
         if (persona) {
           persona.isDefault = true;
           await PersonaStore.save(persona);
           Toast.success(`Persona diset ke: ${persona.name}`);
           await renderMessages();
         }
-      };
+      });
 
       const proxies = await ProxyStore.getAll();
       const currentProxy = await ProxyStore.getDefault();
-      const proxySelect = container.querySelector('#drawer-proxy-select');
-      proxySelect.innerHTML = proxies.map(p => `<option value="${p.id}" ${currentProxy && currentProxy.id === p.id ? 'selected' : ''}>${escapeHtml(p.name)} (${escapeHtml(p.selectedModel || p.provider)})</option>`).join('');
-
-      proxySelect.onchange = async (e) => {
-        const proxy = await ProxyStore.getById(e.target.value);
+      setDropdownOptions(
+        container,
+        'drawer-proxy-select',
+        proxies.map(p => ({ value: p.id, label: p.name, hint: p.selectedModel || p.provider })),
+        currentProxy ? currentProxy.id : undefined
+      );
+      wireDropdown(container, 'drawer-proxy-select', async (value) => {
+        const proxy = await ProxyStore.getById(value);
         if (proxy) {
           proxy.isDefault = true;
           await ProxyStore.save(proxy);
@@ -759,24 +940,27 @@ export class ChatView {
           await populateModelSelect();
           if (onProxyChanged) onProxyChanged();
         }
-      };
+      });
 
       // System Prompt Presets
       const presets = await ProxyStore.getSystemPromptPresets();
-      const presetSelect = container.querySelector('#drawer-preset-select');
-      if (presetSelect) {
-        presetSelect.innerHTML = `<option value="">-- Select System Prompt Preset --</option>` +
-          presets.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
-
-        presetSelect.onchange = async (e) => {
-          const selectedId = e.target.value;
-          const targetPreset = presets.find(p => p.id === selectedId);
-          if (targetPreset) {
-            await ProxyStore.saveGlobalSystemPrompt(targetPreset.content);
-            Toast.success(`Preset System Prompt diset: ${targetPreset.name}`);
-          }
-        };
-      }
+      setDropdownOptions(
+        container,
+        'drawer-preset-select',
+        presets.map(p => ({
+          value: p.id,
+          label: p.name,
+          hint: (p.isBuiltIn || p.id === 'preset-default') ? 'System Default' : 'Custom preset'
+        })),
+        ''
+      );
+      wireDropdown(container, 'drawer-preset-select', async (value) => {
+        const targetPreset = presets.find(p => p.id === value);
+        if (targetPreset) {
+          await ProxyStore.saveGlobalSystemPrompt(targetPreset.content);
+          Toast.success(`Preset System Prompt diset: ${targetPreset.name}`);
+        }
+      });
 
       // Font Size Buttons
       const genSettings = await ProxyStore.getGenerationSettings();
@@ -821,13 +1005,11 @@ export class ChatView {
     // configure more than one for custom/openrouter proxies) and falls back
     // to just showing the single `selectedModel` when no list is configured.
     const populateModelSelect = async () => {
-      const modelSelect = container.querySelector('#chat-model-select');
-      if (!modelSelect) return;
+      if (!container.querySelector('[data-dropdown-for="chat-model-select"]')) return;
       const proxy = await ProxyStore.getDefault();
       if (!proxy) {
-        modelSelect.innerHTML = '<option>No Proxy</option>';
-        modelSelect.disabled = true;
-        modelSelect.onchange = null;
+        setDropdownOptions(container, 'chat-model-select', [], '');
+        setDropdownDisabled(container, 'chat-model-select', true);
         return;
       }
 
@@ -835,17 +1017,19 @@ export class ChatView {
       if (proxy.selectedModel && !candidates.includes(proxy.selectedModel)) candidates.unshift(proxy.selectedModel);
       if (candidates.length === 0) candidates.push(proxy.selectedModel || proxy.provider);
 
-      modelSelect.innerHTML = candidates.map(m => `<option value="${escapeAttr(m)}" ${m === proxy.selectedModel ? 'selected' : ''}>${escapeHtml(m)}</option>`).join('');
-      modelSelect.disabled = candidates.length <= 1;
+      setDropdownOptions(container, 'chat-model-select', candidates, proxy.selectedModel || candidates[0]);
+      // Same rule as before the dropdown swap: a single-model proxy has nothing
+      // to switch to, so the control is shown but inert.
+      setDropdownDisabled(container, 'chat-model-select', candidates.length <= 1);
 
-      modelSelect.onchange = async (e) => {
+      wireDropdown(container, 'chat-model-select', async (value) => {
         const updatedProxy = await ProxyStore.getById(proxy.id);
         if (!updatedProxy) return;
-        updatedProxy.selectedModel = e.target.value;
+        updatedProxy.selectedModel = value;
         await ProxyStore.save(updatedProxy);
-        Toast.info(`Model diset ke: ${e.target.value}`);
+        Toast.info(`Model diset ke: ${value}`);
         if (onProxyChanged) onProxyChanged();
-      };
+      });
     };
 
     const renderDrawerMCPList = async () => {
@@ -855,7 +1039,7 @@ export class ChatView {
 
       if (servers.length === 0) {
         mcpListEl.innerHTML = `
-          <div style="padding:1rem; text-align:center; background:#ffffff; border-radius:var(--radius-md); border:1px dashed var(--border-light); font-size:0.82rem; color:var(--text-muted);">
+          <div style="padding:1rem; text-align:center; background:var(--bg-surface); border-radius:var(--radius-md); border:1px dashed var(--border-light); font-size:0.82rem; color:var(--text-muted);">
             <div>Belum ada Custom MCP Server.</div>
             <div style="display:flex; justify-content:center; gap:0.4rem; margin-top:0.6rem;">
               <button class="btn btn-secondary btn-sm" id="btn-drawer-json-edit">Edit JSON Config</button>
@@ -874,18 +1058,31 @@ export class ChatView {
       }
 
       mcpListEl.innerHTML = servers.map(s => `
-        <div style="padding:0.75rem; background:#ffffff; border-radius:var(--radius-md); border:1px solid var(--border-light); font-size:0.82rem; display:flex; flex-direction:column; gap:0.4rem; box-shadow:var(--shadow-sm);">
+        <div style="padding:0.85rem; background:var(--bg-surface); border-radius:var(--radius-md); border:1px solid var(--border-light); font-size:0.82rem; display:flex; flex-direction:column; gap:0.5rem; box-shadow:var(--shadow-sm);">
           <div style="display:flex; justify-content:space-between; align-items:center;">
             <div>
               <div style="font-weight:600; color:var(--text-main);">${escapeHtml(s.name)}</div>
               <div style="font-size:0.72rem; color:var(--text-muted); font-family:var(--font-mono);">${s.transport === 'command' ? 'STDIO' : 'HTTP'}</div>
             </div>
-            <input type="checkbox" class="drawer-mcp-toggle" data-id="${s.id}" ${s.enabled ? 'checked' : ''} title="Enable this server for roleplay sessions">
+            ${toggleSwitchHTML({
+              inputClass: 'drawer-mcp-toggle',
+              data: { id: s.id },
+              checked: !!s.enabled,
+              small: true,
+              title: 'Enable this server for roleplay sessions'
+            })}
           </div>
-          <div style="display:flex; justify-content:space-between; align-items:center; border-top:1px solid var(--border-light); padding-top:0.4rem; margin-top:0.2rem;">
+          <div style="display:flex; justify-content:space-between; align-items:center; gap:0.4rem; border-top:1px solid var(--border-light); padding-top:0.4rem; margin-top:0.2rem;">
             <span class="badge" id="drawer-mcp-status-${s.id}">Unknown</span>
-            <button class="btn btn-secondary btn-sm drawer-check-mcp" data-id="${s.id}" style="padding:0.15rem 0.45rem; font-size:0.72rem;">Check Status</button>
+            <div style="display:flex; gap:0.3rem;">
+              <button class="btn btn-secondary btn-sm drawer-check-mcp" data-id="${s.id}" style="padding:0.15rem 0.45rem; font-size:0.72rem;">Check Status</button>
+              <button class="btn btn-secondary btn-sm drawer-mcp-perms" data-id="${s.id}" style="padding:0.15rem 0.45rem; font-size:0.72rem;">Permissions</button>
+            </div>
           </div>
+          <!-- Same per-tool Ask/Allow/Decline editor as the #mcp settings
+               page (one shared implementation in MCPView), mirrored here the
+               way the master/immersive toggles already are. -->
+          <div class="hidden" id="drawer-mcp-perm-host-${s.id}" style="border-top:1px solid var(--border-light); padding-top:0.5rem;"></div>
         </div>
       `).join('');
 
@@ -918,6 +1115,21 @@ export class ChatView {
         btn.onclick = async () => {
           const server = await MCPStore.getById(btn.dataset.id);
           if (server) await checkDrawerServerStatus(server);
+        };
+      });
+
+      // Expand-on-demand per-tool permission editor (lazy: needs a live
+      // tools/list round trip, so it isn't loaded for every server up front).
+      mcpListEl.querySelectorAll('.drawer-mcp-perms').forEach(btn => {
+        btn.onclick = async () => {
+          const hostEl = mcpListEl.querySelector(`#drawer-mcp-perm-host-${btn.dataset.id}`);
+          if (!hostEl) return;
+          const nowHidden = hostEl.classList.toggle('hidden');
+          if (nowHidden) return;
+          if (!hostEl.dataset.loaded) {
+            hostEl.dataset.loaded = '1';
+            await MCPView.renderToolPermissions(hostEl, btn.dataset.id);
+          }
         };
       });
 
@@ -1019,9 +1231,23 @@ export class ChatView {
       const overlay = Modal.open({
         title: 'Global Settings',
         contentHTML: '<div id="embedded-settings-view"></div>',
-        buttons: [{ id: 'btn-close-settings-modal', label: 'Tutup', className: 'btn-secondary', onClick: () => Modal.close() }]
+        buttons: [
+          { id: 'btn-close-settings-modal', label: 'Tutup', className: 'btn-secondary', onClick: () => Modal.close() },
+          {
+            id: 'btn-save-settings-modal',
+            label: 'Save Settings',
+            className: 'btn-primary',
+            onClick: () => {
+              // settingsView.js's own #btn-save-settings still holds the real
+              // save logic - `embedded: true` just hides that button (a fixed
+              // savebar has no sane place inside a Modal), this footer button
+              // triggers the exact same handler instead of duplicating it.
+              overlay.querySelector('#btn-save-settings')?.click();
+            }
+          }
+        ]
       });
-      SettingsView.render(overlay.querySelector('#embedded-settings-view'));
+      SettingsView.render(overlay.querySelector('#embedded-settings-view'), { embedded: true });
     };
 
     container.querySelector('#btn-delete-current-session').onclick = async () => {
@@ -1049,7 +1275,7 @@ export class ChatView {
       const listEl = container.querySelector('#right-drawer-session-list');
 
       listEl.innerHTML = chatSessions.map(s => `
-        <div class="session-item ${s.id === currentChatId ? 'active' : ''}" data-id="${s.id}" style="padding:0.65rem 0.85rem; background:#ffffff; border-radius:var(--radius-md); border:1px solid ${s.id === currentChatId ? 'var(--accent-primary)' : 'var(--border-light)'}; cursor:pointer; font-size:0.85rem; display:flex; justify-content:space-between; align-items:center; box-shadow:var(--shadow-sm);">
+        <div class="session-item ${s.id === currentChatId ? 'active' : ''}" data-id="${s.id}" style="padding:0.75rem 0.9rem; background:var(--bg-surface); border-radius:var(--radius-md); border:1px solid ${s.id === currentChatId ? 'var(--accent-primary)' : 'var(--border-light)'}; cursor:pointer; font-size:0.85rem; display:flex; justify-content:space-between; align-items:center; box-shadow:var(--shadow-sm);">
           <div class="session-title-row">
             <div style="font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:1;">${escapeHtml(s.title)}</div>
           </div>
@@ -1462,6 +1688,10 @@ export class ChatView {
       scrollToBottom(messagesEl);
 
       activeAbortController = new AbortController();
+      // Captured once: the module-level controller is nulled in `finally`, but
+      // the permission prompt's abort wiring needs this turn's signal for the
+      // whole run (including while a prompt is waiting on the user).
+      const abortSignal = activeAbortController.signal;
       setGeneratingState(true);
       let liveContent = genSettings.prefillEnabled && genSettings.prefillText ? genSettings.prefillText : '';
       let liveThinking = '';
@@ -1502,7 +1732,7 @@ export class ChatView {
           settings: genSettings,
           tools: activeTools,
           streaming: genSettings.streamingEnabled,
-          signal: activeAbortController.signal,
+          signal: abortSignal,
           transformFirstResult: (result) => mergePrefillResult(genSettings, result),
           callbacks: {
             onContentChunk: (delta) => {
@@ -1513,6 +1743,18 @@ export class ChatView {
             onThinkingChunk: (delta) => {
               liveThinking += delta;
               scheduleThinkingRender();
+            },
+            // Gate every tool call on the user's stored permission, prompting
+            // above the composer for anything not explicitly configured.
+            // MUST stay wired - without it AgentRunner falls back to running
+            // tools unprompted, which is the exact risk this feature removes.
+            onPermissionRequest: (call) => requestToolPermission(call, abortSignal),
+            onToolDeclined: (call) => {
+              // Show the refusal where the running-tool spinners appear, so a
+              // declined call doesn't just silently do nothing on screen.
+              liveToolCalls.push({ id: call.id, name: call.name, done: true, declined: true });
+              syncLiveToolBox(typingInnerEl, liveToolCalls);
+              scrollToBottom(messagesEl);
             },
             onToolExecuting: (call) => {
               // Own live box, outside the thinking block, so it's never
@@ -1598,6 +1840,9 @@ export class ChatView {
         }
       } finally {
         activeAbortController = null;
+        // Belt-and-braces: a prompt still on screen here (error thrown while
+        // one was open) would otherwise sit above the composer forever.
+        removeToolPermissionPrompt();
         setGeneratingState(false);
         sendInput.focus();
         await flushQueuedMessageIfAny();
@@ -1754,6 +1999,10 @@ export class ChatView {
     }));
 
     activeAbortController = new AbortController();
+    // See the matching capture in `triggerAIGeneration` - the permission
+    // prompt needs this turn's signal even after the module-level controller
+    // has been cleared.
+    const abortSignal = activeAbortController.signal;
     setGeneratingState(true);
 
     const messagesEl = document.getElementById('messages-container');
@@ -1845,7 +2094,7 @@ export class ChatView {
         settings: genSettings,
         tools: activeTools,
         streaming: genSettings.streamingEnabled,
-        signal: activeAbortController.signal,
+        signal: abortSignal,
         transformFirstResult: (result) => mergePrefillResult(genSettings, result),
         callbacks: {
           onContentChunk: (delta) => {
@@ -1856,6 +2105,14 @@ export class ChatView {
           onThinkingChunk: (delta) => {
             liveThinking += delta;
             scheduleThinkingRender();
+          },
+          // Same permission gate as triggerAIGeneration - a regenerated swipe
+          // must not be a way to run tools without being asked.
+          onPermissionRequest: (call) => requestToolPermission(call, abortSignal),
+          onToolDeclined: (call) => {
+            liveToolCalls.push({ id: call.id, name: call.name, done: true, declined: true });
+            if (blockInnerEl) syncLiveToolBox(blockInnerEl, liveToolCalls);
+            scrollToBottom(messagesEl);
           },
           onToolExecuting: (call) => {
             // Own live box, outside the thinking block - never overwrites
@@ -1919,6 +2176,7 @@ export class ChatView {
       }
     } finally {
       activeAbortController = null;
+      removeToolPermissionPrompt();
       setGeneratingState(false);
       await flushQueuedMessageIfAny();
     }
@@ -1936,7 +2194,7 @@ export class ChatView {
     // Format actions in italics (*action* -> <em>action</em>)
     formatted = formatted.replace(/\*(.*?)\*/g, '<em>$1</em>');
     // Format quotes ("speech" -> <strong>"speech"</strong>)
-    formatted = formatted.replace(/"([^"]+)"/g, '<span style="color:#0f172a; font-weight:500;">"$1"</span>');
+    formatted = formatted.replace(/"([^"]+)"/g, '<span style="color:var(--text-main); font-weight:500;">"$1"</span>');
     // Use marked parser if available. `breaks: true` makes single newlines
     // render as <br> instead of being collapsed away - AI/roleplay replies
     // are usually formatted with single line breaks, not blank-line paragraphs.

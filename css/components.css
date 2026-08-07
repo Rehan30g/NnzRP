@@ -1,40 +1,69 @@
 /* css/components.css - Flat UI Components */
 
-/* Buttons - Flat Solid Styling */
+/* ===================================================
+   Buttons - Flat Solid Styling
+
+   Sizing note: `.btn` was deliberately enlarged (0.55rem/0.9rem ->
+   0.7rem/0.94rem) in the UI overhaul for a more comfortable click target and
+   more visual presence. `.btn-sm` grew with it so "small" still reads as a
+   deliberate step down rather than as the old default size.
+   =================================================== */
 .btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 0.5rem;
-  padding: 0.55rem 1.1rem;
+  gap: 0.55rem;
+  padding: 0.7rem 1.35rem;
   border-radius: var(--radius-md);
-  font-weight: 500;
-  font-size: 0.9rem;
+  font-weight: 600;
+  font-size: 0.94rem;
+  line-height: 1.2;
+  min-height: 42px;
   cursor: pointer;
   border: 1px solid transparent;
-  transition: all var(--transition-fast);
+  transition: background var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast), box-shadow var(--transition-fast);
   user-select: none;
   white-space: nowrap;
 }
 
+.btn:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-glow);
+}
+
+.btn:disabled,
+.btn[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Accent-tinted rather than another white/slate button. Two things depended on
+   `.btn-primary` being visually distinct from `.btn-secondary` and it wasn't -
+   the primary page action ("Create Character") disappeared next to its
+   secondary sibling, and the avatar picker / chat font-size selectors use the
+   primary/secondary class swap as their ACTIVE-state indicator, which was
+   almost invisible in dark mode. Kept flat (tint + border, no gradient) so it
+   still belongs to the slate design language. */
 .btn-primary {
-  background: #ffffff;
-  color: var(--text-main);
-  border: 1.5px solid var(--border-subtle);
+  background: var(--accent-primary-soft);
+  /* `--text-accent`, not `--accent-primary`: the dark palette's soft tint is
+     very dark, and the raw indigo on it fails contrast - `--text-accent` is the
+     per-theme readable variant (#4f46e5 light / #a5b4fc dark). */
+  color: var(--text-accent);
+  border: 1.5px solid var(--accent-primary);
   font-weight: 600;
-  box-shadow: 0 1px 3px rgba(28,25,23,0.06);
 }
 .btn-primary:hover {
-  background: var(--bg-surface-hover);
+  background: var(--accent-primary);
   border-color: var(--accent-primary);
-  color: var(--accent-primary);
+  color: var(--accent-on-solid);
 }
 
 .btn-secondary {
-  background: #ffffff;
+  background: var(--bg-surface);
   color: var(--text-main);
   border: 1px solid var(--border-light);
-  box-shadow: 0 1px 2px rgba(28,25,23,0.04);
+  box-shadow: var(--shadow-btn);
 }
 .btn-secondary:hover {
   background: var(--bg-surface-hover);
@@ -43,23 +72,28 @@
 }
 
 .btn-danger {
-  background: #ffffff;
+  background: var(--bg-surface);
   color: var(--accent-rose);
-  border: 1px solid #fecdd3;
+  border: 1px solid var(--accent-rose-border);
 }
 .btn-danger:hover {
-  background: #fff1f2;
+  background: var(--accent-rose-soft);
   border-color: var(--accent-rose);
   color: var(--accent-rose);
 }
 
 .btn-icon {
-  padding: 0.5rem;
+  padding: 0.6rem;
+  min-height: 40px;
+  min-width: 40px;
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--text-muted);
   border: none;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 .btn-icon:hover {
   background: var(--bg-tertiary);
@@ -67,20 +101,27 @@
 }
 
 .btn-sm {
-  padding: 0.35rem 0.75rem;
-  font-size: 0.82rem;
+  padding: 0.45rem 0.95rem;
+  font-size: 0.86rem;
+  min-height: 34px;
+}
+
+/* An icon-only button that also carries .btn-sm shouldn't be a wide pill. */
+.btn-sm.btn-icon {
+  padding: 0.4rem;
+  min-width: 34px;
 }
 
 /* Forms & Inputs - Flat Crisp Light Styling */
 .form-group {
   display: flex;
   flex-direction: column;
-  gap: 0.4rem;
-  margin-bottom: 1rem;
+  gap: 0.45rem;
+  margin-bottom: 1.15rem;
 }
 
 .form-label {
-  font-size: 0.85rem;
+  font-size: 0.86rem;
   font-weight: 600;
   color: var(--text-main);
   display: flex;
@@ -91,12 +132,13 @@
 .form-hint {
   font-size: 0.78rem;
   color: var(--text-dim);
+  line-height: 1.45;
 }
 
 .input, .textarea, .select {
   width: 100%;
-  padding: 0.6rem 0.9rem;
-  background: #ffffff;
+  padding: 0.7rem 0.95rem;
+  background: var(--bg-input);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   color: var(--text-main);
@@ -109,6 +151,10 @@
   box-shadow: var(--shadow-glow);
 }
 
+.input::placeholder, .textarea::placeholder {
+  color: var(--text-dim);
+}
+
 .textarea {
   resize: vertical;
   min-height: 80px;
@@ -116,8 +162,21 @@
 }
 
 .select option {
-  background: #ffffff;
+  background: var(--bg-surface);
   color: var(--text-main);
+}
+
+input[type="file"] {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+input[type="color"] {
+  padding: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  cursor: pointer;
 }
 
 /* Range Input Slider */
@@ -142,12 +201,539 @@
   font-weight: 600;
 }
 
-/* Cards - Crisp Flat White Cards */
-.card {
-  background: #ffffff;
+/* ===================================================
+   Toggle Switch
+
+   Visual replacement for every boolean `<input type="checkbox">` in the app.
+   The real checkbox is KEPT (never swapped for a div) so its id, `.checked`
+   property, `onchange` wiring, keyboard focus and screen-reader semantics all
+   work exactly as before - it's just visually hidden behind the track/thumb.
+
+   Markup contract (see `toggleSwitchHTML()` in js/ui/components/toggle.js):
+     <label class="toggle-switch">
+       <input type="checkbox" id="..."> <span class="toggle-track"></span>
+     </label>
+   =================================================== */
+.toggle-switch {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  width: 46px;
+  height: 26px;
+  cursor: pointer;
+  vertical-align: middle;
+}
+
+.toggle-switch input[type="checkbox"] {
+  position: absolute;
+  opacity: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  cursor: pointer;
+  z-index: 1;
+}
+
+.toggle-track {
+  position: absolute;
+  inset: 0;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full);
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+  pointer-events: none;
+}
+
+.toggle-track::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  margin-top: -9px;
+  border-radius: 50%;
+  background: var(--bg-surface);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.25);
+  transition: transform var(--transition-fast), background var(--transition-fast);
+}
+
+.toggle-switch input:checked ~ .toggle-track {
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+}
+
+.toggle-switch input:checked ~ .toggle-track::after {
+  transform: translateX(20px);
+  background: var(--accent-on-solid);
+}
+
+.toggle-switch input:focus-visible ~ .toggle-track {
+  box-shadow: var(--shadow-glow);
+}
+
+.toggle-switch input:disabled {
+  cursor: not-allowed;
+}
+
+.toggle-switch input:disabled ~ .toggle-track {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Compact variant for dense list rows (e.g. the OpenRouter provider picker,
+   where one switch per row at full size would dominate the list). */
+.toggle-switch.toggle-sm {
+  width: 36px;
+  height: 20px;
+}
+
+.toggle-switch.toggle-sm .toggle-track::after {
+  width: 14px;
+  height: 14px;
+  margin-top: -7px;
+  left: 2px;
+}
+
+.toggle-switch.toggle-sm input:checked ~ .toggle-track::after {
+  transform: translateX(16px);
+}
+
+/* Standard "label on the left, switch on the right" row used everywhere a
+   toggle has an explanatory caption next to it. */
+.toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.toggle-row-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.toggle-row-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.toggle-row-desc {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+
+/* ===================================================
+   Custom Dropdown (replaces native <select>)
+
+   See js/ui/components/dropdown.js. The trigger is a button-like div; the
+   OPTION LIST IS PORTALLED TO <body> and positioned `fixed` on open, because
+   several call sites live inside clipping/transformed ancestors (the modal
+   body's `overflow:auto`, and `.chat-input-container`'s `translateX(-50%)`
+   which would otherwise trap a `position:fixed` child).
+   =================================================== */
+.dropdown {
+  position: relative;
+  width: 100%;
+}
+
+.dropdown-trigger {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.7rem 0.95rem;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  color: var(--text-main);
+  font-family: inherit;
+  font-size: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast), background var(--transition-fast);
+}
+
+.dropdown-trigger:hover:not(:disabled) {
+  border-color: var(--border-focus);
+}
+
+.dropdown-trigger:focus-visible,
+.dropdown.open .dropdown-trigger {
+  outline: none;
+  border-color: var(--accent-primary);
+  box-shadow: var(--shadow-glow);
+}
+
+.dropdown-trigger:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.dropdown-trigger-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dropdown-trigger-label.is-placeholder {
+  color: var(--text-dim);
+}
+
+.dropdown-chevron {
+  flex-shrink: 0;
+  width: 15px;
+  height: 15px;
+  color: var(--text-dim);
+  transition: transform var(--transition-fast);
+}
+
+.dropdown.open .dropdown-chevron {
+  transform: rotate(180deg);
+}
+
+/* Compact variant (chat composer model picker, header proxy picker). */
+.dropdown-trigger.dropdown-sm {
+  padding: 0.4rem 0.7rem;
+  font-size: 0.82rem;
+  border-radius: var(--radius-sm);
+}
+
+/* The portalled menu. Lives directly under <body>, so it needs a z-index
+   above modals (1000+) and the chat drawer (100). */
+.dropdown-menu {
+  position: fixed;
+  z-index: 12000;
+  min-width: 160px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 0.3rem;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-popover);
+  animation: fadeIn var(--transition-fast);
+}
+
+.dropdown-option {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: 0.5rem 0.7rem;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 0.88rem;
+  color: var(--text-main);
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.dropdown-option:hover,
+.dropdown-option.active {
+  background: var(--bg-surface-hover);
+}
+
+.dropdown-option.selected {
+  color: var(--accent-primary);
+  font-weight: 600;
+}
+
+.dropdown-option.selected::after {
+  content: 'Selected';
+  display: none;
+}
+
+.dropdown-option-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Secondary line under an option - the reason this component exists rather
+   than a restyled <select> (native options can only hold flat text). */
+.dropdown-option-hint {
+  font-size: 0.74rem;
+  color: var(--text-dim);
+  font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dropdown-option[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.dropdown-empty {
+  padding: 0.6rem 0.7rem;
+  font-size: 0.82rem;
+  color: var(--text-dim);
+}
+
+/* ===================================================
+   Segmented Control (Auto / Light / Dark, font size, ...)
+   A row of mutually-exclusive choices; visually one control, not N buttons.
+   =================================================== */
+.segmented {
+  display: inline-flex;
+  padding: 0.25rem;
+  gap: 0.25rem;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+}
+
+.segmented-option {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  padding: 0.5rem 1rem;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.segmented-option:hover:not(.active) {
+  color: var(--text-main);
+}
+
+.segmented-option.active {
+  background: var(--bg-surface);
+  color: var(--accent-primary);
+  box-shadow: var(--shadow-btn);
+}
+
+.segmented-option svg {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+}
+
+/* ===================================================
+   Settings page tab shell (js/ui/views/settingsView.js)
+   =================================================== */
+.settings-shell {
+  max-width: 940px;
+  margin: 0 auto;
+  /* .settings-savebar is `position: fixed` now (see its own comment), so it
+     permanently occupies this much space at the bottom of the viewport
+     regardless of scroll position - unlike the old sticky+padding attempts,
+     there's no "settles into place, gap left over" failure mode here to
+     worry about, since a fixed element was never part of this container's
+     scrollable flow to begin with. This just reserves room so the last
+     card's own content can scroll clear of it. */
+  padding-bottom: 5.5rem;
+}
+
+/* Embedded mode (Settings opened from the chat drawer, inside a Modal - see
+   settingsView.js's `embedded` option and chatView.js's
+   `btn-open-global-settings`). No fixed savebar in a popup - the Modal gets
+   its own "Save Settings" footer button instead, next to Close - so none of
+   its reserved bottom clearance applies either. Section descriptions are
+   dropped too, purely for space: a Modal is a lot more cramped than the
+   dedicated Settings page. */
+.settings-shell-embedded {
+  padding-bottom: 0.5rem;
+}
+
+.settings-shell-embedded .settings-savebar {
+  display: none;
+}
+
+.settings-shell-embedded .settings-section-desc {
+  display: none;
+}
+
+.settings-shell-embedded .settings-section-title {
+  margin-bottom: 0.75rem;
+}
+
+.settings-tabbar {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  padding: 0.35rem;
+  margin-bottom: 1.75rem;
+  background: var(--bg-surface);
   border: 1px solid var(--border-light);
   border-radius: var(--radius-lg);
-  padding: 1.35rem;
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+
+.settings-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 1.1rem;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-md);
+  font-family: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.settings-tab:hover:not(.active) {
+  background: var(--bg-surface-hover);
+  color: var(--text-main);
+}
+
+.settings-tab.active {
+  background: var(--accent-primary-soft);
+  color: var(--accent-primary);
+}
+
+.settings-tab svg {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.settings-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.settings-panel.hidden {
+  display: none !important;
+}
+
+.settings-section-title {
+  font-size: 1.1rem;
+  margin-bottom: 0.35rem;
+}
+
+.settings-section-desc {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  line-height: 1.5;
+  margin-bottom: 1rem;
+}
+
+/* Floating save bar - the Save button used to sit at the very bottom of one
+   long page; with tabs it has to stay reachable from whichever tab you're
+   editing. Hidden entirely on the Proxies and Data tabs, whose controls save
+   themselves (see `savebarEl` handling in settingsView.js's switchTab) - a
+   Save button that does nothing for the visible panel reads as broken.
+
+   `position: fixed`, NOT sticky - sticky positioning is relative to the
+   scrolling container's own padding box, which went through three rounds of
+   fighting that container's padding (gradient bleed-through, then a dead gap
+   from leftover clearance padding, then a version-caching red herring on top
+   of it) without ever actually looking right. Fixed positioning is anchored
+   to the viewport instead, so it has no dependency on any ancestor's padding,
+   scroll state, or content height - it is simply always in the same place,
+   the same way `.chat-input-container` already floats over the message
+   stream in chat.css. `left` is offset by the sidebar's current width (the
+   `.app-sidebar.collapsed` rule below swaps it to the collapsed width) so it
+   spans the content area only, never the sidebar. `.settings-savebar-inner`
+   re-centers the actual bar content to match `.settings-shell`'s own
+   max-width/centering, since the outer bar itself now spans the full content
+   width instead of being naturally inset by .settings-shell's own layout. */
+.settings-savebar {
+  position: fixed;
+  left: var(--sidebar-width);
+  right: 0;
+  bottom: 0;
+  z-index: 40;
+  background: var(--bg-primary);
+  border-top: 1px solid var(--border-light);
+  box-shadow: 0 -4px 12px rgba(15, 23, 42, 0.06);
+}
+
+.app-sidebar.collapsed ~ .app-main .settings-savebar {
+  left: var(--sidebar-width-collapsed);
+}
+
+.settings-savebar-inner {
+  max-width: 940px;
+  margin: 0 auto;
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 0.9rem 2rem;
+}
+
+/* Accent colour swatch picker (Settings -> Appearance) */
+.swatch-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.swatch {
+  width: 38px;
+  height: 38px;
+  border-radius: var(--radius-md);
+  border: 2px solid var(--border-light);
+  cursor: pointer;
+  padding: 0;
+  transition: transform var(--transition-fast), border-color var(--transition-fast);
+}
+
+.swatch:hover {
+  transform: translateY(-2px);
+}
+
+.swatch.active {
+  border-color: var(--text-main);
+}
+
+.color-field {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.color-field input[type="color"] {
+  width: 52px;
+  height: 38px;
+  flex-shrink: 0;
+}
+
+.color-field-name {
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.color-field-value {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+
+/* Cards - Crisp Flat White Cards */
+.card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  padding: 1.5rem;
   box-shadow: var(--shadow-sm);
   transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
 }
@@ -165,11 +751,17 @@
   box-shadow: var(--shadow-md);
 }
 
+/* A recessed panel inside a card (was hardcoded `background:#f8fafc` inline in
+   several views before the theme work). */
+.card-muted {
+  background: var(--bg-muted);
+}
+
 /* Modals - Clean Flat Dialogs */
 .modal-overlay {
   position: fixed;
   top: 0; left: 0; right: 0; bottom: 0;
-  background: rgba(15, 23, 42, 0.4);
+  background: var(--overlay-bg);
   backdrop-filter: blur(2px);
   display: flex;
   align-items: center;
@@ -180,7 +772,7 @@
 }
 
 .modal-content {
-  background: #ffffff;
+  background: var(--bg-surface);
   border: 1px solid var(--border-light);
   border-radius: var(--radius-xl);
   width: 100%;
@@ -198,7 +790,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: #f8fafc;
+  background: var(--bg-muted);
 }
 
 .modal-body {
@@ -213,7 +805,7 @@
   display: flex;
   justify-content: flex-end;
   gap: 0.75rem;
-  background: #f8fafc;
+  background: var(--bg-muted);
 }
 
 /* Toasts - Clean Flat Alerts (Positioned at Bottom Right Dead Zone) */
@@ -239,12 +831,12 @@
 
 .toast {
   pointer-events: auto;
-  background: #ffffff;
+  background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
   color: var(--text-main);
-  padding: 0.75rem 1.25rem;
+  padding: 0.85rem 1.35rem;
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--shadow-popover);
   display: flex;
   align-items: center;
   gap: 0.75rem;
@@ -266,19 +858,19 @@
   justify-content: center;
   min-height: 100vh;
   width: 100%;
-  background-color: var(--bg-primary, #f1f5f9);
-  font-family: var(--font-main, 'Inter', sans-serif);
-  color: var(--text-main, #0f172a);
+  background-color: var(--bg-primary);
+  font-family: var(--font-family);
+  color: var(--text-main);
 }
 
 .app-loading-card {
   display: flex;
   flex-direction: column;
   align-items: center;
-  background: #ffffff;
+  background: var(--bg-surface);
   padding: 2.5rem 3rem;
   border-radius: var(--radius-xl, 16px);
-  border: 1px solid var(--border-light, #e2e8f0);
+  border: 1px solid var(--border-light);
   box-shadow: var(--shadow-md);
   text-align: center;
   max-width: 380px;
@@ -289,21 +881,20 @@
 .app-loading-logo {
   width: 56px;
   height: 56px;
-  background: linear-gradient(135deg, var(--accent-primary, #4f46e5) 0%, var(--accent-violet, #7c3aed) 100%);
-  color: #ffffff;
+  background: linear-gradient(135deg, var(--accent-primary) 0%, var(--accent-secondary) 100%);
+  color: var(--accent-on-solid);
   border-radius: 14px;
   display: flex;
   align-items: center;
   justify-content: center;
   margin-bottom: 1.25rem;
-  box-shadow: 0 4px 12px rgba(79, 70, 229, 0.25);
 }
 
 .app-loading-title {
   font-family: var(--font-heading, 'Outfit', sans-serif);
   font-size: 1.35rem;
   font-weight: 700;
-  color: var(--text-main, #0f172a);
+  color: var(--text-main);
   margin: 0 0 1.25rem 0;
   letter-spacing: -0.01em;
 }
@@ -318,15 +909,15 @@
 .app-loading-spinner {
   width: 36px;
   height: 36px;
-  border: 3px solid var(--border-light, #e2e8f0);
-  border-top-color: var(--accent-primary, #4f46e5);
+  border: 3px solid var(--border-light);
+  border-top-color: var(--accent-primary);
   border-radius: 50%;
   animation: appSpinnerRotate 0.8s linear infinite;
 }
 
 .app-loading-sub {
   font-size: 0.85rem;
-  color: var(--text-dim, #64748b);
+  color: var(--text-dim);
   margin: 0;
   font-weight: 500;
 }
@@ -352,4 +943,63 @@
 @keyframes appLoadingFadeIn {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+/* ===================================================
+   3-way Ask / Allow / Decline segmented control
+   Used by the MCP per-tool permission editor
+   (`MCPView.renderToolPermissions`, shown both on the #mcp settings page and
+   in the chat right-drawer's MCP tab). Kept flat/borderless-between-segments
+   so it reads as one control rather than three loose buttons.
+   =================================================== */
+.perm-seg {
+  display: inline-flex;
+  flex-shrink: 0;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--bg-surface);
+}
+
+.perm-seg button {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  padding: 0.3rem 0.7rem;
+  line-height: 1.5;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.perm-seg button + button {
+  border-left: 1px solid var(--border-light);
+}
+
+.perm-seg button:hover:not(.active) {
+  background: var(--bg-primary);
+  color: var(--text-main);
+}
+
+/* Active segment is color-coded by meaning: neutral slate for the safe
+   default (Ask), emerald for Allow, rose for Decline - so a scan down the
+   list shows which tools were opened up without reading the labels.
+   `--text-inverse` (not a hardcoded white) because the dark theme's emerald/
+   rose/slate fills are LIGHT colours - white-on-them would be unreadable. */
+.perm-seg button.active {
+  color: var(--text-inverse);
+}
+
+.perm-seg button.perm-seg-ask.active {
+  background: var(--text-muted);
+}
+
+.perm-seg button.perm-seg-allow.active {
+  background: var(--accent-emerald);
+}
+
+.perm-seg button.perm-seg-decline.active {
+  background: var(--accent-rose);
 }

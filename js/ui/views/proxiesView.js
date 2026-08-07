@@ -4,6 +4,8 @@ import { ProviderManager } from '../../services/providerManager.js';
 import { BackupService } from '../../services/backupService.js';
 import { Modal } from '../components/modal.js';
 import { Toast } from '../components/toast.js';
+import { dropdownHTML, wireDropdown } from '../components/dropdown.js';
+import { toggleSwitchHTML, toggleRowHTML } from '../components/toggle.js';
 import { escapeHtml, escapeAttr } from '../../utils/sanitize.js';
 
 export class ProxiesView {
@@ -176,13 +178,17 @@ export class ProxiesView {
         <div style="display:grid; grid-template-columns: 1fr 1fr; gap:1rem;">
           <div class="form-group">
             <label class="form-label">Provider Type</label>
-            <select class="select" id="proxy-provider">
-              <option value="openrouter" ${data.provider === 'openrouter' ? 'selected' : ''}>OpenRouter</option>
-              <option value="gemini" ${data.provider === 'gemini' ? 'selected' : ''}>Google Gemini</option>
-              <option value="openai" ${data.provider === 'openai' ? 'selected' : ''}>OpenAI Direct</option>
-              <option value="anthropic" ${data.provider === 'anthropic' ? 'selected' : ''}>Anthropic Claude</option>
-              <option value="custom" ${data.provider === 'custom' ? 'selected' : ''}>Custom / Ollama Local</option>
-            </select>
+            ${dropdownHTML({
+              id: 'proxy-provider',
+              value: data.provider,
+              options: [
+                { value: 'openrouter', label: 'OpenRouter', hint: 'Multi-model router' },
+                { value: 'gemini', label: 'Google Gemini', hint: 'generateContent API' },
+                { value: 'openai', label: 'OpenAI Direct', hint: 'Chat Completions API' },
+                { value: 'anthropic', label: 'Anthropic Claude', hint: '/v1/messages API' },
+                { value: 'custom', label: 'Custom / Ollama Local', hint: 'Any OpenAI-compatible endpoint' }
+              ]
+            })}
           </div>
           <div class="form-group">
             <label class="form-label">Selected Model ID</label>
@@ -195,7 +201,7 @@ export class ProxiesView {
           <input class="input" id="proxy-models" value="${escapeAttr((data.models || []).join(', '))}" placeholder="e.g. anthropic/claude-3.5-sonnet, openai/gpt-4o">
         </div>
 
-        <div class="card" id="proxy-openrouter-section" style="background:#f8fafc; padding:0.85rem; margin-bottom:1rem; ${data.provider === 'openrouter' ? '' : 'display:none;'}">
+        <div class="card card-muted" id="proxy-openrouter-section" style="padding:1rem; margin-bottom:1rem; ${data.provider === 'openrouter' ? '' : 'display:none;'}">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
             <span style="font-size:0.85rem; font-weight:600;">OpenRouter Underlying Providers</span>
             <button type="button" class="btn btn-secondary btn-sm" id="proxy-openrouter-browse-btn">Browse Providers</button>
@@ -204,9 +210,13 @@ export class ProxiesView {
             ${selectedOpenrouterProviders.size ? `Selected: ${Array.from(selectedOpenrouterProviders).map(escapeHtml).join(', ')}` : 'No preference set (default OpenRouter load balancing). Click Browse Providers to fetch and select.'}
           </div>
           <div id="proxy-openrouter-list"></div>
-          <div style="display:flex; align-items:center; gap:0.5rem; margin-top:0.6rem;">
-            <input type="checkbox" id="proxy-openrouter-allow-fallbacks" ${data.openrouterAllowFallbacks !== false ? 'checked' : ''}>
-            <label for="proxy-openrouter-allow-fallbacks" style="font-size:0.85rem; cursor:pointer;">Allow fallback to other providers if preferred ones are unavailable</label>
+          <div style="margin-top:0.85rem; border-top:1px solid var(--border-light); padding-top:0.85rem;">
+            ${toggleRowHTML({
+              id: 'proxy-openrouter-allow-fallbacks',
+              checked: data.openrouterAllowFallbacks !== false,
+              title: 'Allow provider fallback',
+              description: 'Fall back to other providers if the preferred ones are unavailable.'
+            })}
           </div>
         </div>
 
@@ -223,14 +233,18 @@ export class ProxiesView {
         <div style="display:grid; grid-template-columns: 1fr 1fr; gap:1rem;">
           <div class="form-group">
             <label class="form-label">Reasoning Effort (Thinking)</label>
-            <select class="select" id="proxy-reasoning-effort">
-              <option value="" ${!data.reasoningEffort ? 'selected' : ''}>Use Global Setting</option>
-              <option value="off" ${data.reasoningEffort === 'off' ? 'selected' : ''}>Off / Disabled</option>
-              <option value="low" ${data.reasoningEffort === 'low' ? 'selected' : ''}>Low Effort (effort = "low")</option>
-              <option value="medium" ${data.reasoningEffort === 'medium' ? 'selected' : ''}>Medium Effort (effort = "medium")</option>
-              <option value="high" ${data.reasoningEffort === 'high' ? 'selected' : ''}>High Effort (effort = "high")</option>
-              <option value="budget" ${data.reasoningEffort === 'budget' ? 'selected' : ''}>Token Budget Mode (max_tokens)</option>
-            </select>
+            ${dropdownHTML({
+              id: 'proxy-reasoning-effort',
+              value: data.reasoningEffort || '',
+              options: [
+                { value: '', label: 'Use Global Setting' },
+                { value: 'off', label: 'Off / Disabled' },
+                { value: 'low', label: 'Low Effort', hint: 'effort = low' },
+                { value: 'medium', label: 'Medium Effort', hint: 'effort = medium' },
+                { value: 'high', label: 'High Effort', hint: 'effort = high' },
+                { value: 'budget', label: 'Token Budget Mode', hint: 'reasoning.max_tokens' }
+              ]
+            })}
           </div>
           <div class="form-group">
             <label class="form-label">Thinking Token Budget</label>
@@ -238,9 +252,13 @@ export class ProxiesView {
           </div>
         </div>
 
-        <div style="display:flex; align-items:center; gap:0.5rem; margin-top:0.5rem;">
-          <input type="checkbox" id="proxy-default" ${data.isDefault ? 'checked' : ''}>
-          <label for="proxy-default" style="font-size:0.85rem; cursor:pointer;">Set as Active Default Proxy</label>
+        <div style="margin-top:0.5rem;">
+          ${toggleRowHTML({
+            id: 'proxy-default',
+            checked: !!data.isDefault,
+            title: 'Set as Active Default Proxy',
+            description: 'Roleplay completions will be routed through this profile.'
+          })}
         </div>
       </form>
     `;
@@ -298,11 +316,13 @@ export class ProxiesView {
       ]
     });
 
+    wireDropdown(overlay, 'proxy-reasoning-effort');
+
     // OpenRouter provider-browsing section is only relevant/visible for provider === 'openrouter'.
-    overlay.querySelector('#proxy-provider').onchange = (e) => {
-      overlay.querySelector('#proxy-openrouter-section').style.display = e.target.value === 'openrouter' ? '' : 'none';
-      overlay.querySelector('#proxy-models-section').style.display = (e.target.value === 'custom' || e.target.value === 'openrouter') ? '' : 'none';
-    };
+    wireDropdown(overlay, 'proxy-provider', (value) => {
+      overlay.querySelector('#proxy-openrouter-section').style.display = value === 'openrouter' ? '' : 'none';
+      overlay.querySelector('#proxy-models-section').style.display = (value === 'custom' || value === 'openrouter') ? '' : 'none';
+    });
 
     // Live "Browse Providers" fetch against OpenRouter's public (no API key needed)
     // model-endpoints listing, so users can see per-provider context/pricing/uptime/throughput
@@ -341,8 +361,14 @@ export class ProxiesView {
           const tps = ep.throughput_last_30m?.p50;
           const throughputStr = typeof tps === 'number' ? `${Math.round(tps)} tok/s` : 'Throughput N/A';
           return `
-            <label style="display:flex; align-items:flex-start; gap:0.5rem; padding:0.4rem 0; border-bottom:1px solid var(--border-light); font-size:0.78rem; cursor:pointer;">
-              <input type="checkbox" class="proxy-openrouter-provider-cb" value="${escapeAttr(ep.provider_name)}" ${selectedOpenrouterProviders.has(ep.provider_name) ? 'checked' : ''}>
+            <div style="display:flex; align-items:center; gap:0.65rem; padding:0.5rem 0; border-bottom:1px solid var(--border-light); font-size:0.78rem;">
+              ${toggleSwitchHTML({
+                inputClass: 'proxy-openrouter-provider-cb',
+                small: true,
+                checked: selectedOpenrouterProviders.has(ep.provider_name),
+                data: { provider: ep.provider_name },
+                ariaLabel: `Prefer provider ${ep.provider_name}`
+              })}
               <span>
                 <strong>${escapeHtml(ep.provider_name)}</strong> &mdash;
                 ${(ep.context_length || 0).toLocaleString()} ctx &mdash;
@@ -350,7 +376,7 @@ export class ProxiesView {
                 ${uptimeStr} &mdash;
                 ${throughputStr}
               </span>
-            </label>
+            </div>
           `;
         }).join('');
 
@@ -362,8 +388,11 @@ export class ProxiesView {
 
         listEl.querySelectorAll('.proxy-openrouter-provider-cb').forEach(cb => {
           cb.onchange = () => {
-            if (cb.checked) selectedOpenrouterProviders.add(cb.value);
-            else selectedOpenrouterProviders.delete(cb.value);
+            // The provider name rides on data-provider now (toggleSwitchHTML
+            // renders the checkbox itself, and `value` is not part of its API).
+            const providerName = cb.dataset.provider;
+            if (cb.checked) selectedOpenrouterProviders.add(providerName);
+            else selectedOpenrouterProviders.delete(providerName);
             updateResultText();
           };
         });

@@ -62,6 +62,33 @@ export class MCPToolRegistry {
     return result;
   }
 
+  /** Resolves a qualified (`server__tool`) name back to `{serverId, toolName}`, or null if unknown. */
+  static resolveTool(qualifiedName) {
+    return toolIndex.get(qualifiedName) || null;
+  }
+
+  /**
+   * Permission ('ask' | 'allow' | 'decline') for a qualified tool name.
+   *
+   * SAFETY: returns the safe default 'ask' when the qualified name isn't in
+   * the index at all (server disabled/removed/never listed) - never 'allow'.
+   * Every other outcome is delegated to `MCPStore.getToolPermission`, which
+   * has the same unset -> 'ask' guarantee.
+   */
+  static async getToolPermission(qualifiedName) {
+    const entry = toolIndex.get(qualifiedName);
+    if (!entry) return 'ask';
+    return MCPStore.getToolPermission(entry.serverId, entry.toolName);
+  }
+
+  /** Persists a permission for a qualified tool name (used by the chat's "Always Allow" button). */
+  static async setToolPermission(qualifiedName, permission) {
+    const entry = toolIndex.get(qualifiedName);
+    if (!entry) return false;
+    await MCPStore.setToolPermission(entry.serverId, entry.toolName, permission);
+    return true;
+  }
+
   /** Executes a previously-listed qualified tool name against its owning MCP server. */
   static async executeTool(qualifiedName, args) {
     const entry = toolIndex.get(qualifiedName);

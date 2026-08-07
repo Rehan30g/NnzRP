@@ -86,7 +86,10 @@ function createWindow() {
     height: 800,
     minWidth: 900,
     minHeight: 600,
-    title: 'NnzRP - BYOK AI Roleplay Client',
+    // Generic fallback for the brief moment before the renderer's first
+    // navigate() runs. The real title is "NnzRP - <view / character>", set from
+    // js/app.js via document.title (Electron mirrors it to taskbar/alt-tab).
+    title: 'NnzRP',
     icon: iconPath,
     frame: false, // Frameless window for custom header titlebar
     autoHideMenuBar: true,

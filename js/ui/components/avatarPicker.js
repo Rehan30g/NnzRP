@@ -32,7 +32,7 @@ export function renderAvatarPickerHTML(idPrefix, currentValue = '') {
         <input class="input" id="${idPrefix}" value="${escapeAttr(currentValue)}" placeholder="https://...">
       </div>
       <div id="${idPrefix}-upload-row" style="display:${isUpload ? 'flex' : 'none'}; align-items:center; gap:0.75rem;">
-        <img id="${idPrefix}-preview" src="${escapeAttr(currentValue)}" alt="" style="width:56px; height:56px; border-radius:10px; object-fit:cover; border:1px solid var(--border-light); background:#f1f5f9;">
+        <img id="${idPrefix}-preview" src="${escapeAttr(currentValue)}" alt="" style="width:56px; height:56px; border-radius:10px; object-fit:cover; border:1px solid var(--border-light); background:var(--bg-inset);">
         <input type="file" accept="image/*" id="${idPrefix}-file" style="flex:1;">
       </div>
       <p style="font-size:0.72rem; color:var(--text-muted); margin-top:0.4rem;">Uploaded images are stored locally in the app's own database - nothing is sent anywhere.</p>

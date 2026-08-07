@@ -6,7 +6,7 @@
   align-items: center;
   justify-content: space-between;
   height: 36px;
-  background-color: #ffffff;
+  background-color: var(--titlebar-bg);
   border-bottom: 1px solid var(--border-light);
   user-select: none;
   -webkit-user-select: none;
@@ -64,12 +64,12 @@
 }
 
 .titlebar-btn:hover {
-  background-color: #e2e8f0;
+  background-color: var(--titlebar-btn-hover);
   color: var(--text-main);
 }
 
 .titlebar-btn-close:hover {
-  background-color: #ef4444 !important;
+  background-color: var(--titlebar-close-hover) !important;
   color: #ffffff !important;
 }
 
@@ -85,7 +85,7 @@
 .app-sidebar {
   width: var(--sidebar-width);
   height: 100%;
-  background-color: #ffffff;
+  background-color: var(--bg-surface);
   border-right: 1px solid var(--border-light);
   display: flex;
   flex-direction: column;
@@ -107,7 +107,7 @@
   justify-content: space-between;
   border-bottom: 1px solid var(--border-light);
   overflow: hidden;
-  background: #f8fafc;
+  background: var(--bg-muted);
 }
 
 .brand-wrapper {
@@ -126,7 +126,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #ffffff;
+  color: var(--accent-on-solid);
   font-weight: 800;
   font-size: 1.1rem;
   flex-shrink: 0;
@@ -193,7 +193,7 @@
 }
 
 .nav-item.active {
-  background: #e0e7ff;
+  background: var(--accent-primary-soft);
   color: var(--accent-primary);
   font-weight: 600;
 }
@@ -225,8 +225,8 @@
     left: calc(100% + 10px);
     top: 50%;
     transform: translateY(-50%);
-    background: #0f172a;
-    color: #ffffff;
+    background: var(--tooltip-bg);
+    color: var(--tooltip-fg);
     padding: 0.35rem 0.75rem;
     border-radius: var(--radius-sm);
     font-size: 0.8rem;
@@ -241,12 +241,12 @@
 .sidebar-footer {
   padding: 0.85rem 0.6rem;
   border-top: 1px solid var(--border-light);
-  background: #f8fafc;
+  background: var(--bg-muted);
 }
 
 .proxy-status-card {
   padding: 0.75rem;
-  background: #ffffff;
+  background: var(--bg-surface);
   border: 1px solid var(--border-light);
   border-radius: var(--radius-md);
   font-size: 0.8rem;
@@ -292,7 +292,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: #ffffff;
+  background: var(--bg-surface);
   z-index: 10;
 }
 
@@ -314,7 +314,23 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
+  /* The redesign's bigger buttons made 2-3 of them fight the title/description
+     text for room on one line (worst on Proxies, now embedded in a narrower
+     Settings tab rather than a full page) - wrapping the whole action group
+     onto its own line, rather than shrinking it into a cramped column next to
+     the text, is what actually fixes that instead of just hiding it at one
+     viewport width. */
+  flex-wrap: wrap;
+  row-gap: 0.75rem;
   margin-bottom: 1.5rem;
+}
+
+.view-header-row > *:first-child {
+  /* Lets the title+description block actually shrink/wrap instead of forcing
+     the action buttons into whatever sliver of width is left over - a flex
+     item's default min-width is its content's width, not 0. */
+  min-width: 0;
+  flex: 1 1 320px;
 }
 
 .mobile-toggle {
@@ -402,7 +418,7 @@
     flex-direction: row;
     border-right: none;
     border-top: 1px solid var(--border-light);
-    background-color: #ffffff;
+    background-color: var(--bg-surface);
     z-index: 1000;
     box-shadow: 0 -2px 12px rgba(15, 23, 42, 0.08);
     transform: none !important;

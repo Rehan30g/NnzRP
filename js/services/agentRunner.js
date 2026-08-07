@@ -5,6 +5,15 @@
 import { ProviderManager } from './providerManager.js';
 import { MCPToolRegistry } from './mcpToolRegistry.js';
 
+/**
+ * What both the persisted tool trace AND the model itself are told when the
+ * user refuses a tool call. It deliberately goes into the `role:'tool'`
+ * payload message too: if the model never learns the call didn't happen it
+ * either hangs waiting on data that will never arrive or hallucinates a
+ * result, instead of reacting in character and continuing the scene.
+ */
+export const TOOL_DECLINED_NOTICE = 'Declined by user. The tool was NOT executed and returned no data - continue without it.';
+
 export class AgentRunner {
   /**
    * @param {object} opts
@@ -14,7 +23,15 @@ export class AgentRunner {
    * @param {Array} opts.tools - MCPToolRegistry.getActiveTools() result (may be empty)
    * @param {boolean} opts.streaming
    * @param {AbortSignal} [opts.signal]
-   * @param {object} [opts.callbacks] - onContentChunk/onThinkingChunk/onToolExecuting/onToolResult/onRoundComplete
+   * @param {object} [opts.callbacks] - onContentChunk/onThinkingChunk/onPermissionRequest/onToolExecuting/onToolDeclined/onToolResult/onRoundComplete
+   * @param {(call: {id,name,args}) => Promise<'allow'|'decline'>|'allow'|'decline'} [opts.callbacks.onPermissionRequest] -
+   *   asked once per tool call, awaited BEFORE the call runs and before
+   *   `onToolExecuting` fires. Returning 'decline' means the tool is never
+   *   executed; the model is told so via a `TOOL_DECLINED_NOTICE` tool-result
+   *   message so it can react in character instead of the turn breaking.
+   *   Omitting the callback defaults to 'allow' (an optional callback must not
+   *   change behavior for non-UI callers) - the chat UI ALWAYS supplies it, and
+   *   its own default for an unconfigured tool is to prompt the user.
    * @param {(soFar: {content, thinking, toolTrace}) => Promise<void>|void} [opts.callbacks.onRoundComplete] -
    *   fired after each round that called tool(s), with everything the turn has accumulated SO FAR
    *   (all rounds' lead-in text joined by a blank line, same for thinking, plus every tool call
@@ -94,14 +111,48 @@ export class AgentRunner {
       // called, not everything called so far.
       const roundTrace = [];
       for (const call of toolCalls) {
-        callbacks.onToolExecuting?.(call);
+        // The user pressed stop while an earlier call in this round was
+        // running (or while its permission prompt was open) - bail out now
+        // instead of running the remaining calls and only failing on the
+        // next provider request.
+        if (signal?.aborted) throw new DOMException('Generation aborted by user.', 'AbortError');
+
+        // PERMISSION GATE - runs BEFORE onToolExecuting so the "tool is
+        // running" live spinner never appears while we're actually still
+        // waiting on the user's decision. An absent callback defaults to
+        // 'allow' to preserve this file's "optional callback = no behavior
+        // change" convention for non-UI callers, but BOTH real chatView call
+        // sites always supply it (leaving one unwired would silently restore
+        // the old unprompted-execution behavior).
+        let decision = 'allow';
+        if (typeof callbacks.onPermissionRequest === 'function') {
+          try {
+            decision = await callbacks.onPermissionRequest(call);
+          } catch (err) {
+            // A prompt that errored/was torn down is treated as a refusal -
+            // failing closed is the only safe direction here.
+            decision = 'decline';
+          }
+        }
+
         let content;
-        try {
-          content = await MCPToolRegistry.executeTool(call.name, call.args);
-        } catch (err) {
-          content = `Error: ${err.message}`;
+        if (decision === 'decline') {
+          // Never touches MCPToolRegistry.executeTool - the tool genuinely
+          // does not run. Still traced (exactly like an error result is) so
+          // the refusal is visible in the message's tool-trace block rather
+          // than the call silently vanishing.
+          content = TOOL_DECLINED_NOTICE;
+          callbacks.onToolDeclined?.(call);
+        } else {
+          callbacks.onToolExecuting?.(call);
+          try {
+            content = await MCPToolRegistry.executeTool(call.name, call.args);
+          } catch (err) {
+            content = `Error: ${err.message}`;
+          }
         }
         const entry = { name: call.name, args: call.args, result: content };
+        if (decision === 'decline') entry.declined = true;
         toolTrace.push(entry);
         roundTrace.push(entry);
         callbacks.onToolResult?.(call, content);
