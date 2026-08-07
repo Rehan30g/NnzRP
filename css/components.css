@@ -532,9 +532,6 @@ input[type="color"] {
 .settings-shell {
   max-width: 940px;
   margin: 0 auto;
-  /* Clears the sticky save bar below, which otherwise floats over the last
-     card's buttons (confirmed on the Proxies tab: it covered "Test Ping"). */
-  padding-bottom: 6rem;
 }
 
 .settings-tabbar {
