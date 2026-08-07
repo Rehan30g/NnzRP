@@ -77,12 +77,19 @@ export class MCPView {
                 <p style="color:var(--text-muted); font-size:0.85rem; margin-bottom:1rem;">${escapeHtml(s.description) || 'Tidak ada deskripsi.'}</p>
 
                 <div style="display:flex; justify-content:space-between; gap:0.5rem; border-top:1px solid var(--border-light); padding-top:0.8rem;">
-                  <button class="btn btn-secondary btn-sm btn-check-mcp-status" data-id="${s.id}">Check Status</button>
+                  <div style="display:flex; gap:0.4rem;">
+                    <button class="btn btn-secondary btn-sm btn-check-mcp-status" data-id="${s.id}">Check Status</button>
+                    <button class="btn btn-secondary btn-sm btn-mcp-perms" data-id="${s.id}">Tool Permissions</button>
+                  </div>
                   <div style="display:flex; gap:0.4rem;">
                     <button class="btn btn-secondary btn-sm btn-edit-mcp" data-id="${s.id}">Edit</button>
                     <button class="btn btn-danger btn-sm btn-del-mcp" data-id="${s.id}">Delete</button>
                   </div>
                 </div>
+
+                <!-- Per-tool Ask/Allow/Decline editor - populated lazily on
+                     first expand (it needs a live tools/list round trip). -->
+                <div class="mcp-perm-host hidden" id="mcp-perm-host-${s.id}" style="margin-top:0.8rem; border-top:1px solid var(--border-light); padding-top:0.8rem;"></div>
               </div>
             `).join('')}
           </div>
@@ -163,6 +170,26 @@ export class MCPView {
     // the user clicks each "Check Status" button by hand.
     servers.forEach(s => { checkServerStatus(s, { silent: true }); });
 
+    // Per-server tool permission editor, expanded on demand (loading it for
+    // every card up front would fire a tools/list round trip per server on
+    // every render of this view).
+    container.querySelectorAll('.btn-mcp-perms').forEach(btn => {
+      btn.onclick = async () => {
+        const hostEl = container.querySelector(`#mcp-perm-host-${btn.dataset.id}`);
+        if (!hostEl) return;
+        const nowHidden = hostEl.classList.toggle('hidden');
+        // The server cards sit in a narrow multi-column grid; a 12-row list of
+        // tool names + 3-way controls needs the full row width to stay readable.
+        const cardEl = btn.closest('.card');
+        if (cardEl) cardEl.style.gridColumn = nowHidden ? '' : '1 / -1';
+        if (nowHidden) return;
+        if (!hostEl.dataset.loaded) {
+          hostEl.dataset.loaded = '1';
+          await MCPView.renderToolPermissions(hostEl, btn.dataset.id);
+        }
+      };
+    });
+
     container.querySelectorAll('.btn-edit-mcp').forEach(btn => {
       btn.onclick = async () => {
         const server = await MCPStore.getById(btn.dataset.id);
@@ -180,6 +207,115 @@ export class MCPView {
           Toast.info('MCP Server dihapus.');
           await MCPView.render(container);
         }
+      };
+    });
+  }
+
+  /**
+   * Renders the per-tool Ask / Allow / Decline permission editor for ONE MCP
+   * server into `hostEl`, including the one-click "set every tool of this
+   * server to X" bulk control.
+   *
+   * Shared deliberately: this is the primary settings surface (the `#mcp`
+   * route's server cards) AND the copy mirrored into the chat right-drawer's
+   * MCP tab, the same way the master/immersive switches are duplicated -
+   * having one implementation means the two can't drift.
+   *
+   * 'ask' is the default for anything unset, and is stored as ABSENCE of a
+   * key (see MCPStore) - so a tool this UI has never touched, and a tool
+   * explicitly set back to Ask, are the same state.
+   */
+  static async renderToolPermissions(hostEl, serverId) {
+    if (!hostEl) return;
+    hostEl.innerHTML = `<div style="font-size:0.8rem; color:var(--text-muted);">Memuat daftar tool...</div>`;
+
+    const server = await MCPStore.getById(serverId);
+    if (!server) {
+      hostEl.innerHTML = `<div style="font-size:0.8rem; color:var(--accent-rose);">Server tidak ditemukan.</div>`;
+      return;
+    }
+
+    const [status, stored] = await Promise.all([
+      MCPClient.checkStatus(server),
+      MCPStore.getToolPermissions(serverId)
+    ]);
+
+    const discovered = status.online
+      ? status.tools.map(t => t && t.name).filter(Boolean)
+      : [];
+    // Stored-but-not-currently-discoverable tools are still listed so an
+    // existing override stays visible/removable even while the server is
+    // offline or has dropped a tool from its listing.
+    const toolNames = [...new Set([...discovered, ...Object.keys(stored)])];
+
+    const permLabel = { ask: 'Ask', allow: 'Allow', decline: 'Decline' };
+    const segHTML = (toolName, current) => `
+      <div class="perm-seg" data-tool="${escapeAttr(toolName)}">
+        ${['ask', 'allow', 'decline'].map(p => `
+          <button type="button" data-perm="${p}" class="perm-seg-${p}${p === current ? ' active' : ''}">${permLabel[p]}</button>
+        `).join('')}
+      </div>
+    `;
+
+    hostEl.innerHTML = `
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:0.75rem; flex-wrap:wrap; margin-bottom:0.6rem;">
+        <div>
+          <div style="font-weight:700; font-size:0.85rem;">Tool Permissions</div>
+          <div style="font-size:0.75rem; color:var(--text-muted); margin-top:0.1rem;">
+            <strong>Ask</strong> (default) menampilkan dialog di atas kolom pesan tiap kali dipanggil. <strong>Allow</strong> jalan langsung, <strong>Decline</strong> selalu ditolak.
+          </div>
+        </div>
+        <div class="perm-bulk" style="display:flex; align-items:center; gap:0.4rem; flex-shrink:0;">
+          <span style="font-size:0.75rem; color:var(--text-muted);">Set semua:</span>
+          ${['ask', 'allow', 'decline'].map(p => `
+            <button type="button" class="btn btn-secondary btn-sm" data-bulk="${p}" style="padding:0.15rem 0.5rem; font-size:0.72rem;">${permLabel[p]}</button>
+          `).join('')}
+        </div>
+      </div>
+      ${!status.online ? `
+        <div style="font-size:0.75rem; color:var(--accent-rose); margin-bottom:0.5rem;">
+          Server offline (${escapeHtml(status.error || 'unknown error')}) - daftar tool tidak bisa dimuat. Tool tanpa pengaturan tersimpan tetap default <strong>Ask</strong>.
+        </div>
+      ` : ''}
+      ${toolNames.length === 0 ? `
+        <div style="font-size:0.8rem; color:var(--text-muted);">Tidak ada tool yang terdeteksi.</div>
+      ` : `
+        <div class="perm-list" style="display:flex; flex-direction:column; gap:0.35rem;">
+          ${toolNames.map(name => `
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:0.6rem;">
+              <span style="font-family:var(--font-mono); font-size:0.78rem; overflow-wrap:anywhere;">${escapeHtml(name)}${discovered.includes(name) ? '' : ' <span style="color:var(--text-muted); font-family:var(--font-family);">(tidak terdeteksi)</span>'}</span>
+              ${segHTML(name, stored[name] || 'ask')}
+            </div>
+          `).join('')}
+        </div>
+      `}
+    `;
+
+    const markActive = (segEl, permission) => {
+      segEl.querySelectorAll('button[data-perm]').forEach(b => {
+        b.classList.toggle('active', b.dataset.perm === permission);
+      });
+    };
+
+    hostEl.querySelectorAll('.perm-seg button[data-perm]').forEach(btn => {
+      btn.onclick = async () => {
+        const segEl = btn.closest('.perm-seg');
+        const toolName = segEl.dataset.tool;
+        const permission = btn.dataset.perm;
+        await MCPStore.setToolPermission(serverId, toolName, permission);
+        markActive(segEl, permission);
+        Toast.info(`"${toolName}" -> ${permLabel[permission]}`);
+      };
+    });
+
+    hostEl.querySelectorAll('button[data-bulk]').forEach(btn => {
+      btn.onclick = async () => {
+        const permission = btn.dataset.bulk;
+        await MCPStore.setAllToolPermissions(serverId, permission, toolNames);
+        // Update every row in place rather than re-rendering - a re-render
+        // would fire another tools/list round trip just to redraw buttons.
+        hostEl.querySelectorAll('.perm-seg').forEach(segEl => markActive(segEl, permission));
+        Toast.success(`Semua tool "${server.name}" diset ke ${permLabel[permission]}.`);
       };
     });
   }

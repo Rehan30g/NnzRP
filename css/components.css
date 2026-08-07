@@ -353,3 +353,60 @@
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
 }
+
+/* ===================================================
+   3-way Ask / Allow / Decline segmented control
+   Used by the MCP per-tool permission editor
+   (`MCPView.renderToolPermissions`, shown both on the #mcp settings page and
+   in the chat right-drawer's MCP tab). Kept flat/borderless-between-segments
+   so it reads as one control rather than three loose buttons.
+   =================================================== */
+.perm-seg {
+  display: inline-flex;
+  flex-shrink: 0;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: #ffffff;
+}
+
+.perm-seg button {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  padding: 0.2rem 0.55rem;
+  line-height: 1.5;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.perm-seg button + button {
+  border-left: 1px solid var(--border-light);
+}
+
+.perm-seg button:hover:not(.active) {
+  background: var(--bg-primary);
+  color: var(--text-main);
+}
+
+/* Active segment is color-coded by meaning: neutral slate for the safe
+   default (Ask), emerald for Allow, rose for Decline - so a scan down the
+   list shows which tools were opened up without reading the labels. */
+.perm-seg button.active {
+  color: #ffffff;
+}
+
+.perm-seg button.perm-seg-ask.active {
+  background: var(--text-muted);
+}
+
+.perm-seg button.perm-seg-allow.active {
+  background: var(--accent-emerald);
+}
+
+.perm-seg button.perm-seg-decline.active {
+  background: var(--accent-rose);
+}

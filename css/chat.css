@@ -647,8 +647,101 @@
   font-weight: 700;
 }
 
+/* A tool call the user refused - a third state alongside running/finished,
+   so "I said no" is legible in the same box the other calls appear in. */
+.tool-live-item-declined {
+  color: var(--accent-rose, #dc2626);
+}
+
+.tool-live-cross {
+  color: var(--accent-rose, #dc2626);
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
 @keyframes toolLiveSpin {
   to { transform: rotate(360deg); }
+}
+
+/* ===================================================
+   MCP Tool Permission Prompt (above the composer)
+
+   Inserted as the FIRST child of `.chat-input-container`, which is
+   bottom-anchored (`bottom: 24px`) with auto height - so this card grows the
+   container upward and lands directly on top of the input box, rather than
+   blocking the whole screen the way a `Modal` would. The container itself is
+   `pointer-events: none` (clicks fall through to the message stream), so this
+   card has to opt its own clicks back in exactly like `.chat-input-wrapper`.
+   =================================================== */
+.tool-permission-prompt {
+  pointer-events: auto;
+  width: 100%;
+  margin-bottom: 0.5rem;
+  padding: 0.75rem 0.9rem;
+  background: #ffffff;
+  border: 1px solid var(--accent-secondary);
+  border-radius: var(--radius-lg, 10px);
+  box-shadow: var(--shadow-md);
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  animation: toolPermissionIn 0.14s ease-out;
+}
+
+@keyframes toolPermissionIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.tool-permission-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--accent-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.tool-permission-question {
+  font-size: 0.84rem;
+  color: var(--text-main);
+}
+
+.tool-permission-name {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-main);
+  background: #f5f3ff;
+  border-radius: var(--radius-sm, 6px);
+  padding: 0.25rem 0.45rem;
+  overflow-wrap: anywhere;
+}
+
+/* Model-supplied arguments - can be long or many-lined, so it scrolls inside
+   itself instead of pushing the composer off the top of the window. */
+.tool-permission-args {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+  background: #f8fafc;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm, 6px);
+  padding: 0.4rem 0.5rem;
+  max-height: 140px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.tool-permission-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.4rem;
 }
 
 /* ===================================================

@@ -381,13 +381,178 @@ function syncLiveToolBox(containerEl, calls = []) {
 
   block.innerHTML = `
     <div class="tool-live-header">${WRENCH_ICON_SVG}<span>Tools Used</span></div>
-    ${calls.map(c => `
-      <div class="tool-live-item">
-        ${c.done ? '<span class="tool-live-check">&#10003;</span>' : '<span class="tool-live-spinner"></span>'}
-        <span>${c.done ? 'Used' : 'Using'} tool: ${escapeHtml(c.name)}...</span>
-      </div>
-    `).join('')}
+    ${calls.map(c => {
+      // A call the user refused never ran at all - shown here as a distinct
+      // third state (not a spinner, not a success check) so "I said no" is
+      // immediately legible in the same place the running calls appear.
+      if (c.declined) {
+        return `
+          <div class="tool-live-item tool-live-item-declined">
+            <span class="tool-live-cross">&times;</span>
+            <span>Declined tool: ${escapeHtml(c.name)}</span>
+          </div>
+        `;
+      }
+      return `
+        <div class="tool-live-item">
+          ${c.done ? '<span class="tool-live-check">&#10003;</span>' : '<span class="tool-live-spinner"></span>'}
+          <span>${c.done ? 'Used' : 'Using'} tool: ${escapeHtml(c.name)}...</span>
+        </div>
+      `;
+    }).join('')}
   `;
+}
+
+/* ---------------------------------------------------------------------------
+ * MCP tool permission prompt (rendered directly ABOVE the composer)
+ *
+ * Every MCP tool call the model makes passes through `requestToolPermission()`
+ * before it is allowed to run (wired into AgentRunner as `onPermissionRequest`
+ * by BOTH generation call sites). The stored per-tool setting decides whether
+ * the user is asked at all:
+ *   'allow'   -> runs silently
+ *   'decline' -> skipped silently (model is told it was refused)
+ *   'ask'     -> the DEFAULT for any tool with no explicit setting, and the
+ *                only outcome that surfaces this prompt.
+ * Deliberately NOT a `Modal` - a full-screen blocking overlay is the wrong
+ * shape for "a question about the reply currently streaming in"; this is a
+ * small card inserted as the first child of `.chat-input-container`, which is
+ * bottom-anchored (`bottom: 24px`) so an added child grows the box UPWARD,
+ * landing the prompt directly on top of the input box.
+ * ------------------------------------------------------------------------- */
+
+const PERMISSION_PROMPT_ID = 'tool-permission-prompt';
+// Set while a prompt is on screen; calling it resolves that prompt as a
+// refusal and tears down its DOM. Module-level for the same reason the other
+// generation state is (only one ChatView is ever mounted).
+let activePermissionCleanup = null;
+
+/** Pretty-prints model-supplied tool arguments for display (still escaped at the call site). */
+function formatToolArgsPreview(args) {
+  if (args === undefined || args === null) return '{}';
+  let text;
+  if (typeof args === 'string') {
+    text = args;
+  } else {
+    try {
+      text = JSON.stringify(args, null, 2);
+    } catch {
+      text = String(args);
+    }
+  }
+  if (typeof text !== 'string') text = String(text);
+  return text.length > 4000 ? `${text.slice(0, 4000)}\n... (dipotong)` : text;
+}
+
+/** Force-closes any open permission prompt, resolving it as a refusal (fail closed). */
+function removeToolPermissionPrompt() {
+  const cleanup = activePermissionCleanup;
+  activePermissionCleanup = null;
+  if (cleanup) cleanup();
+  const stray = document.getElementById(PERMISSION_PROMPT_ID);
+  if (stray) stray.remove();
+}
+
+/**
+ * Renders the Yes / No / Always Allow card above the composer and resolves
+ * once the user picks one. Resolves 'decline' if the generation is aborted
+ * while the prompt is open, so a pending call can never hang the tool loop.
+ */
+function showToolPermissionPrompt(call, signal) {
+  return new Promise((resolve) => {
+    // AgentRunner awaits each call sequentially so two prompts can't legitimately
+    // overlap - but tear down any stray one first so a prompt leaked by an
+    // earlier aborted turn can never stack up or answer on this one's behalf.
+    removeToolPermissionPrompt();
+
+    if (signal?.aborted) { resolve('decline'); return; }
+
+    const host = document.querySelector('.chat-input-container');
+    // No composer on screen = no way to ask the user = refuse. Failing closed
+    // is the only safe direction for this whole feature.
+    if (!host) { resolve('decline'); return; }
+
+    const promptEl = document.createElement('div');
+    promptEl.className = 'tool-permission-prompt';
+    promptEl.id = PERMISSION_PROMPT_ID;
+    // `call.name`/`call.args` are model-generated untrusted text - escaped
+    // before going anywhere near innerHTML, same as all chat content.
+    promptEl.innerHTML = `
+      <div class="tool-permission-head">
+        ${WRENCH_ICON_SVG}
+        <span>MCP Tool Permission</span>
+      </div>
+      <div class="tool-permission-question">AI ingin memanggil tool berikut. Izinkan?</div>
+      <div class="tool-permission-name">${escapeHtml(call.name)}</div>
+      <pre class="tool-permission-args">${escapeHtml(formatToolArgsPreview(call.args))}</pre>
+      <div class="tool-permission-actions">
+        <button type="button" class="btn btn-secondary btn-sm" data-decision="decline">No</button>
+        <button type="button" class="btn btn-secondary btn-sm" data-decision="always">Always Allow</button>
+        <button type="button" class="btn btn-primary btn-sm" data-decision="allow">Yes</button>
+      </div>
+    `;
+    host.insertBefore(promptEl, host.firstChild);
+
+    let settled = false;
+    const finish = (decision) => {
+      if (settled) return;
+      settled = true;
+      if (signal) signal.removeEventListener('abort', onAbort);
+      if (activePermissionCleanup === cleanup) activePermissionCleanup = null;
+      promptEl.remove();
+      resolve(decision);
+    };
+    const onAbort = () => finish('decline');
+    const cleanup = () => finish('decline');
+
+    if (signal) signal.addEventListener('abort', onAbort, { once: true });
+    activePermissionCleanup = cleanup;
+
+    promptEl.querySelectorAll('[data-decision]').forEach(btn => {
+      btn.onclick = async () => {
+        const choice = btn.dataset.decision;
+        if (choice !== 'always') {
+          // 'allow' here is a ONE-TIME allow - nothing is persisted, so the
+          // same tool asks again on its next call.
+          finish(choice === 'allow' ? 'allow' : 'decline');
+          return;
+        }
+        try {
+          await MCPToolRegistry.setToolPermission(call.name, 'allow');
+          Toast.info(`Tool "${call.name}" sekarang selalu diizinkan.`);
+        } catch (err) {
+          // Persisting failed - still honor the click for THIS call, but the
+          // tool will ask again next time rather than silently going quiet.
+          Toast.error(`Gagal menyimpan izin tool: ${err.message}`);
+        }
+        finish('allow');
+      };
+    });
+  });
+}
+
+/**
+ * The single permission decision point for chat-driven MCP tool calls, shared
+ * by `triggerAIGeneration` and `handleSwipeNext`. Resolves 'allow'/'decline'.
+ *
+ * SAFETY: every failure mode here resolves to asking or refusing, never to a
+ * silent allow - an unknown tool, an unreadable permission store, an aborted
+ * generation and a missing composer all end at 'ask' or 'decline'.
+ */
+async function requestToolPermission(call, signal) {
+  if (signal?.aborted) return 'decline';
+
+  let stored = 'ask';
+  try {
+    stored = await MCPToolRegistry.getToolPermission(call.name);
+  } catch (err) {
+    console.warn('[ChatView] Could not read MCP tool permission, asking the user instead:', err);
+    stored = 'ask';
+  }
+
+  if (stored === 'allow') return 'allow';
+  if (stored === 'decline') return 'decline';
+  return showToolPermissionPrompt(call, signal);
 }
 
 /**
@@ -882,10 +1047,17 @@ export class ChatView {
             </div>
             <input type="checkbox" class="drawer-mcp-toggle" data-id="${s.id}" ${s.enabled ? 'checked' : ''} title="Enable this server for roleplay sessions">
           </div>
-          <div style="display:flex; justify-content:space-between; align-items:center; border-top:1px solid var(--border-light); padding-top:0.4rem; margin-top:0.2rem;">
+          <div style="display:flex; justify-content:space-between; align-items:center; gap:0.4rem; border-top:1px solid var(--border-light); padding-top:0.4rem; margin-top:0.2rem;">
             <span class="badge" id="drawer-mcp-status-${s.id}">Unknown</span>
-            <button class="btn btn-secondary btn-sm drawer-check-mcp" data-id="${s.id}" style="padding:0.15rem 0.45rem; font-size:0.72rem;">Check Status</button>
+            <div style="display:flex; gap:0.3rem;">
+              <button class="btn btn-secondary btn-sm drawer-check-mcp" data-id="${s.id}" style="padding:0.15rem 0.45rem; font-size:0.72rem;">Check Status</button>
+              <button class="btn btn-secondary btn-sm drawer-mcp-perms" data-id="${s.id}" style="padding:0.15rem 0.45rem; font-size:0.72rem;">Permissions</button>
+            </div>
           </div>
+          <!-- Same per-tool Ask/Allow/Decline editor as the #mcp settings
+               page (one shared implementation in MCPView), mirrored here the
+               way the master/immersive toggles already are. -->
+          <div class="hidden" id="drawer-mcp-perm-host-${s.id}" style="border-top:1px solid var(--border-light); padding-top:0.5rem;"></div>
         </div>
       `).join('');
 
@@ -918,6 +1090,21 @@ export class ChatView {
         btn.onclick = async () => {
           const server = await MCPStore.getById(btn.dataset.id);
           if (server) await checkDrawerServerStatus(server);
+        };
+      });
+
+      // Expand-on-demand per-tool permission editor (lazy: needs a live
+      // tools/list round trip, so it isn't loaded for every server up front).
+      mcpListEl.querySelectorAll('.drawer-mcp-perms').forEach(btn => {
+        btn.onclick = async () => {
+          const hostEl = mcpListEl.querySelector(`#drawer-mcp-perm-host-${btn.dataset.id}`);
+          if (!hostEl) return;
+          const nowHidden = hostEl.classList.toggle('hidden');
+          if (nowHidden) return;
+          if (!hostEl.dataset.loaded) {
+            hostEl.dataset.loaded = '1';
+            await MCPView.renderToolPermissions(hostEl, btn.dataset.id);
+          }
         };
       });
 
@@ -1462,6 +1649,10 @@ export class ChatView {
       scrollToBottom(messagesEl);
 
       activeAbortController = new AbortController();
+      // Captured once: the module-level controller is nulled in `finally`, but
+      // the permission prompt's abort wiring needs this turn's signal for the
+      // whole run (including while a prompt is waiting on the user).
+      const abortSignal = activeAbortController.signal;
       setGeneratingState(true);
       let liveContent = genSettings.prefillEnabled && genSettings.prefillText ? genSettings.prefillText : '';
       let liveThinking = '';
@@ -1502,7 +1693,7 @@ export class ChatView {
           settings: genSettings,
           tools: activeTools,
           streaming: genSettings.streamingEnabled,
-          signal: activeAbortController.signal,
+          signal: abortSignal,
           transformFirstResult: (result) => mergePrefillResult(genSettings, result),
           callbacks: {
             onContentChunk: (delta) => {
@@ -1513,6 +1704,18 @@ export class ChatView {
             onThinkingChunk: (delta) => {
               liveThinking += delta;
               scheduleThinkingRender();
+            },
+            // Gate every tool call on the user's stored permission, prompting
+            // above the composer for anything not explicitly configured.
+            // MUST stay wired - without it AgentRunner falls back to running
+            // tools unprompted, which is the exact risk this feature removes.
+            onPermissionRequest: (call) => requestToolPermission(call, abortSignal),
+            onToolDeclined: (call) => {
+              // Show the refusal where the running-tool spinners appear, so a
+              // declined call doesn't just silently do nothing on screen.
+              liveToolCalls.push({ id: call.id, name: call.name, done: true, declined: true });
+              syncLiveToolBox(typingInnerEl, liveToolCalls);
+              scrollToBottom(messagesEl);
             },
             onToolExecuting: (call) => {
               // Own live box, outside the thinking block, so it's never
@@ -1598,6 +1801,9 @@ export class ChatView {
         }
       } finally {
         activeAbortController = null;
+        // Belt-and-braces: a prompt still on screen here (error thrown while
+        // one was open) would otherwise sit above the composer forever.
+        removeToolPermissionPrompt();
         setGeneratingState(false);
         sendInput.focus();
         await flushQueuedMessageIfAny();
@@ -1754,6 +1960,10 @@ export class ChatView {
     }));
 
     activeAbortController = new AbortController();
+    // See the matching capture in `triggerAIGeneration` - the permission
+    // prompt needs this turn's signal even after the module-level controller
+    // has been cleared.
+    const abortSignal = activeAbortController.signal;
     setGeneratingState(true);
 
     const messagesEl = document.getElementById('messages-container');
@@ -1845,7 +2055,7 @@ export class ChatView {
         settings: genSettings,
         tools: activeTools,
         streaming: genSettings.streamingEnabled,
-        signal: activeAbortController.signal,
+        signal: abortSignal,
         transformFirstResult: (result) => mergePrefillResult(genSettings, result),
         callbacks: {
           onContentChunk: (delta) => {
@@ -1856,6 +2066,14 @@ export class ChatView {
           onThinkingChunk: (delta) => {
             liveThinking += delta;
             scheduleThinkingRender();
+          },
+          // Same permission gate as triggerAIGeneration - a regenerated swipe
+          // must not be a way to run tools without being asked.
+          onPermissionRequest: (call) => requestToolPermission(call, abortSignal),
+          onToolDeclined: (call) => {
+            liveToolCalls.push({ id: call.id, name: call.name, done: true, declined: true });
+            if (blockInnerEl) syncLiveToolBox(blockInnerEl, liveToolCalls);
+            scrollToBottom(messagesEl);
           },
           onToolExecuting: (call) => {
             // Own live box, outside the thinking block - never overwrites
@@ -1919,6 +2137,7 @@ export class ChatView {
       }
     } finally {
       activeAbortController = null;
+      removeToolPermissionPrompt();
       setGeneratingState(false);
       await flushQueuedMessageIfAny();
     }
