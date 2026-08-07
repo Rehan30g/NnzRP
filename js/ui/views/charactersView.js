@@ -3,6 +3,7 @@ import { CharacterStore } from '../../storage/characterStore.js';
 import { CardImporter } from '../../services/cardImporter.js';
 import { Modal } from '../components/modal.js';
 import { Toast } from '../components/toast.js';
+import { renderAvatarPickerHTML, wireAvatarPicker } from '../components/avatarPicker.js';
 import { escapeHtml, escapeAttr } from '../../utils/sanitize.js';
 
 export class CharactersView {
@@ -137,16 +138,12 @@ export class CharactersView {
           <input class="input" id="char-name" value="${escapeAttr(charData.name)}" required placeholder="e.g. Vespera Zenith">
         </div>
 
-        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:1rem;">
-          <div class="form-group">
-            <label class="form-label">Tagline / Subtitle</label>
-            <input class="input" id="char-tagline" value="${escapeAttr(charData.tagline)}" placeholder="e.g. Cyberpunk Rogue Hacker">
-          </div>
-          <div class="form-group">
-            <label class="form-label">Avatar Image URL</label>
-            <input class="input" id="char-avatar" value="${escapeAttr(charData.avatar)}" placeholder="https://...">
-          </div>
+        <div class="form-group">
+          <label class="form-label">Tagline / Subtitle</label>
+          <input class="input" id="char-tagline" value="${escapeAttr(charData.tagline)}" placeholder="e.g. Cyberpunk Rogue Hacker">
         </div>
+
+        ${renderAvatarPickerHTML('char-avatar', charData.avatar)}
 
         <div class="form-group">
           <label class="form-label">Character Description</label>
@@ -180,7 +177,7 @@ export class CharactersView {
       </form>
     `;
 
-    Modal.open({
+    const overlay = Modal.open({
       title: isEdit ? `Edit Character: ${escapeHtml(charData.name)}` : 'Create New AI Character',
       contentHTML,
       buttons: [
@@ -236,6 +233,8 @@ export class CharactersView {
         }
       ]
     });
+
+    wireAvatarPicker(overlay, 'char-avatar');
   }
 }
 

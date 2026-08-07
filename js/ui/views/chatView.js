@@ -95,13 +95,32 @@ function scrollToBottom(containerEl) {
 }
 
 /**
+ * `containerEl.insertBefore(x, y)` requires `y` to be a DIRECT child of
+ * `containerEl` - true for a persisted message's `.message-content` (always a
+ * direct child of `.message-block-inner`), but NOT during live generation,
+ * where the typing indicator / swipe host wraps one-or-more `.message-content`
+ * blocks inside an intermediate `#typing-indicator-content`/host div (see
+ * `renderLiveBodyHTML`) so inline tool markers can sit between them. Returns
+ * whichever DIRECT child of `containerEl` should be inserted-before to land
+ * right above the content area, in either case.
+ */
+function findContentAnchor(containerEl) {
+  for (const child of containerEl.children) {
+    if (child.classList.contains('message-content') || child.querySelector('.message-content')) {
+      return child;
+    }
+  }
+  return null;
+}
+
+/**
  * Creates/updates/removes a message's collapsible thinking block to match
  * `thinkingText`, live during streaming or as a final sync after generation.
  * Includes real-time thinking token counter.
  */
 function syncThinkingBlock(containerEl, thinkingText, { streaming = false } = {}) {
   if (!containerEl) return;
-  const contentEl = containerEl.querySelector('.message-content');
+  const contentEl = findContentAnchor(containerEl);
   let block = containerEl.querySelector('.thinking-block');
 
   if (!thinkingText || !thinkingText.trim()) {
@@ -152,7 +171,7 @@ function syncThinkingBlock(containerEl, thinkingText, { streaming = false } = {}
  */
 function syncToolTraceBlock(containerEl, toolTrace = []) {
   if (!containerEl) return;
-  const contentEl = containerEl.querySelector('.message-content');
+  const contentEl = findContentAnchor(containerEl);
   let block = containerEl.querySelector('.tool-trace-block');
 
   if (!toolTrace || toolTrace.length === 0) {
@@ -182,6 +201,159 @@ function syncToolTraceBlock(containerEl, toolTrace = []) {
 }
 
 /**
+ * De-duplicated, comma-joined list of the tool names in a `toolTrace` (or a
+ * single round's slice of one), for the small always-visible inline marker
+ * placed at the point a tool was called. Returns '' for no tools.
+ */
+function toolTraceNames(toolTrace = []) {
+  const names = [];
+  for (const t of toolTrace) {
+    const name = (t && t.name) || '';
+    if (name && !names.includes(name)) names.push(name);
+  }
+  return names.join(', ');
+}
+
+/**
+ * HTML for one `.tool-inline-note` marker covering a group of tool call(s)
+ * (comma-joined + de-duplicated names, same as the old whole-message note),
+ * or '' if that group called no tools. When the group represents more than
+ * one individual call - several rounds merged together with no narration
+ * text between them (see `renderMessageBodyHTML`), or just several tools
+ * called in one round - a "(Nx)" count is appended so calling the same tool
+ * repeatedly doesn't silently collapse into a single name with no indication
+ * it happened more than once. Applies the same way whether the merged calls
+ * are the same tool repeated or different tools, per the user's request.
+ * Tool names come from user-configured MCP servers, so they're escaped.
+ */
+function toolInlineNoteHTML(toolTrace = []) {
+  const names = toolTraceNames(toolTrace);
+  if (!names) return '';
+  const suffix = toolTrace.length > 1 ? ` (${toolTrace.length}x)` : '';
+  return `<div class="tool-inline-note">${WRENCH_ICON_SVG}<span>${escapeHtml(names + suffix)}</span></div>`;
+}
+
+/**
+ * Whether `msg.toolSegments` (see `ChatStore.addMessage`'s JSDoc) carries real
+ * per-round tool-call boundary data worth rendering as inline markers between
+ * text blocks - as opposed to a message with no tool use at all, or one
+ * persisted before this field existed (which only has the old flat `toolTrace`).
+ */
+function hasToolSegments(msg) {
+  return Array.isArray(msg.toolSegments) && msg.toolSegments.length > 0 &&
+    msg.toolSegments.some(seg => Array.isArray(seg.tools) && seg.tools.length > 0);
+}
+
+/**
+ * Flattens a `toolSegments`-shaped array (`[{text, tools}, ...]`) into a
+ * text/tools event stream, merging any consecutive tool-call groups that end
+ * up with no non-empty text between them into ONE group (concatenating their
+ * `tools`) instead of leaving them as separate groups sandwiching invisible
+ * empty text - a model very often calls a tool with no lead-in text, and can
+ * do that across several consecutive rounds (call tool A, get the result,
+ * immediately call tool B still with no narration). Shared by
+ * `renderMessageBodyHTML` (persisted messages) and `renderLiveBodyHTML`
+ * (mid-generation) so both apply the exact same grouping.
+ */
+function groupToolSegments(segments) {
+  const groups = [];
+  for (const seg of segments) {
+    if (seg.text && seg.text.trim()) {
+      groups.push({ type: 'text', text: seg.text });
+    }
+    if (Array.isArray(seg.tools) && seg.tools.length) {
+      const last = groups[groups.length - 1];
+      if (last && last.type === 'tools') {
+        last.tools.push(...seg.tools);
+      } else {
+        groups.push({ type: 'tools', tools: [...seg.tools] });
+      }
+    }
+  }
+  return groups;
+}
+
+/**
+ * Builds the HTML for a message's whole content area. When `msg.toolSegments`
+ * has real per-round boundaries, renders one `.message-content` block per
+ * round's own text with a `.tool-inline-note` marker sandwiched exactly where
+ * that round called its tool(s) - e.g. "fine ill search that" / [websearch
+ * marker] / "here's what i found...", confirmed with the user over the old
+ * "one note glued below the whole message" placement. `toolInlineNoteHTML`
+ * shows a "(Nx)" count on a merged group (see `groupToolSegments`), same as
+ * it would for several tools called in a single round.
+ *
+ * Falls back to the pre-existing single-blob + trailing-note rendering
+ * (driven by the flat `toolTrace`) for messages persisted before
+ * `toolSegments` existed, or for any message with no tool use at all - old
+ * data must never crash or render blank. `formatFn` is
+ * `ChatView.formatRoleplayMarkdown` (passed in rather than referenced
+ * directly since this is a module-level helper, not a class method) - every
+ * segment's text still goes through it, same as `m.content` always has, so
+ * macros/escaping/markdown are never skipped.
+ */
+function renderMessageBodyHTML(msg, formatFn, userName, charName) {
+  if (hasToolSegments(msg)) {
+    const groups = groupToolSegments(msg.toolSegments);
+    return groups.map(g => g.type === 'text'
+      ? `<div class="message-content" data-msgid="${msg.id}">${formatFn(g.text, userName, charName)}</div>`
+      : toolInlineNoteHTML(g.tools)
+    ).join('');
+  }
+  const toolTrace = Array.isArray(msg.toolTrace) ? msg.toolTrace : [];
+  const text = formatFn(msg.content, userName, charName);
+  return `<div class="message-content" data-msgid="${msg.id}">${text}</div>${toolInlineNoteHTML(toolTrace)}`;
+}
+
+/**
+ * Live counterpart to `renderMessageBodyHTML`, used while a turn is still
+ * streaming so tool markers appear AS SOON AS a round's tool call resolves
+ * instead of only once the whole turn is persisted (previously the live
+ * typing indicator only ever showed plain joined text - no inline note until
+ * `renderMessages()` re-rendered from the committed message). `committedSegments`
+ * is the `segments` array `AgentRunner`'s `onRoundComplete` hands back each
+ * round boundary (every round that's fully finished, tool call included);
+ * `currentText` is the round currently streaming in (no `tools` yet, still in
+ * progress) and always gets its own trailing block, falling back to
+ * `placeholderHTML` ("...sedang mengetik...") while it's still empty - e.g.
+ * right after a tool resolves and the next round hasn't produced any text yet.
+ */
+function renderLiveBodyHTML(committedSegments, currentText, placeholderHTML, formatFn) {
+  const groups = groupToolSegments(committedSegments);
+  let html = groups.map(g => g.type === 'text'
+    ? `<div class="message-content">${formatFn(g.text)}</div>`
+    : toolInlineNoteHTML(g.tools)
+  ).join('');
+  html += currentText.trim()
+    ? `<div class="message-content">${formatFn(currentText)}</div>`
+    : `<div class="message-content">${placeholderHTML}</div>`;
+  return html;
+}
+
+/**
+ * DOM-surgery counterpart to `renderMessageBodyHTML`, for the swipe
+ * refresh/restore paths where the message block is already mounted (rebuilding
+ * the whole `.message-block` string via `renderMessages()` would lose scroll
+ * position/in-flight animation state). Removes whatever content/marker
+ * elements are currently there - a stale variation may have had a different
+ * number of segments than the fresh one - and re-inserts fresh ones anchored
+ * right before `.message-footer` (so they land in the same slot the old single
+ * `.message-content` used to occupy, ahead of the thinking/tool-trace blocks'
+ * own insertion point which is unaffected by this).
+ */
+function syncMessageBody(containerEl, msg, formatFn, userName, charName) {
+  if (!containerEl) return;
+  containerEl.querySelectorAll('.message-content, .tool-inline-note').forEach(el => el.remove());
+  const footerEl = containerEl.querySelector('.message-footer');
+  const wrap = document.createElement('div');
+  wrap.innerHTML = renderMessageBodyHTML(msg, formatFn, userName, charName);
+  Array.from(wrap.childNodes).forEach(node => {
+    if (footerEl) containerEl.insertBefore(node, footerEl);
+    else containerEl.appendChild(node);
+  });
+}
+
+/**
  * Creates/updates/removes a LIVE "Tools Used" box shown mid-generation while
  * tool call(s) are executing - deliberately its own element (not merged into
  * the thinking block, and not the persisted `.tool-trace-block`) with a
@@ -192,7 +364,7 @@ function syncToolTraceBlock(containerEl, toolTrace = []) {
  */
 function syncLiveToolBox(containerEl, calls = []) {
   if (!containerEl) return;
-  const contentEl = containerEl.querySelector('.message-content');
+  const contentEl = findContentAnchor(containerEl);
   let block = containerEl.querySelector('.tool-live-block');
 
   if (!calls.length) {
@@ -237,19 +409,31 @@ function syncLiveToolBox(containerEl, calls = []) {
  * renderer being foregrounded (`main.js` also sets `backgroundThrottling:
  * false` on the window, but this helper does not rely on that either).
  *
- * A skipped render is harmless: `liveContent`/`liveThinking` are always kept
- * current (cheap string concat happens before `schedule()` is even called),
- * and the true final text is always shown via the authoritative commit
- * (`onIntermediateMessage`/final `renderMessages()`), not this live mirror.
+ * A skipped render is harmless ONLY as long as something later forces a final
+ * render: `liveContent`/`liveThinking` are always kept current (cheap string
+ * concat happens before `schedule()` is even called), but the gate silently
+ * drops whatever arrived inside the last `minIntervalMs` window. That trailing
+ * drop is exactly why a reply visibly lost its last character(s) ("fine ill
+ * search that" showing as "fine ill search tha") while an MCP tool ran: the
+ * final token before the model stopped to call a tool landed inside the gate
+ * window, was never painted, and nothing corrected the display until the WHOLE
+ * generation finished several seconds later. Hence `schedule.flush()` - call it
+ * at every point where streaming pauses (tool starting, round boundary, end).
  */
 function createThrottledRenderer(renderFn, minIntervalMs = 50) {
   let lastRun = 0;
-  return function schedule() {
+  const schedule = function () {
     const now = Date.now();
     if (now - lastRun < minIntervalMs) return;
     lastRun = now;
     renderFn();
   };
+  /** Renders immediately, ignoring the interval gate. */
+  schedule.flush = () => {
+    lastRun = Date.now();
+    renderFn();
+  };
+  return schedule;
 }
 
 /**
@@ -448,14 +632,33 @@ export class ChatView {
 
             <!-- Tab 3 Content: Custom MCP Tools (Experimental) -->
             <div class="drawer-body hidden" id="tab-content-mcp">
-              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem;">
-                <div style="font-weight:700; font-size:0.9rem;">Active MCP Servers</div>
-                <button class="btn btn-secondary btn-sm" id="btn-drawer-manage-mcp">Manage All MCP</button>
+              <div class="card" style="padding:0.85rem; margin-bottom:1rem; display:flex; flex-direction:column; gap:0.75rem;">
+                <div style="display:flex; justify-content:space-between; align-items:center; gap:0.75rem;">
+                  <div>
+                    <div style="font-weight:700; font-size:0.85rem;">MCP Tools</div>
+                    <div style="font-size:0.72rem; color:var(--text-muted); margin-top:0.15rem;">Master switch - turns all MCP tool-calling on/off across the whole app.</div>
+                  </div>
+                  <input type="checkbox" id="drawer-mcp-global-toggle" title="Enable MCP tools globally">
+                </div>
+                <div style="display:flex; justify-content:space-between; align-items:center; gap:0.75rem; border-top:1px solid var(--border-light); padding-top:0.65rem;">
+                  <div>
+                    <div style="font-weight:700; font-size:0.85rem;">Immersive Roleplay</div>
+                    <div style="font-size:0.72rem; color:var(--text-muted); margin-top:0.15rem;">${escapeHtml(activeChar.name)} proactively uses tools in-character (e.g. websearch while browsing) without being explicitly asked.</div>
+                  </div>
+                  <input type="checkbox" id="drawer-mcp-immersive-toggle" title="Enable immersive proactive tool use">
+                </div>
               </div>
-              <p style="color:var(--text-muted); font-size:0.78rem; margin-bottom:1rem;">
-                Toggle custom MCP tools ON/OFF for this roleplay session. Enabled + reachable servers let ${escapeHtml(activeChar.name)} call real tools mid-reply.
-              </p>
-              <div id="drawer-mcp-list" style="display:flex; flex-direction:column; gap:0.6rem;"></div>
+
+              <div id="drawer-mcp-servers-section">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem;">
+                  <div style="font-weight:700; font-size:0.9rem;">Active MCP Servers</div>
+                  <button class="btn btn-secondary btn-sm" id="btn-drawer-manage-mcp">Manage All MCP</button>
+                </div>
+                <p style="color:var(--text-muted); font-size:0.78rem; margin-bottom:1rem;">
+                  Toggle custom MCP tools ON/OFF for this roleplay session. Enabled + reachable servers let ${escapeHtml(activeChar.name)} call real tools mid-reply.
+                </p>
+                <div id="drawer-mcp-list" style="display:flex; flex-direction:column; gap:0.6rem;"></div>
+              </div>
             </div>
           </div>
         </div>
@@ -727,6 +930,39 @@ export class ChatView {
     await populateModelSelect();
     await renderDrawerMCPList();
 
+    // MCP master switch + Immersive Roleplay toggle (drawer copy - mirrors the
+    // same global settings surfaced on the home "MCP (Exp)" tab in mcpView.js).
+    const mcpGlobalToggle = container.querySelector('#drawer-mcp-global-toggle');
+    const mcpImmersiveToggle = container.querySelector('#drawer-mcp-immersive-toggle');
+    const mcpServersSection = container.querySelector('#drawer-mcp-servers-section');
+
+    const applyMcpMasterVisualState = (enabled) => {
+      if (mcpServersSection) {
+        mcpServersSection.style.opacity = enabled ? '1' : '0.5';
+        mcpServersSection.style.pointerEvents = enabled ? '' : 'none';
+      }
+      if (mcpImmersiveToggle) mcpImmersiveToggle.disabled = !enabled;
+    };
+
+    if (mcpGlobalToggle) {
+      mcpGlobalToggle.checked = await MCPStore.getGlobalEnabled();
+      applyMcpMasterVisualState(mcpGlobalToggle.checked);
+      mcpGlobalToggle.onchange = async (e) => {
+        await MCPStore.setGlobalEnabled(e.target.checked);
+        applyMcpMasterVisualState(e.target.checked);
+        Toast.info(`MCP Tools ${e.target.checked ? 'diaktifkan' : 'dinonaktifkan'} secara global.`);
+      };
+    }
+
+    if (mcpImmersiveToggle) {
+      mcpImmersiveToggle.checked = await MCPStore.getImmersiveRoleplay();
+      mcpImmersiveToggle.disabled = !mcpGlobalToggle?.checked;
+      mcpImmersiveToggle.onchange = async (e) => {
+        await MCPStore.setImmersiveRoleplay(e.target.checked);
+        Toast.info(`Immersive Roleplay ${e.target.checked ? 'diaktifkan' : 'dinonaktifkan'}.`);
+      };
+    }
+
     const manageMcpBtn = container.querySelector('#btn-drawer-manage-mcp');
     if (manageMcpBtn) {
       manageMcpBtn.onclick = () => {
@@ -940,9 +1176,7 @@ export class ChatView {
                 </div>
               ` : ''}
 
-              <div class="message-content" data-msgid="${m.id}">
-                ${this.formatRoleplayMarkdown(m.content, userName, charName)}
-              </div>
+              ${renderMessageBodyHTML(m, (t, u, c) => this.formatRoleplayMarkdown(t, u, c), userName, charName)}
 
               <div class="message-footer">
                 <div class="message-footer-actions">
@@ -984,33 +1218,43 @@ export class ChatView {
         const blockEl = messagesEl.querySelector(`.message-block[data-id="${messageId}"]`);
         if (!blockEl) return;
         const innerEl = blockEl.querySelector('.message-block-inner');
-        const contentEl = blockEl.querySelector('.message-content');
+        // The FIRST `.message-content` (there may be several if the fresh
+        // variation is segmented) - used only as the slide-animation anchor.
+        const anchorEl = blockEl.querySelector('.message-content');
         const counterEl = blockEl.querySelector('.swipe-counter');
         const freshMsg = await ChatStore.getMessageById(messageId);
-        if (!contentEl || !freshMsg) return;
+        if (!anchorEl || !freshMsg) return;
 
         const outClass = direction === 'next' ? 'msg-swipe-out-left' : 'msg-swipe-out-right';
         const inClass = direction === 'next' ? 'msg-swipe-out-right' : 'msg-swipe-out-left';
 
-        contentEl.classList.add('msg-swipe-anim', outClass);
+        anchorEl.classList.add('msg-swipe-anim', outClass);
         await new Promise(r => setTimeout(r, 180));
 
-        contentEl.innerHTML = this.formatRoleplayMarkdown(freshMsg.content);
         if (counterEl) {
           const count = freshMsg.swipes ? freshMsg.swipes.length : 1;
           counterEl.textContent = `${(freshMsg.swipeIndex || 0) + 1} / ${count}`;
         }
+        // Rebuilds the whole content area (may now have a different number of
+        // segments than the previous variation had) instead of just this one
+        // element's text - the old single-element innerHTML swap can't express
+        // "insert an inline marker between two text blocks".
+        syncMessageBody(innerEl, freshMsg, (t, u, c) => this.formatRoleplayMarkdown(t, u, c), userName, charName);
         // Creates/updates/removes the thinking/tool-trace blocks based on the
         // fresh variation's actual data, instead of leaving stale ones behind.
         syncThinkingBlock(innerEl, (freshMsg.thoughts || '').trim(), { streaming: false });
         syncToolTraceBlock(innerEl, Array.isArray(freshMsg.toolTrace) ? freshMsg.toolTrace : []);
         syncLiveToolBox(innerEl, []); // clear the transient live box now that the real trace is shown
 
-        contentEl.classList.remove(outClass);
-        contentEl.classList.add(inClass);
-        void contentEl.offsetWidth; // force reflow so the browser registers the jump before transitioning back
-        requestAnimationFrame(() => contentEl.classList.remove(inClass));
-        setTimeout(() => contentEl.classList.remove('msg-swipe-anim'), 220);
+        // `syncMessageBody` replaced `anchorEl` with fresh node(s) - re-find the
+        // (new) first one to finish the slide-in half of the animation on it.
+        const newAnchorEl = blockEl.querySelector('.message-content');
+        if (newAnchorEl) {
+          newAnchorEl.classList.add('msg-swipe-anim', inClass);
+          void newAnchorEl.offsetWidth; // force reflow so the browser registers the start position before transitioning
+          requestAnimationFrame(() => newAnchorEl.classList.remove(inClass));
+          setTimeout(() => newAnchorEl.classList.remove('msg-swipe-anim'), 220);
+        }
       };
 
       // Swipe event listeners directly on AI message controls
@@ -1025,8 +1269,12 @@ export class ChatView {
       messagesEl.querySelectorAll('.thinking-toggle').forEach(btn => {
         btn.onclick = () => {
           const block = btn.closest('.thinking-block, .tool-trace-block');
-          if (block) {
-            const isExpanded = block.classList.toggle('expanded');
+          if (!block) return;
+          const isExpanded = block.classList.toggle('expanded');
+          // Only a THINKING block drives the remembered collapse preference -
+          // opening a "Tools Used" block used to also flip it, so peeking at a
+          // tool result silently changed how every future thinking block opened.
+          if (block.classList.contains('thinking-block')) {
             isThinkingCollapsedDefault = !isExpanded;
             localStorage.setItem('aetheria_thinking_collapsed', isThinkingCollapsedDefault ? '1' : '0');
           }
@@ -1037,9 +1285,18 @@ export class ChatView {
       messagesEl.querySelectorAll('.btn-delete-message').forEach(btn => {
         btn.onclick = async () => {
           const msgId = btn.dataset.id;
-          if (confirm('Hapus pesan ini?')) {
-            await ChatStore.deleteMessage(msgId);
-            Toast.info('Pesan dihapus.');
+          // Deleting a user message cascades to the reply it generated, so say
+          // so up front instead of silently removing more than was clicked.
+          const msgIndex = msgs.findIndex(m => m.id === msgId);
+          const cascades = msgIndex !== -1
+            && msgs[msgIndex].role === 'user'
+            && msgs[msgIndex + 1]?.role === 'assistant';
+          const prompt = cascades
+            ? 'Hapus pesan ini beserta balasan AI yang dihasilkan darinya?'
+            : 'Hapus pesan ini?';
+          if (confirm(prompt)) {
+            const removed = await ChatStore.deleteMessage(msgId);
+            Toast.info(removed > 1 ? `${removed} pesan dihapus.` : 'Pesan dihapus.');
             await renderMessages();
           }
         };
@@ -1056,24 +1313,41 @@ export class ChatView {
           const msgId = btn.dataset.id;
           const msgObj = msgs.find(m => m.id === msgId);
           const blockEl = messagesEl.querySelector(`.message-block[data-id="${msgId}"]`);
-          const contentEl = blockEl?.querySelector('.message-content');
-          if (!msgObj || !contentEl) return;
-          const originalHTML = contentEl.innerHTML;
+          const innerEl = blockEl?.querySelector('.message-block-inner');
+          if (!msgObj || !innerEl) return;
 
-          contentEl.innerHTML = `
+          // A tool-using message can render as several `.message-content`/
+          // `.tool-inline-note` pairs (one per round, see renderMessageBodyHTML) -
+          // editing swaps ALL of them for one textarea over the full `content`,
+          // not just whichever segment happened to be the first DOM match.
+          const footerEl = innerEl.querySelector('.message-footer');
+          innerEl.querySelectorAll('.message-content, .tool-inline-note').forEach(el => el.remove());
+
+          const editorHost = document.createElement('div');
+          editorHost.className = 'message-content message-edit-host';
+          editorHost.innerHTML = `
             <textarea class="textarea message-edit-textarea">${escapeHtml(msgObj.content)}</textarea>
             <div class="message-edit-actions">
               <button class="btn btn-primary btn-sm btn-save-edit">Simpan</button>
               <button class="btn btn-secondary btn-sm btn-cancel-edit">Batal</button>
             </div>
           `;
-          const textarea = contentEl.querySelector('textarea');
+          if (footerEl) innerEl.insertBefore(editorHost, footerEl);
+          else innerEl.appendChild(editorHost);
+
+          const textarea = editorHost.querySelector('textarea');
           textarea.focus();
 
-          contentEl.querySelector('.btn-cancel-edit').onclick = () => {
-            contentEl.innerHTML = originalHTML;
+          // Cancel re-renders the message body from its still-unmodified store
+          // data (rather than restoring stashed HTML) so it's correct whether
+          // the message had one segment or several.
+          const restoreBody = () => {
+            editorHost.remove();
+            syncMessageBody(innerEl, msgObj, (t, u, c) => this.formatRoleplayMarkdown(t, u, c), userName, charName);
           };
-          contentEl.querySelector('.btn-save-edit').onclick = async () => {
+
+          editorHost.querySelector('.btn-cancel-edit').onclick = restoreBody;
+          editorHost.querySelector('.btn-save-edit').onclick = async () => {
             const newText = textarea.value.trim();
             if (!newText) {
               Toast.error('Pesan tidak boleh kosong.');
@@ -1159,6 +1433,7 @@ export class ChatView {
       const genSettings = await ProxyStore.getGenerationSettings();
       const globalPrompt = await ProxyStore.getGlobalSystemPrompt();
       const activeTools = await MCPToolRegistry.getActiveTools();
+      const immersiveRoleplay = await MCPStore.getImmersiveRoleplay();
 
       const promptPayload = applyPrefill(genSettings, PromptBuilder.buildPromptPayload({
         character: activeChar,
@@ -1166,7 +1441,8 @@ export class ChatView {
         globalSystemPrompt: globalPrompt,
         messages: currentMessages,
         contextLimit: genSettings.contextLimit || 20,
-        tools: activeTools
+        tools: activeTools,
+        immersiveRoleplay
       }));
 
       const messagesEl = container.querySelector('#messages-container');
@@ -1179,9 +1455,7 @@ export class ChatView {
             <img src="${escapeAttr(activeChar.avatar)}" class="message-avatar">
             <div class="message-sender-name">${escapeHtml(activeChar.name)}</div>
           </div>
-          <div class="message-content" id="typing-indicator-content" style="color:var(--text-dim);">
-            <em>${escapeHtml(activeChar.name)} sedang mengetik...</em>
-          </div>
+          <div id="typing-indicator-content"></div>
         </div>
       `;
       messagesEl.appendChild(typingIndicator);
@@ -1193,21 +1467,27 @@ export class ChatView {
       let liveThinking = '';
       let liveToolTrace = [];
       let liveToolCalls = []; // [{id, name, done}] - drives the live "Tools Used" box
-      // Tool calls from round(s) that had NO narration text of their own -
-      // many tool-calling models call a tool with empty content, which used
-      // to become its own near-blank message immediately followed by the
-      // real reply. Instead these accumulate here and get attached to
-      // whichever next message actually has text (or the final reply),
-      // merging what would otherwise be two messages into one.
-      let pendingToolTrace = [];
+      // Live-render-only state, separate from `liveContent` (which stays the
+      // full joined-so-far text, still needed for the final/abort-partial
+      // save): `liveSegments` is every round that's fully finished (tool call
+      // included, straight from AgentRunner's `onRoundComplete` payload),
+      // `currentRoundText` is just the round CURRENTLY streaming in, with no
+      // `tools` yet. Rendering these separately (via `renderLiveBodyHTML`) is
+      // what lets a tool marker appear the moment its round resolves, instead
+      // of only once the whole turn commits and `renderMessages()` re-renders
+      // from the persisted `toolSegments`.
+      let liveSegments = [];
+      let currentRoundText = liveContent;
+      const typingPlaceholderHTML = `<em style="color:var(--text-dim);">${escapeHtml(activeChar.name)} sedang mengetik...</em>`;
 
       const typingInnerEl = typingIndicator.querySelector('.message-block-inner');
       const typingContentEl = typingIndicator.querySelector('#typing-indicator-content');
+      typingContentEl.innerHTML = renderLiveBodyHTML(liveSegments, currentRoundText, typingPlaceholderHTML, (t) => this.formatRoleplayMarkdown(t));
 
       // Coalesce rapid/bursty chunk delivery into at most one DOM update per
       // ~50ms - see createThrottledRenderer's comment.
       const scheduleContentRender = createThrottledRenderer(() => {
-        typingContentEl.innerHTML = this.formatRoleplayMarkdown(liveContent);
+        typingContentEl.innerHTML = renderLiveBodyHTML(liveSegments, currentRoundText, typingPlaceholderHTML, (t) => this.formatRoleplayMarkdown(t));
         scrollToBottom(messagesEl);
       });
       const scheduleThinkingRender = createThrottledRenderer(() => {
@@ -1216,12 +1496,7 @@ export class ChatView {
       });
 
       try {
-        if (genSettings.streamingEnabled) {
-          typingContentEl.removeAttribute('style');
-          typingContentEl.innerHTML = liveContent ? this.formatRoleplayMarkdown(liveContent) : '';
-        }
-
-        const { content: finalContent, thinking: finalThinking } = await AgentRunner.run({
+        const { content: finalContent, thinking: finalThinking, toolTrace: finalToolTrace, segments: finalSegments } = await AgentRunner.run({
           proxy: proxyObj,
           initialPayload: promptPayload,
           settings: genSettings,
@@ -1232,6 +1507,7 @@ export class ChatView {
           callbacks: {
             onContentChunk: (delta) => {
               liveContent += delta;
+              currentRoundText += delta;
               scheduleContentRender();
             },
             onThinkingChunk: (delta) => {
@@ -1242,6 +1518,11 @@ export class ChatView {
               // Own live box, outside the thinking block, so it's never
               // confused with the model's actual reasoning - and never
               // overwrites the streamed reply text like it briefly did.
+              // Flush first: streaming has just paused for the tool call, so
+              // without this the lead-in text sits on screen missing whatever
+              // arrived in the last throttle window for the tool's whole runtime.
+              scheduleContentRender.flush();
+              scheduleThinkingRender.flush();
               liveToolCalls.push({ id: call.id, name: call.name, done: false });
               syncLiveToolBox(typingInnerEl, liveToolCalls);
               scrollToBottom(messagesEl);
@@ -1253,43 +1534,27 @@ export class ChatView {
               syncLiveToolBox(typingInnerEl, liveToolCalls);
               scrollToBottom(messagesEl);
             },
-            onIntermediateMessage: async ({ content, thinking, toolTrace: roundTrace }) => {
-              pendingToolTrace.push(...roundTrace);
-
-              // Claude-Code-style interleaving only makes sense when the model
-              // actually wrote something before calling the tool - many
-              // tool-calling models call with empty content, and splitting
-              // that into its own near-blank message just reads as a bug.
-              // When there's no real narration, keep the tool trace queued
-              // and fold it into whichever message comes next instead.
-              if (!content || !content.trim()) {
-                liveContent = '';
-                liveThinking = '';
-                liveToolTrace = [];
-                liveToolCalls = [];
-                syncThinkingBlock(typingInnerEl, '', { streaming: false });
-                syncLiveToolBox(typingInnerEl, []);
-                typingContentEl.removeAttribute('style');
-                typingContentEl.innerHTML = `<em>${escapeHtml(activeChar.name)} sedang mengetik...</em>`;
-                scrollToBottom(messagesEl);
-                return;
-              }
-
-              if (typingIndicator.parentNode) typingIndicator.remove();
-              await ChatStore.addMessage(currentChatId, 'assistant', content, thinking, [content], pendingToolTrace);
-              await renderMessages();
-              pendingToolTrace = [];
-
-              // Reset the shared typing-indicator element for the next round.
-              liveContent = '';
-              liveThinking = '';
-              liveToolTrace = [];
-              liveToolCalls = [];
-              syncThinkingBlock(typingInnerEl, '', { streaming: false });
-              syncLiveToolBox(typingInnerEl, []);
-              messagesEl.appendChild(typingIndicator);
-              typingContentEl.removeAttribute('style');
-              typingContentEl.innerHTML = `<em>${escapeHtml(activeChar.name)} sedang mengetik...</em>`;
+            onRoundComplete: ({ content, thinking, segments }) => {
+              // ONE message per user turn, however many tool rounds it takes.
+              // Re-seed the live buffers with everything accumulated so far
+              // (AgentRunner already joined the rounds with a blank line) and
+              // add the separator the next round's chunks will be appended
+              // after - so the pre-tool narration stays on screen and the
+              // post-tool text continues it, instead of the narration being
+              // replaced (it "disappeared") or the next round being glued onto
+              // a stale buffer with no separator (it read as duplicated text).
+              liveContent = content ? `${content}\n\n` : '';
+              liveThinking = thinking ? `${thinking}\n\n` : '';
+              // `segments` already has this round's own tool call(s) attached
+              // (AgentRunner built it before firing this callback) - adopt it
+              // wholesale as the new "committed" set and start the next
+              // round's text fresh, so the marker for the tool that JUST
+              // finished shows up right now instead of waiting for the turn
+              // to fully end.
+              liveSegments = segments || [];
+              currentRoundText = '';
+              scheduleContentRender.flush();
+              scheduleThinkingRender.flush();
               scrollToBottom(messagesEl);
             }
           }
@@ -1297,10 +1562,11 @@ export class ChatView {
 
         typingIndicator.remove();
 
-        // Any tool(s) used in earlier round(s) with no narration of their own
-        // are carried in `pendingToolTrace` and land on this final message;
-        // rounds that DID narrate were already committed separately above.
-        await ChatStore.addMessage(currentChatId, 'assistant', finalContent, finalThinking, [finalContent], pendingToolTrace);
+        // The single message for this whole turn: every round's narration
+        // (joined by AgentRunner) plus every tool call it made along the way,
+        // plus the per-round breakdown so the UI can place an inline marker at
+        // each round's actual tool-call boundary instead of one note at the end.
+        await ChatStore.addMessage(currentChatId, 'assistant', finalContent, finalThinking, [finalContent], finalToolTrace, finalSegments);
         await renderMessages();
 
         const updatedMessages = await ChatStore.getMessages(currentChatId);
@@ -1311,9 +1577,16 @@ export class ChatView {
       } catch (err) {
         typingIndicator.remove();
         if (err.name === 'AbortError') {
-          const combinedTrace = [...pendingToolTrace, ...liveToolTrace];
-          if (liveContent.trim() || combinedTrace.length) {
-            await ChatStore.addMessage(currentChatId, 'assistant', liveContent, liveThinking, [liveContent], combinedTrace);
+          // `liveContent`/`liveToolTrace` already span every round of this turn
+          // (re-seeded at each round boundary), so an abort mid-tool-loop still
+          // saves the earlier rounds' narration and tool calls, not just the last.
+          // No `toolSegments` passed here deliberately: `liveContent` may include
+          // a partial round's text beyond what the last `onRoundComplete` saw, so
+          // there's no authoritative segment breakdown for it - this partial save
+          // falls back to the old single-blob + trailing-note rendering, which is
+          // exactly what that fallback path exists for.
+          if (liveContent.trim() || liveToolTrace.length) {
+            await ChatStore.addMessage(currentChatId, 'assistant', liveContent, liveThinking, [liveContent], liveToolTrace);
             await renderMessages();
             Toast.info('Generasi dihentikan - jawaban sebagian tersimpan.');
           } else {
@@ -1466,6 +1739,7 @@ export class ChatView {
     const genSettings = await ProxyStore.getGenerationSettings();
     const globalPrompt = await ProxyStore.getGlobalSystemPrompt();
     const activeTools = await MCPToolRegistry.getActiveTools();
+    const immersiveRoleplay = await MCPStore.getImmersiveRoleplay();
 
     // History up to the message before this assistant message
     const historyBefore = msgs.slice(0, msgIndex);
@@ -1475,17 +1749,25 @@ export class ChatView {
       globalSystemPrompt: globalPrompt,
       messages: historyBefore,
       contextLimit: genSettings.contextLimit || 20,
-      tools: activeTools
+      tools: activeTools,
+      immersiveRoleplay
     }));
 
     activeAbortController = new AbortController();
     setGeneratingState(true);
 
     const messagesEl = document.getElementById('messages-container');
-    const contentEl = document.querySelector(`.message-content[data-msgid="${messageId}"]`);
     const blockInnerEl = document.querySelector(`.message-block[data-id="${messageId}"] .message-block-inner`);
+    const userName = activePersonaObj?.name || 'User';
+    const charName = activeChar?.name || 'Character';
 
-    // Remove any stale thinking/tool blocks from the previous variation before starting generation
+    // Remove any stale thinking/tool blocks AND the previous variation's whole
+    // content area before starting generation - a variation that involved tool
+    // calls may have left behind several `.message-content` segments + inline
+    // markers, not just one. A single fresh `.message-content` is (re)built
+    // below to hold the live streaming text; once the new variation is actually
+    // persisted, `onDone` -> `refreshMessageBlock` rebuilds the final (possibly
+    // re-segmented) DOM from the stored message.
     if (blockInnerEl) {
       const staleThinking = blockInnerEl.querySelector('.thinking-block');
       if (staleThinking) staleThinking.remove();
@@ -1493,11 +1775,26 @@ export class ChatView {
       if (staleTrace) staleTrace.remove();
       const staleLive = blockInnerEl.querySelector('.tool-live-block');
       if (staleLive) staleLive.remove();
+      blockInnerEl.querySelectorAll('.message-content, .tool-inline-note').forEach(el => el.remove());
+    }
+
+    // Wrapper host, not itself `.message-content` - a live variation can
+    // involve several `.message-content`/`.tool-inline-note` pairs once tool
+    // calls are involved (see `renderLiveBodyHTML`), same as a persisted
+    // multi-segment message does.
+    const contentHostEl = document.createElement('div');
+    if (blockInnerEl) {
+      const footerEl = blockInnerEl.querySelector('.message-footer');
+      if (footerEl) blockInnerEl.insertBefore(contentHostEl, footerEl);
+      else blockInnerEl.appendChild(contentHostEl);
     }
 
     const restoreOriginal = () => {
-      if (contentEl) contentEl.innerHTML = ChatView.formatRoleplayMarkdown(msg.content);
       if (blockInnerEl) {
+        // Rebuilds from the pre-swipe `msg` as-is (segmented if it already had
+        // `toolSegments`, same fallback rendering otherwise) - restoring the
+        // exact state the block was in before this swipe attempt started.
+        syncMessageBody(blockInnerEl, msg, (t, u, c) => ChatView.formatRoleplayMarkdown(t, u, c), userName, charName);
         syncThinkingBlock(blockInnerEl, (msg.thoughts || '').trim(), { streaming: false });
         syncToolTraceBlock(blockInnerEl, Array.isArray(msg.toolTrace) ? msg.toolTrace : []);
         syncLiveToolBox(blockInnerEl, []);
@@ -1507,11 +1804,18 @@ export class ChatView {
     let liveThinking = '';
     let liveToolTrace = [];
     let liveToolCalls = []; // [{id, name, done}] - drives the live "Tools Used" box
+    // See the matching declarations in `triggerAIGeneration` - `liveSegments`/
+    // `currentRoundText` drive the live inline-marker rendering, kept separate
+    // from `liveContent` (which stays the full joined-so-far text needed for
+    // the final/abort-partial swipe save).
+    let liveSegments = [];
+    let currentRoundText = liveContent;
+    const swipePlaceholderHTML = '<em style="color:var(--text-dim);">Menggenerasi variasi baru...</em>';
 
     // Coalesce rapid/bursty chunk delivery into at most one DOM update per
     // ~50ms - see createThrottledRenderer's comment.
     const scheduleContentRender = createThrottledRenderer(() => {
-      if (contentEl) contentEl.innerHTML = ChatView.formatRoleplayMarkdown(liveContent);
+      if (contentHostEl) contentHostEl.innerHTML = renderLiveBodyHTML(liveSegments, currentRoundText, swipePlaceholderHTML, (t) => ChatView.formatRoleplayMarkdown(t));
       scrollToBottom(messagesEl);
     });
     const scheduleThinkingRender = createThrottledRenderer(() => {
@@ -1520,13 +1824,19 @@ export class ChatView {
     });
 
     try {
-      if (genSettings.streamingEnabled && contentEl) {
-        contentEl.innerHTML = liveContent ? ChatView.formatRoleplayMarkdown(liveContent) : '';
-      } else if (contentEl) {
-        contentEl.innerHTML = '<em style="color:var(--text-dim);">Menggenerasi variasi baru...</em>';
+      // Non-streaming mode has nothing to progressively render (the whole
+      // reply arrives at once at the end), so this always just shows the
+      // placeholder wrapped the same way `renderLiveBodyHTML` would wrap real
+      // content - keeping `.message-content`'s own styling (font-size,
+      // line-height) rather than leaving the `<em>` as a bare, unstyled child
+      // of `contentHostEl`.
+      if (contentHostEl) {
+        contentHostEl.innerHTML = genSettings.streamingEnabled
+          ? renderLiveBodyHTML(liveSegments, currentRoundText, swipePlaceholderHTML, (t) => ChatView.formatRoleplayMarkdown(t))
+          : `<div class="message-content">${swipePlaceholderHTML}</div>`;
       }
 
-      const { content: newContent, thinking: newThinking, toolTrace } = await AgentRunner.run({
+      const { content: newContent, thinking: newThinking, toolTrace, segments: newSegments } = await AgentRunner.run({
         proxy: activeProxy,
         initialPayload: promptPayload,
         settings: genSettings,
@@ -1537,6 +1847,7 @@ export class ChatView {
         callbacks: {
           onContentChunk: (delta) => {
             liveContent += delta;
+            currentRoundText += delta;
             scheduleContentRender();
           },
           onThinkingChunk: (delta) => {
@@ -1545,7 +1856,11 @@ export class ChatView {
           },
           onToolExecuting: (call) => {
             // Own live box, outside the thinking block - never overwrites
-            // the streamed reply text in `contentEl`.
+            // the streamed reply text in `contentHostEl`. Flush first so the
+            // lead-in text isn't left missing its last throttle window's
+            // characters for the whole time the tool runs.
+            scheduleContentRender.flush();
+            scheduleThinkingRender.flush();
             liveToolCalls.push({ id: call.id, name: call.name, done: false });
             if (blockInnerEl) syncLiveToolBox(blockInnerEl, liveToolCalls);
             scrollToBottom(messagesEl);
@@ -1556,17 +1871,36 @@ export class ChatView {
             if (entry) entry.done = true;
             if (blockInnerEl) syncLiveToolBox(blockInnerEl, liveToolCalls);
             scrollToBottom(messagesEl);
+          },
+          onRoundComplete: ({ content, thinking, segments }) => {
+            // Same single-message rule as triggerAIGeneration. Previously the
+            // swipe path wired NO round-boundary callback at all, so round 2's
+            // chunks were concatenated straight onto round 1's still-displayed
+            // text with no separator (the "double chat" garbling) and the
+            // persisted variation then kept only the final round's text.
+            liveContent = content ? `${content}\n\n` : '';
+            liveThinking = thinking ? `${thinking}\n\n` : '';
+            liveSegments = segments || [];
+            currentRoundText = '';
+            scheduleContentRender.flush();
+            scheduleThinkingRender.flush();
+            scrollToBottom(messagesEl);
           }
         }
       });
 
       const updatedSwipes = [...(msg.swipes || [msg.content]), newContent];
       const newIndex = updatedSwipes.length - 1;
-      await ChatStore.updateMessageSwipes(messageId, updatedSwipes, newIndex, newThinking, toolTrace);
+      await ChatStore.updateMessageSwipes(messageId, updatedSwipes, newIndex, newThinking, toolTrace, newSegments);
       onDone();
     } catch (err) {
       if (err.name === 'AbortError') {
         if (liveContent.trim()) {
+          // No `toolSegments` passed here, same reasoning as the abort-partial
+          // path in `triggerAIGeneration`: `liveContent` may include a partial
+          // round's text beyond what the last `onRoundComplete` saw, so there's
+          // no authoritative segment breakdown - falls back to the old
+          // single-blob + trailing-note rendering.
           const updatedSwipes = [...(msg.swipes || [msg.content]), liveContent];
           const newIndex = updatedSwipes.length - 1;
           await ChatStore.updateMessageSwipes(messageId, updatedSwipes, newIndex, liveThinking, liveToolTrace);
