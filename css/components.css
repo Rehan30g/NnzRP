@@ -609,7 +609,16 @@ input[type="color"] {
    page; with tabs it has to stay reachable from whichever tab you're editing.
    Hidden entirely on the Proxies and Data tabs, whose controls save themselves
    (see `savebarEl` handling in settingsView.js's switchTab) - a Save button
-   that does nothing for the visible panel reads as broken. */
+   that does nothing for the visible panel reads as broken.
+
+   Solid background, not a transparent-to-opaque gradient: a fade only reads
+   as a graceful transition for plain text scrolling under it - real content
+   (card borders, colour swatches, buttons) partially visible through the
+   transparent portion instead just looked like the last card was glitching/
+   bleeding through the bar (reported as content "piercing through" on Save).
+   A flat opaque bar + top border + shadow is the standard sticky-toolbar
+   treatment and has no viewport-height-dependent failure mode - it looks the
+   same whether the tab's content is one card taller than the window or five. */
 .settings-savebar {
   position: sticky;
   bottom: 0;
@@ -620,7 +629,9 @@ input[type="color"] {
   flex-wrap: wrap;
   padding: 0.9rem 0;
   margin-top: 1.5rem;
-  background: linear-gradient(to bottom, transparent, var(--bg-primary) 45%);
+  background: var(--bg-primary);
+  border-top: 1px solid var(--border-light);
+  box-shadow: 0 -4px 12px rgba(15, 23, 42, 0.06);
 }
 
 /* Accent colour swatch picker (Settings -> Appearance) */
