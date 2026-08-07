@@ -83,14 +83,14 @@ export class MCPView {
 
                 <p style="color:var(--text-muted); font-size:0.85rem; margin-bottom:1rem;">${escapeHtml(s.description) || 'Tidak ada deskripsi.'}</p>
 
-                <div style="display:flex; justify-content:space-between; gap:0.5rem; border-top:1px solid var(--border-light); padding-top:0.8rem;">
+                <div style="display:flex; flex-direction:column; gap:0.5rem; border-top:1px solid var(--border-light); padding-top:0.8rem;">
                   <div style="display:flex; gap:0.4rem;">
-                    <button class="btn btn-secondary btn-sm btn-check-mcp-status" data-id="${s.id}">Check Status</button>
-                    <button class="btn btn-secondary btn-sm btn-mcp-perms" data-id="${s.id}">Tool Permissions</button>
+                    <button class="btn btn-secondary btn-sm btn-check-mcp-status" data-id="${s.id}" style="flex:1;">Check Status</button>
+                    <button class="btn btn-secondary btn-sm btn-mcp-perms" data-id="${s.id}" style="flex:1;">Tool Permissions</button>
                   </div>
                   <div style="display:flex; gap:0.4rem;">
-                    <button class="btn btn-secondary btn-sm btn-edit-mcp" data-id="${s.id}">Edit</button>
-                    <button class="btn btn-danger btn-sm btn-del-mcp" data-id="${s.id}">Delete</button>
+                    <button class="btn btn-secondary btn-sm btn-edit-mcp" data-id="${s.id}" style="flex:1;">Edit</button>
+                    <button class="btn btn-danger btn-sm btn-del-mcp" data-id="${s.id}" style="flex:1;">Delete</button>
                   </div>
                 </div>
 

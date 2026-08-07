@@ -314,7 +314,23 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
+  /* The redesign's bigger buttons made 2-3 of them fight the title/description
+     text for room on one line (worst on Proxies, now embedded in a narrower
+     Settings tab rather than a full page) - wrapping the whole action group
+     onto its own line, rather than shrinking it into a cramped column next to
+     the text, is what actually fixes that instead of just hiding it at one
+     viewport width. */
+  flex-wrap: wrap;
+  row-gap: 0.75rem;
   margin-bottom: 1.5rem;
+}
+
+.view-header-row > *:first-child {
+  /* Lets the title+description block actually shrink/wrap instead of forcing
+     the action buttons into whatever sliver of width is left over - a flex
+     item's default min-width is its content's width, not 0. */
+  min-width: 0;
+  flex: 1 1 320px;
 }
 
 .mobile-toggle {
