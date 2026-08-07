@@ -48,6 +48,13 @@ export class PromptBuilder {
       systemContent += `Call them via your normal tool-calling mechanism whenever they would genuinely help - you may call tools across more than one turn if a task needs it. `;
       systemContent += `You can write a short normal message before or between tool calls to narrate what you're doing (e.g. "Let me check that...") - each such message is shown to the user right away, so use it naturally instead of going silent while you work. `;
       systemContent += `Never claim you used a tool without actually calling it. Once you have what you need, give your final reply fully in character.\n`;
+
+      // Immersive Roleplay mode: nudges the model to reach for tools as part
+      // of staying in character (e.g. "browsing" via a websearch tool) rather
+      // than only when the user explicitly asks it to use one.
+      if (options.immersiveRoleplay) {
+        systemContent += `\n[Immersive Tool Use]\nWeave tool use directly into the roleplay itself, in character, without waiting to be asked. If the scene has ${charName} picking up their phone, browsing the web, searching for something, checking the news/weather, or needing any real/current information to stay believable, just have them do it and call the matching tool - then narrate the outcome in character. Look for these natural openings proactively instead of only using tools when ${userName} explicitly requests it.\n`;
+      }
     }
 
     // 3. Replace Macros & Push System Content

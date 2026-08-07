@@ -26,6 +26,9 @@ export class MCPToolRegistry {
    * broken MCP server can't take down an entire roleplay generation.
    */
   static async getActiveTools() {
+    const globalEnabled = await MCPStore.getGlobalEnabled();
+    if (!globalEnabled) return [];
+
     const servers = await MCPStore.getEnabledServers();
     const result = [];
 

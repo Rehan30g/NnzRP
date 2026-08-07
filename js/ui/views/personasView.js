@@ -2,6 +2,7 @@
 import { PersonaStore } from '../../storage/personaStore.js';
 import { Modal } from '../components/modal.js';
 import { Toast } from '../components/toast.js';
+import { renderAvatarPickerHTML, wireAvatarPicker } from '../components/avatarPicker.js';
 import { escapeHtml, escapeAttr } from '../../utils/sanitize.js';
 
 export class PersonasView {
@@ -85,10 +86,7 @@ export class PersonasView {
           <input class="input" id="persona-name" value="${escapeAttr(data.name)}" required placeholder="e.g. Detective Miller / Adventurer">
         </div>
 
-        <div class="form-group">
-          <label class="form-label">Avatar Image URL</label>
-          <input class="input" id="persona-avatar" value="${escapeAttr(data.avatar)}" placeholder="https://...">
-        </div>
+        ${renderAvatarPickerHTML('persona-avatar', data.avatar)}
 
         <div class="form-group">
           <label class="form-label">Persona Description & Bio</label>
@@ -102,7 +100,7 @@ export class PersonasView {
       </form>
     `;
 
-    Modal.open({
+    const overlay = Modal.open({
       title: isEdit ? `Edit Persona: ${escapeHtml(data.name)}` : 'Create New Persona',
       contentHTML,
       buttons: [
@@ -146,6 +144,8 @@ export class PersonasView {
         }
       ]
     });
+
+    wireAvatarPicker(overlay, 'persona-avatar');
   }
 }
 

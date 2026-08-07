@@ -28,47 +28,66 @@ export class MCPView {
         </p>
       </div>
 
-      ${servers.length === 0 ? `
-        <div class="card" style="text-align:center; padding:3rem 1.5rem; color:var(--text-muted);">
-          <h3 style="font-size:1.1rem; margin-bottom:0.5rem; color:var(--text-main);">Belum ada MCP Server</h3>
-          <p style="font-size:0.88rem; max-width:480px; margin:0 auto 1.25rem;">Tambahkan server MCP baru atau paste konfigurasi <code>mcp_config.json</code> yang sudah ada.</p>
+      <div class="card" style="margin-bottom:1.5rem; display:flex; flex-direction:column; gap:0.85rem;">
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:1rem;">
+          <div>
+            <div style="font-weight:700; font-size:0.95rem;">MCP Tools</div>
+            <div style="font-size:0.78rem; color:var(--text-muted); margin-top:0.15rem;">Master switch - turns all MCP tool-calling on/off across every chat. Same switch is also in the chat drawer's MCP tab.</div>
+          </div>
+          <input type="checkbox" id="mcp-global-toggle" title="Enable MCP tools globally">
         </div>
-      ` : `
-        <div class="grid-cards">
-          ${servers.map(s => `
-            <div class="card" data-id="${s.id}" style="border-color:${s.enabled ? 'var(--accent-primary)' : 'var(--border-light)'};">
-              <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:0.6rem;">
-                <div>
-                  <h3 style="font-size:1.05rem; margin-bottom:0.3rem;">${escapeHtml(s.name)}</h3>
-                  <div style="display:flex; gap:0.4rem; flex-wrap:wrap;">
-                    <span class="badge badge-cyan">${s.transport === 'command' ? 'STDIO' : 'HTTP'}</span>
-                    <span class="badge" id="status-badge-${s.id}">Unknown</span>
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:1rem; border-top:1px solid var(--border-light); padding-top:0.75rem;">
+          <div>
+            <div style="font-weight:700; font-size:0.95rem;">Immersive Roleplay</div>
+            <div style="font-size:0.78rem; color:var(--text-muted); margin-top:0.15rem;">Tells the model to proactively use connected tools in-character (e.g. a websearch tool while a character is browsing, or to pull up-to-date info during the scene) instead of only calling them when explicitly asked.</div>
+          </div>
+          <input type="checkbox" id="mcp-immersive-toggle" title="Enable immersive proactive tool use">
+        </div>
+      </div>
+
+      <div id="mcp-servers-section">
+        ${servers.length === 0 ? `
+          <div class="card" style="text-align:center; padding:3rem 1.5rem; color:var(--text-muted);">
+            <h3 style="font-size:1.1rem; margin-bottom:0.5rem; color:var(--text-main);">Belum ada MCP Server</h3>
+            <p style="font-size:0.88rem; max-width:480px; margin:0 auto 1.25rem;">Tambahkan server MCP baru atau paste konfigurasi <code>mcp_config.json</code> yang sudah ada.</p>
+          </div>
+        ` : `
+          <div class="grid-cards">
+            ${servers.map(s => `
+              <div class="card" data-id="${s.id}" style="border-color:${s.enabled ? 'var(--accent-primary)' : 'var(--border-light)'};">
+                <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:0.6rem;">
+                  <div>
+                    <h3 style="font-size:1.05rem; margin-bottom:0.3rem;">${escapeHtml(s.name)}</h3>
+                    <div style="display:flex; gap:0.4rem; flex-wrap:wrap;">
+                      <span class="badge badge-cyan">${s.transport === 'command' ? 'STDIO' : 'HTTP'}</span>
+                      <span class="badge" id="status-badge-${s.id}">Unknown</span>
+                    </div>
+                  </div>
+                  <div style="display:flex; align-items:center; gap:0.4rem;">
+                    <input type="checkbox" class="mcp-enabled-check" data-id="${s.id}" ${s.enabled ? 'checked' : ''} title="Enable this server for roleplay sessions">
                   </div>
                 </div>
-                <div style="display:flex; align-items:center; gap:0.4rem;">
-                  <input type="checkbox" class="mcp-enabled-check" data-id="${s.id}" ${s.enabled ? 'checked' : ''} title="Enable this server for roleplay sessions">
+
+                <div style="font-size:0.78rem; color:var(--text-muted); font-family:var(--font-mono); word-break:break-all; margin-bottom:0.6rem;">
+                  ${s.transport === 'command'
+                    ? escapeHtml(`${s.command || ''} ${(s.args || []).join(' ')}`.trim() || '-')
+                    : escapeHtml(s.endpointUrl || '-')}
+                </div>
+
+                <p style="color:var(--text-muted); font-size:0.85rem; margin-bottom:1rem;">${escapeHtml(s.description) || 'Tidak ada deskripsi.'}</p>
+
+                <div style="display:flex; justify-content:space-between; gap:0.5rem; border-top:1px solid var(--border-light); padding-top:0.8rem;">
+                  <button class="btn btn-secondary btn-sm btn-check-mcp-status" data-id="${s.id}">Check Status</button>
+                  <div style="display:flex; gap:0.4rem;">
+                    <button class="btn btn-secondary btn-sm btn-edit-mcp" data-id="${s.id}">Edit</button>
+                    <button class="btn btn-danger btn-sm btn-del-mcp" data-id="${s.id}">Delete</button>
+                  </div>
                 </div>
               </div>
-
-              <div style="font-size:0.78rem; color:var(--text-muted); font-family:var(--font-mono); word-break:break-all; margin-bottom:0.6rem;">
-                ${s.transport === 'command'
-                  ? escapeHtml(`${s.command || ''} ${(s.args || []).join(' ')}`.trim() || '-')
-                  : escapeHtml(s.endpointUrl || '-')}
-              </div>
-
-              <p style="color:var(--text-muted); font-size:0.85rem; margin-bottom:1rem;">${escapeHtml(s.description) || 'Tidak ada deskripsi.'}</p>
-
-              <div style="display:flex; justify-content:space-between; gap:0.5rem; border-top:1px solid var(--border-light); padding-top:0.8rem;">
-                <button class="btn btn-secondary btn-sm btn-check-mcp-status" data-id="${s.id}">Check Status</button>
-                <div style="display:flex; gap:0.4rem;">
-                  <button class="btn btn-secondary btn-sm btn-edit-mcp" data-id="${s.id}">Edit</button>
-                  <button class="btn btn-danger btn-sm btn-del-mcp" data-id="${s.id}">Delete</button>
-                </div>
-              </div>
-            </div>
-          `).join('')}
-        </div>
-      `}
+            `).join('')}
+          </div>
+        `}
+      </div>
     `;
 
     container.querySelector('#btn-add-mcp').onclick = () => {
@@ -76,6 +95,35 @@ export class MCPView {
     };
     container.querySelector('#btn-edit-mcp-json').onclick = () => {
       MCPView.openJSONEditorModal(() => MCPView.render(container));
+    };
+
+    // MCP master switch + Immersive Roleplay toggle - global settings, also
+    // mirrored in the chat drawer's MCP tab (chatView.js).
+    const globalToggle = container.querySelector('#mcp-global-toggle');
+    const immersiveToggle = container.querySelector('#mcp-immersive-toggle');
+    const serversSection = container.querySelector('#mcp-servers-section');
+
+    const applyMasterVisualState = (enabled) => {
+      if (serversSection) {
+        serversSection.style.opacity = enabled ? '1' : '0.5';
+        serversSection.style.pointerEvents = enabled ? '' : 'none';
+      }
+      if (immersiveToggle) immersiveToggle.disabled = !enabled;
+    };
+
+    globalToggle.checked = await MCPStore.getGlobalEnabled();
+    applyMasterVisualState(globalToggle.checked);
+    globalToggle.onchange = async (e) => {
+      await MCPStore.setGlobalEnabled(e.target.checked);
+      applyMasterVisualState(e.target.checked);
+      Toast.info(`MCP Tools ${e.target.checked ? 'diaktifkan' : 'dinonaktifkan'} secara global.`);
+    };
+
+    immersiveToggle.checked = await MCPStore.getImmersiveRoleplay();
+    immersiveToggle.disabled = !globalToggle.checked;
+    immersiveToggle.onchange = async (e) => {
+      await MCPStore.setImmersiveRoleplay(e.target.checked);
+      Toast.info(`Immersive Roleplay ${e.target.checked ? 'diaktifkan' : 'dinonaktifkan'}.`);
     };
 
     container.querySelectorAll('.mcp-enabled-check').forEach(chk => {

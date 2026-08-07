@@ -74,6 +74,37 @@ export class MCPStore {
   }
 
   /**
+   * Global master switch for MCP tool-calling, independent of individual
+   * server `enabled` flags - lets the user kill all tool use app-wide (from
+   * either the home MCP tab or the chat drawer) without having to toggle
+   * every server back on again later. Defaults to true so existing setups
+   * with servers already configured keep working exactly as before.
+   */
+  static async getGlobalEnabled() {
+    const record = await db.get('settings', 'mcpGlobalEnabled');
+    return record && typeof record.value === 'boolean' ? record.value : true;
+  }
+
+  static async setGlobalEnabled(enabled) {
+    await db.put('settings', { key: 'mcpGlobalEnabled', value: !!enabled });
+  }
+
+  /**
+   * "Immersive Roleplay" - when on, the prompt tells the model to proactively
+   * reach for connected MCP tools as part of staying in character (e.g. using
+   * a websearch tool when the character is browsing) instead of only calling
+   * tools when explicitly asked. Off by default (opt-in behavior change).
+   */
+  static async getImmersiveRoleplay() {
+    const record = await db.get('settings', 'mcpImmersiveRoleplay');
+    return record && typeof record.value === 'boolean' ? record.value : false;
+  }
+
+  static async setImmersiveRoleplay(enabled) {
+    await db.put('settings', { key: 'mcpImmersiveRoleplay', value: !!enabled });
+  }
+
+  /**
    * Convert stored MCP servers array into standard mcp_config.json format string.
    * Stdio servers get { command, args, env }; HTTP servers get { url, type: 'http' }
    * - the same shape used by Claude Desktop / Cursor / VS Code mcp.json files.

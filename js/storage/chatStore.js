@@ -75,6 +75,7 @@ export class ChatStore {
         swipeIndex: source.swipeIndex,
         swipes: source.swipes,
         toolTrace: source.toolTrace || [],
+        toolSegments: source.toolSegments || [],
         createdAt: source.createdAt
       };
       await db.put('messages', copy);
@@ -101,7 +102,18 @@ export class ChatStore {
     return await db.get('messages', messageId);
   }
 
-  static async addMessage(chatId, role, content, thoughts = '', swipes = [], toolTrace = []) {
+  /**
+   * @param {Array} [toolSegments] - optional per-round breakdown of `toolTrace`
+   *   (`AgentRunner.run()`'s `segments` return value: `[{text, tools}, ...]`),
+   *   letting the UI place an inline "tool used here" marker at the exact point
+   *   within `content` a round called a tool, instead of only being able to show
+   *   one note below the whole (already-joined) message. Purely additive and
+   *   optional - `content`/`toolTrace` keep their existing shape/meaning exactly
+   *   as before, since other code (prompt history, editing, forking, search)
+   *   depends on those. Same single-current-variation limitation as `thoughts`/
+   *   `toolTrace` - not retained per past swipe, see CLAUDE.md.
+   */
+  static async addMessage(chatId, role, content, thoughts = '', swipes = [], toolTrace = [], toolSegments = []) {
     const now = Date.now();
     const message = {
       id: `msg-${now}-${Math.random().toString(36).substr(2, 4)}`,
@@ -112,6 +124,7 @@ export class ChatStore {
       swipeIndex: 0,
       swipes: swipes.length ? swipes : [content],
       toolTrace: toolTrace || [],
+      toolSegments: toolSegments || [],
       createdAt: now
     };
     await db.put('messages', message);
@@ -123,7 +136,7 @@ export class ChatStore {
     return message;
   }
 
-  static async updateMessageSwipes(messageId, swipes, activeIndex, thoughts = '', toolTrace = []) {
+  static async updateMessageSwipes(messageId, swipes, activeIndex, thoughts = '', toolTrace = [], toolSegments = []) {
     const message = await db.get('messages', messageId);
     if (!message) return;
     const content = swipes[activeIndex] || message.content;
@@ -132,6 +145,7 @@ export class ChatStore {
     message.content = content;
     message.thoughts = thoughts;
     message.toolTrace = toolTrace || [];
+    message.toolSegments = toolSegments || [];
     await db.put('messages', message);
   }
 
@@ -142,10 +156,43 @@ export class ChatStore {
     swipes[message.swipeIndex || 0] = content;
     message.content = content;
     message.swipes = swipes;
+    // toolSegments records WHERE inside the old text each tool was called -
+    // editing the text invalidates those boundaries, so drop them rather than
+    // render stale segment text that no longer matches `content`. The flat
+    // `toolTrace` (and its single below-message note) is untouched and still
+    // valid since it doesn't depend on knowing the internal split.
+    message.toolSegments = [];
     await db.put('messages', message);
   }
 
+  /**
+   * Deletes a message. Deleting a USER message also cascades to the assistant
+   * reply/replies it produced - every assistant message directly following it,
+   * up to (not including) the next user message. Leaving those behind orphaned
+   * a reply under an unrelated turn, which then also poisoned the next prompt's
+   * history. One user turn maps to exactly one assistant message, so this
+   * normally removes a single reply.
+   * @returns {Promise<number>} how many messages were deleted in total.
+   */
   static async deleteMessage(messageId) {
+    const message = await db.get('messages', messageId);
+    if (!message) return 0;
+
+    // Snapshot ordering BEFORE deleting, so the walk-forward is unaffected by
+    // the deletion and is safe against two messages sharing a `createdAt` ms.
+    const siblings = await this.getMessages(message.chatId);
+    const index = siblings.findIndex(m => m.id === messageId);
+
     await db.delete('messages', messageId);
+    let deleted = 1;
+
+    if (message.role !== 'user' || index === -1) return deleted;
+
+    for (let i = index + 1; i < siblings.length; i++) {
+      if (siblings[i].role !== 'assistant') break;
+      await db.delete('messages', siblings[i].id);
+      deleted++;
+    }
+    return deleted;
   }
 }

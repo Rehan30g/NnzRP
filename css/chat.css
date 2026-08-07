@@ -552,6 +552,52 @@
   display: block;
 }
 
+/* Small always-visible "which MCP tool(s) were called at this exact point in
+   the message" marker. Complements (does not replace) the collapsible
+   `.tool-trace-block` above the text: that one holds the full args/results
+   and stays collapsed, this one is a one-glance label that needs no click.
+   Deliberately quiet - dim slate, small, no border/background - so it reads
+   as a footnote rather than another box. Renders once per tool-calling round
+   at the exact boundary between that round's pre-tool and post-tool text
+   (see `renderMessageBodyHTML`/`toolSegments` in chatView.js) - so it needs
+   even spacing on BOTH sides, not just trailing a single block of text like
+   the old whole-message-note placement did. */
+.tool-inline-note {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.3rem;
+  margin-bottom: 0.3rem;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  line-height: 1.3;
+}
+
+/* `.message-content` has no padding/border, so a `marked.parse()`-generated
+   paragraph's browser-default ~1em bottom/top margin escapes it and collapses
+   with `.tool-inline-note`'s own (much smaller) margin - the larger one wins,
+   so the note ends up sitting noticeably further from the text than its own
+   0.3rem suggests. Zero the touching edges explicitly so the visible gap is
+   controlled purely by `.tool-inline-note`'s own margin. */
+.message-content:has(+ .tool-inline-note) > :last-child {
+  margin-bottom: 0;
+}
+
+.tool-inline-note + .message-content > :first-child {
+  margin-top: 0;
+}
+
+.tool-inline-note svg {
+  flex-shrink: 0;
+  width: 11px;
+  height: 11px;
+  opacity: 0.85;
+}
+
+.tool-inline-note span {
+  overflow-wrap: anywhere;
+}
+
 /* Live "Tools Used" box shown mid-generation while tool calls are actually
    executing - separate from the thinking block on purpose (was previously
    merged into it, which read as buried/easy to miss), with its own violet
