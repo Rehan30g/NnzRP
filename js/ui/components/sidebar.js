@@ -18,7 +18,7 @@ export class Sidebar {
         <div class="brand-wrapper">
           <img src="src/icon.png" class="pixel-art" style="width:36px; height:36px; flex-shrink:0;" alt="NnzRP Icon">
           <div class="brand-text">
-            <div style="font-weight:800; font-size:1.1rem; background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); -webkit-background-clip:text; -webkit-text-fill-color:transparent;">NnzRP</div>
+            <div style="font-weight:800; font-size:1.1rem; background: linear-gradient(135deg, var(--brand-gradient-from) 0%, var(--brand-gradient-to) 100%); -webkit-background-clip:text; -webkit-text-fill-color:transparent;">NnzRP</div>
           </div>
         </div>
         <button class="sidebar-toggle-btn" id="btn-collapse-sidebar" title="${isCollapsed ? 'Expand Sidebar' : 'Collapse Sidebar'}">
@@ -44,14 +44,12 @@ export class Sidebar {
           <span class="nav-label">User Personas</span>
         </div>
 
-        <div class="nav-item ${activeView === 'proxies' ? 'active' : ''}" data-view="proxies" data-tooltip="Multi-Proxy Config">
-          <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path></svg>
-          <span class="nav-label">Multi-Proxy Config</span>
-        </div>
-
-        <div class="nav-item ${activeView === 'settings' ? 'active' : ''}" data-view="settings" data-tooltip="Global Settings">
+        <!-- The former standalone "Multi-Proxy Config" item lived here. It is now
+             the "Proxies" tab inside Settings; #proxies still resolves (as a
+             redirect into that tab) for old bookmarks - see App.parseHash(). -->
+        <div class="nav-item ${activeView === 'settings' ? 'active' : ''}" data-view="settings" data-tooltip="Settings">
           <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path></svg>
-          <span class="nav-label">Global Settings</span>
+          <span class="nav-label">Settings</span>
         </div>
 
         <div class="nav-item ${activeView === 'mcp' ? 'active' : ''}" data-view="mcp" data-tooltip="Custom MCP (Exp)">

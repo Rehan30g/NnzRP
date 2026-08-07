@@ -14,6 +14,8 @@ import { Toast } from '../components/toast.js';
 import { ProxiesView } from './proxiesView.js';
 import { SettingsView } from './settingsView.js';
 import { MCPView } from './mcpView.js';
+import { dropdownHTML, wireDropdown, setDropdownOptions, setDropdownDisabled } from '../components/dropdown.js';
+import { toggleSwitchHTML, toggleRowHTML } from '../components/toggle.js';
 import { escapeHtml, escapeAttr } from '../../utils/sanitize.js';
 import { extractThinking } from '../../utils/thinkingParser.js';
 import { replaceMacros } from '../../utils/macroReplacer.js';
@@ -710,14 +712,22 @@ export class ChatView {
           <!-- Chat Input Container (Clean Floating Box) -->
           <div class="chat-input-container">
             <div class="chat-input-wrapper">
-              <div class="queued-message-indicator hidden" id="queued-message-indicator" style="display:flex; align-items:center; gap:0.5rem; padding:0.4rem 0.75rem; margin-bottom:0.4rem; background:#eef2ff; border:1px solid var(--border-light); border-radius:var(--radius-md); font-size:0.78rem; color:var(--text-accent);">
+              <div class="queued-message-indicator hidden" id="queued-message-indicator" style="display:flex; align-items:center; gap:0.5rem; padding:0.4rem 0.75rem; margin-bottom:0.4rem; background:var(--accent-primary-softer); border:1px solid var(--border-light); border-radius:var(--radius-md); font-size:0.78rem; color:var(--text-accent);">
                 <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="flex-shrink:0;"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
                 <span id="queued-message-text" style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"></span>
                 <button type="button" id="btn-cancel-queued" title="Batalkan" aria-label="Batalkan pesan yang diantrikan" style="background:none; border:none; cursor:pointer; color:var(--text-accent); font-size:1rem; line-height:1; padding:0 0.2rem;">&times;</button>
               </div>
               <textarea class="chat-textarea" id="chat-input" rows="2" placeholder="Type action (*looks around*) or dialogue (&quot;Hello...&quot;)... (Shift+Enter for new line)"></textarea>
               <div class="chat-input-toolbar" style="justify-content:space-between;">
-                <select class="select" id="chat-model-select" title="Active Model" aria-label="Active Model" style="max-width:220px; font-size:0.78rem; padding:0.3rem 0.6rem; height:auto;"></select>
+                ${dropdownHTML({
+                  id: 'chat-model-select',
+                  options: [],
+                  title: 'Active Model',
+                  ariaLabel: 'Active Model',
+                  small: true,
+                  placeholder: 'No Proxy',
+                  wrapperStyle: 'max-width:260px; width:auto; min-width:150px;'
+                })}
                 <button class="btn-send-icon" id="btn-send-message" title="Send Message" aria-label="Send Message">
                   <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"></path></svg>
                 </button>
@@ -749,19 +759,19 @@ export class ChatView {
               <!-- Player Persona Switcher -->
               <div class="form-group">
                 <label class="form-label">Player Persona</label>
-                <select class="select" id="drawer-persona-select"></select>
+                ${dropdownHTML({ id: 'drawer-persona-select', options: [], placeholder: 'No personas' })}
               </div>
 
               <!-- AI Proxy Switcher -->
               <div class="form-group">
                 <label class="form-label">Active AI Proxy</label>
-                <select class="select" id="drawer-proxy-select"></select>
+                ${dropdownHTML({ id: 'drawer-proxy-select', options: [], placeholder: 'No proxies' })}
               </div>
 
               <!-- System Prompt Preset Switcher -->
               <div class="form-group">
                 <label class="form-label">System Prompt Preset</label>
-                <select class="select" id="drawer-preset-select"></select>
+                ${dropdownHTML({ id: 'drawer-preset-select', options: [], placeholder: '-- Select System Prompt Preset --' })}
               </div>
 
               <!-- Chat Font Size Selector -->
@@ -776,8 +786,8 @@ export class ChatView {
 
               <!-- Quick Config Shortcuts -->
               <div style="display:flex; flex-direction:column; gap:0.5rem; margin-top:0.25rem;">
-                <button class="btn btn-secondary btn-sm" id="btn-open-proxies-config" style="width:100%;">Multi-Proxy Config</button>
-                <button class="btn btn-secondary btn-sm" id="btn-open-global-settings" style="width:100%;">Global Settings</button>
+                <button class="btn btn-secondary btn-sm" id="btn-open-proxies-config" style="width:100%;">Proxy Profiles</button>
+                <button class="btn btn-secondary btn-sm" id="btn-open-global-settings" style="width:100%;">Settings</button>
               </div>
 
               <!-- Character Summary Card -->
@@ -797,20 +807,20 @@ export class ChatView {
 
             <!-- Tab 3 Content: Custom MCP Tools (Experimental) -->
             <div class="drawer-body hidden" id="tab-content-mcp">
-              <div class="card" style="padding:0.85rem; margin-bottom:1rem; display:flex; flex-direction:column; gap:0.75rem;">
-                <div style="display:flex; justify-content:space-between; align-items:center; gap:0.75rem;">
-                  <div>
-                    <div style="font-weight:700; font-size:0.85rem;">MCP Tools</div>
-                    <div style="font-size:0.72rem; color:var(--text-muted); margin-top:0.15rem;">Master switch - turns all MCP tool-calling on/off across the whole app.</div>
-                  </div>
-                  <input type="checkbox" id="drawer-mcp-global-toggle" title="Enable MCP tools globally">
-                </div>
-                <div style="display:flex; justify-content:space-between; align-items:center; gap:0.75rem; border-top:1px solid var(--border-light); padding-top:0.65rem;">
-                  <div>
-                    <div style="font-weight:700; font-size:0.85rem;">Immersive Roleplay</div>
-                    <div style="font-size:0.72rem; color:var(--text-muted); margin-top:0.15rem;">${escapeHtml(activeChar.name)} proactively uses tools in-character (e.g. websearch while browsing) without being explicitly asked.</div>
-                  </div>
-                  <input type="checkbox" id="drawer-mcp-immersive-toggle" title="Enable immersive proactive tool use">
+              <div class="card" style="padding:1rem; margin-bottom:1rem; display:flex; flex-direction:column; gap:0.9rem;">
+                ${toggleRowHTML({
+                  id: 'drawer-mcp-global-toggle',
+                  title: 'MCP Tools',
+                  description: 'Master switch - turns all MCP tool-calling on/off across the whole app.',
+                  ariaLabel: 'Enable MCP tools globally'
+                })}
+                <div style="border-top:1px solid var(--border-light); padding-top:0.9rem;">
+                  ${toggleRowHTML({
+                    id: 'drawer-mcp-immersive-toggle',
+                    title: 'Immersive Roleplay',
+                    description: `${escapeHtml(activeChar.name)} proactively uses tools in-character (e.g. websearch while browsing) without being explicitly asked.`,
+                    ariaLabel: 'Enable immersive proactive tool use'
+                  })}
                 </div>
               </div>
 
@@ -897,26 +907,32 @@ export class ChatView {
     const populateDrawerSelects = async () => {
       const personas = await PersonaStore.getAll();
       const currentPersona = await PersonaStore.getDefault();
-      const personaSelect = container.querySelector('#drawer-persona-select');
-      personaSelect.innerHTML = personas.map(p => `<option value="${p.id}" ${currentPersona && currentPersona.id === p.id ? 'selected' : ''}>${escapeHtml(p.name)}</option>`).join('');
-
-      personaSelect.onchange = async (e) => {
-        const persona = await PersonaStore.getById(e.target.value);
+      setDropdownOptions(
+        container,
+        'drawer-persona-select',
+        personas.map(p => ({ value: p.id, label: p.name })),
+        currentPersona ? currentPersona.id : undefined
+      );
+      wireDropdown(container, 'drawer-persona-select', async (value) => {
+        const persona = await PersonaStore.getById(value);
         if (persona) {
           persona.isDefault = true;
           await PersonaStore.save(persona);
           Toast.success(`Persona diset ke: ${persona.name}`);
           await renderMessages();
         }
-      };
+      });
 
       const proxies = await ProxyStore.getAll();
       const currentProxy = await ProxyStore.getDefault();
-      const proxySelect = container.querySelector('#drawer-proxy-select');
-      proxySelect.innerHTML = proxies.map(p => `<option value="${p.id}" ${currentProxy && currentProxy.id === p.id ? 'selected' : ''}>${escapeHtml(p.name)} (${escapeHtml(p.selectedModel || p.provider)})</option>`).join('');
-
-      proxySelect.onchange = async (e) => {
-        const proxy = await ProxyStore.getById(e.target.value);
+      setDropdownOptions(
+        container,
+        'drawer-proxy-select',
+        proxies.map(p => ({ value: p.id, label: p.name, hint: p.selectedModel || p.provider })),
+        currentProxy ? currentProxy.id : undefined
+      );
+      wireDropdown(container, 'drawer-proxy-select', async (value) => {
+        const proxy = await ProxyStore.getById(value);
         if (proxy) {
           proxy.isDefault = true;
           await ProxyStore.save(proxy);
@@ -924,24 +940,27 @@ export class ChatView {
           await populateModelSelect();
           if (onProxyChanged) onProxyChanged();
         }
-      };
+      });
 
       // System Prompt Presets
       const presets = await ProxyStore.getSystemPromptPresets();
-      const presetSelect = container.querySelector('#drawer-preset-select');
-      if (presetSelect) {
-        presetSelect.innerHTML = `<option value="">-- Select System Prompt Preset --</option>` +
-          presets.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
-
-        presetSelect.onchange = async (e) => {
-          const selectedId = e.target.value;
-          const targetPreset = presets.find(p => p.id === selectedId);
-          if (targetPreset) {
-            await ProxyStore.saveGlobalSystemPrompt(targetPreset.content);
-            Toast.success(`Preset System Prompt diset: ${targetPreset.name}`);
-          }
-        };
-      }
+      setDropdownOptions(
+        container,
+        'drawer-preset-select',
+        presets.map(p => ({
+          value: p.id,
+          label: p.name,
+          hint: (p.isBuiltIn || p.id === 'preset-default') ? 'System Default' : 'Custom preset'
+        })),
+        ''
+      );
+      wireDropdown(container, 'drawer-preset-select', async (value) => {
+        const targetPreset = presets.find(p => p.id === value);
+        if (targetPreset) {
+          await ProxyStore.saveGlobalSystemPrompt(targetPreset.content);
+          Toast.success(`Preset System Prompt diset: ${targetPreset.name}`);
+        }
+      });
 
       // Font Size Buttons
       const genSettings = await ProxyStore.getGenerationSettings();
@@ -986,13 +1005,11 @@ export class ChatView {
     // configure more than one for custom/openrouter proxies) and falls back
     // to just showing the single `selectedModel` when no list is configured.
     const populateModelSelect = async () => {
-      const modelSelect = container.querySelector('#chat-model-select');
-      if (!modelSelect) return;
+      if (!container.querySelector('[data-dropdown-for="chat-model-select"]')) return;
       const proxy = await ProxyStore.getDefault();
       if (!proxy) {
-        modelSelect.innerHTML = '<option>No Proxy</option>';
-        modelSelect.disabled = true;
-        modelSelect.onchange = null;
+        setDropdownOptions(container, 'chat-model-select', [], '');
+        setDropdownDisabled(container, 'chat-model-select', true);
         return;
       }
 
@@ -1000,17 +1017,19 @@ export class ChatView {
       if (proxy.selectedModel && !candidates.includes(proxy.selectedModel)) candidates.unshift(proxy.selectedModel);
       if (candidates.length === 0) candidates.push(proxy.selectedModel || proxy.provider);
 
-      modelSelect.innerHTML = candidates.map(m => `<option value="${escapeAttr(m)}" ${m === proxy.selectedModel ? 'selected' : ''}>${escapeHtml(m)}</option>`).join('');
-      modelSelect.disabled = candidates.length <= 1;
+      setDropdownOptions(container, 'chat-model-select', candidates, proxy.selectedModel || candidates[0]);
+      // Same rule as before the dropdown swap: a single-model proxy has nothing
+      // to switch to, so the control is shown but inert.
+      setDropdownDisabled(container, 'chat-model-select', candidates.length <= 1);
 
-      modelSelect.onchange = async (e) => {
+      wireDropdown(container, 'chat-model-select', async (value) => {
         const updatedProxy = await ProxyStore.getById(proxy.id);
         if (!updatedProxy) return;
-        updatedProxy.selectedModel = e.target.value;
+        updatedProxy.selectedModel = value;
         await ProxyStore.save(updatedProxy);
-        Toast.info(`Model diset ke: ${e.target.value}`);
+        Toast.info(`Model diset ke: ${value}`);
         if (onProxyChanged) onProxyChanged();
-      };
+      });
     };
 
     const renderDrawerMCPList = async () => {
@@ -1020,7 +1039,7 @@ export class ChatView {
 
       if (servers.length === 0) {
         mcpListEl.innerHTML = `
-          <div style="padding:1rem; text-align:center; background:#ffffff; border-radius:var(--radius-md); border:1px dashed var(--border-light); font-size:0.82rem; color:var(--text-muted);">
+          <div style="padding:1rem; text-align:center; background:var(--bg-surface); border-radius:var(--radius-md); border:1px dashed var(--border-light); font-size:0.82rem; color:var(--text-muted);">
             <div>Belum ada Custom MCP Server.</div>
             <div style="display:flex; justify-content:center; gap:0.4rem; margin-top:0.6rem;">
               <button class="btn btn-secondary btn-sm" id="btn-drawer-json-edit">Edit JSON Config</button>
@@ -1039,13 +1058,19 @@ export class ChatView {
       }
 
       mcpListEl.innerHTML = servers.map(s => `
-        <div style="padding:0.75rem; background:#ffffff; border-radius:var(--radius-md); border:1px solid var(--border-light); font-size:0.82rem; display:flex; flex-direction:column; gap:0.4rem; box-shadow:var(--shadow-sm);">
+        <div style="padding:0.85rem; background:var(--bg-surface); border-radius:var(--radius-md); border:1px solid var(--border-light); font-size:0.82rem; display:flex; flex-direction:column; gap:0.5rem; box-shadow:var(--shadow-sm);">
           <div style="display:flex; justify-content:space-between; align-items:center;">
             <div>
               <div style="font-weight:600; color:var(--text-main);">${escapeHtml(s.name)}</div>
               <div style="font-size:0.72rem; color:var(--text-muted); font-family:var(--font-mono);">${s.transport === 'command' ? 'STDIO' : 'HTTP'}</div>
             </div>
-            <input type="checkbox" class="drawer-mcp-toggle" data-id="${s.id}" ${s.enabled ? 'checked' : ''} title="Enable this server for roleplay sessions">
+            ${toggleSwitchHTML({
+              inputClass: 'drawer-mcp-toggle',
+              data: { id: s.id },
+              checked: !!s.enabled,
+              small: true,
+              title: 'Enable this server for roleplay sessions'
+            })}
           </div>
           <div style="display:flex; justify-content:space-between; align-items:center; gap:0.4rem; border-top:1px solid var(--border-light); padding-top:0.4rem; margin-top:0.2rem;">
             <span class="badge" id="drawer-mcp-status-${s.id}">Unknown</span>
@@ -1236,7 +1261,7 @@ export class ChatView {
       const listEl = container.querySelector('#right-drawer-session-list');
 
       listEl.innerHTML = chatSessions.map(s => `
-        <div class="session-item ${s.id === currentChatId ? 'active' : ''}" data-id="${s.id}" style="padding:0.65rem 0.85rem; background:#ffffff; border-radius:var(--radius-md); border:1px solid ${s.id === currentChatId ? 'var(--accent-primary)' : 'var(--border-light)'}; cursor:pointer; font-size:0.85rem; display:flex; justify-content:space-between; align-items:center; box-shadow:var(--shadow-sm);">
+        <div class="session-item ${s.id === currentChatId ? 'active' : ''}" data-id="${s.id}" style="padding:0.75rem 0.9rem; background:var(--bg-surface); border-radius:var(--radius-md); border:1px solid ${s.id === currentChatId ? 'var(--accent-primary)' : 'var(--border-light)'}; cursor:pointer; font-size:0.85rem; display:flex; justify-content:space-between; align-items:center; box-shadow:var(--shadow-sm);">
           <div class="session-title-row">
             <div style="font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:1;">${escapeHtml(s.title)}</div>
           </div>
@@ -2155,7 +2180,7 @@ export class ChatView {
     // Format actions in italics (*action* -> <em>action</em>)
     formatted = formatted.replace(/\*(.*?)\*/g, '<em>$1</em>');
     // Format quotes ("speech" -> <strong>"speech"</strong>)
-    formatted = formatted.replace(/"([^"]+)"/g, '<span style="color:#0f172a; font-weight:500;">"$1"</span>');
+    formatted = formatted.replace(/"([^"]+)"/g, '<span style="color:var(--text-main); font-weight:500;">"$1"</span>');
     // Use marked parser if available. `breaks: true` makes single newlines
     // render as <br> instead of being collapsed away - AI/roleplay replies
     // are usually formatted with single line breaks, not blank-line paragraphs.

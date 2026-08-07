@@ -1,16 +1,49 @@
-/* css/variables.css - Flat Grayish Design System Tokens */
+/* css/variables.css - Flat Grayish Design System Tokens (Light + Dark)
+   =====================================================================
+   THEME MODEL
+   -----------
+   Three user-facing modes, stored in IndexedDB (`settings` key `themeMode`)
+   and mirrored into localStorage for a synchronous pre-paint read - see
+   `js/ui/theme.js` and the inline bootstrap script in `index.html`:
+
+     'auto'  -> NO `data-theme` attribute on <html>. The
+                `@media (prefers-color-scheme: dark)` block below decides.
+     'light' -> `<html data-theme="light">`. Wins over the media query
+                because the media-query block excludes it explicitly.
+     'dark'  -> `<html data-theme="dark">`. Applies regardless of OS.
+
+   The dark palette is deliberately written TWICE (once for the explicit
+   attribute, once inside the media query). CSS has no way to share one
+   declaration block across a media-query boundary, and duplicating it is
+   preferable to forcing JS to stamp an attribute before first paint.
+   KEEP THE TWO DARK BLOCKS IN SYNC.
+
+   ACCENT CUSTOMISATION
+   --------------------
+   Settings -> Appearance writes `--accent-primary`, `--accent-primary-hover`
+   and `--accent-secondary` (plus the derived soft/contrast tokens) as INLINE
+   styles on <html>, which outrank everything in this file in both themes.
+   Every other token here is derived from the neutral slate ramp, so a custom
+   accent never breaks contrast on backgrounds or text.
+   ===================================================================== */
+
 :root {
-  /* Color Palette - Clean Slate Light Theme (Zero Yellow) */
-  --bg-primary: #f1f5f9;       /* Slate-100 (#f1f5f9) */
+  color-scheme: light;
+
+  /* --- Surfaces: Clean Slate Light Theme (Zero Yellow) --- */
+  --bg-primary: #f1f5f9;       /* Slate-100 - app canvas */
   --bg-secondary: #ffffff;     /* Flat White Containers */
-  --bg-tertiary: #e2e8f0;      /* Slate-200 */
-  --bg-surface: #ffffff;       /* Flat White Surface */
+  --bg-tertiary: #e2e8f0;      /* Slate-200 - hover fills, chips */
+  --bg-surface: #ffffff;       /* Flat White Surface (cards, bars) */
   --bg-surface-hover: #f8fafc; /* Slate Hover */
+  --bg-muted: #f8fafc;         /* Recessed panels, modal header/footer */
+  --bg-inset: #f1f5f9;         /* Inset wells (thinking block, previews) */
   --bg-glass: #ffffff;
   --bg-glass-card: #ffffff;
   --bg-glass-input: #f8fafc;
+  --bg-input: #ffffff;
 
-  /* Accents - Sleek Indigo & Violet */
+  /* --- Accents - Sleek Indigo & Violet --- */
   --accent-primary: #4f46e5;        /* Sleek Indigo */
   --accent-primary-hover: #4338ca;
   --accent-secondary: #7c3aed;      /* Sleek Violet */
@@ -18,47 +51,275 @@
   --accent-rose: #e11d48;           /* Flat Rose */
   --accent-emerald: #059669;        /* Flat Emerald */
   --accent-amber: #d97706;          /* Flat Amber */
-  
+
+  /* Tinted washes derived from the accents - used for active nav pills,
+     live tool boxes, queued-message chips, etc. */
+  --accent-primary-soft: #e0e7ff;
+  --accent-primary-softer: #eef2ff;
+  --accent-secondary-soft: #f5f3ff;
+  --accent-secondary-border: #ddd6fe;
+  --accent-rose-soft: #fff1f2;
+  --accent-rose-border: #fecdd3;
+  --accent-rose-strong: #be123c;
+  --accent-on-solid: #ffffff;       /* Text/icon color on a solid accent fill */
+
   --gradient-primary: #4f46e5;
   --gradient-accent: #7c3aed;
+  --brand-gradient-from: #f59e0b;
+  --brand-gradient-to: #d97706;
 
-  /* Text Colors - High Contrast Dark Slate */
+  /* --- Text Colors - High Contrast Dark Slate --- */
   --text-main: #0f172a;       /* Slate-900 */
   --text-muted: #334155;      /* Slate-700 */
   --text-dim: #64748b;        /* Slate-500 */
   --text-accent: #4f46e5;     /* Indigo Accent Text */
+  --text-inverse: #ffffff;    /* On dark chips/tooltips */
 
-  /* Borders & Dividers - Crisp Gray Borders */
+  /* --- Borders & Dividers - Crisp Gray Borders --- */
   --border-light: #e2e8f0;
   --border-subtle: #cbd5e1;
   --border-focus: #4f46e5;
 
-  /* Flat Subtle Shadows - Flat Design (No Carding) */
+  /* --- Badges (flat text chips, see css/base.css) --- */
+  --badge-bg: #e0e7ff;
+  --badge-fg: #3730a3;
+  --badge-border: #c7d2fe;
+  --badge-cyan-bg: #e0f2fe;
+  --badge-cyan-fg: #0369a1;
+  --badge-cyan-border: #bae6fd;
+  --badge-rose-bg: #ffe4e6;
+  --badge-rose-fg: #be123c;
+  --badge-rose-border: #fecdd3;
+  --badge-emerald-bg: #d1fae5;
+  --badge-emerald-fg: #047857;
+  --badge-emerald-border: #a7f3d0;
+
+  /* --- Chat / markdown rendering --- */
+  --chat-em-color: #6d28d9;          /* Roleplay italics (*actions*) */
+  --code-inline-bg: #e2e8f0;
+  --code-inline-fg: #4338ca;
+  --code-block-bg: #0f172a;
+  --code-block-fg: #f8fafc;
+
+  /* --- Chrome: titlebar, scrollbars, overlays, tooltips --- */
+  --titlebar-bg: #ffffff;
+  --titlebar-btn-hover: #e2e8f0;
+  --titlebar-close-hover: #ef4444;
+  --scrollbar-track: #f1f5f9;
+  --scrollbar-thumb: #cbd5e1;
+  --scrollbar-thumb-hover: #94a3b8;
+  --overlay-bg: rgba(15, 23, 42, 0.4);
+  --overlay-bg-soft: rgba(15, 23, 42, 0.25);
+  --tooltip-bg: #0f172a;
+  --tooltip-fg: #ffffff;
+
+  /* --- Flat Subtle Shadows - Flat Design (No Carding) --- */
   --shadow-sm: none;
   --shadow-md: none;
   --shadow-lg: none;
   --shadow-glow: 0 0 0 2px rgba(79, 70, 229, 0.2);
+  --shadow-btn: 0 1px 2px rgba(15, 23, 42, 0.05);
+  --shadow-raised: 0 1px 3px rgba(15, 23, 42, 0.07);
+  --shadow-popover: 0 8px 24px -6px rgba(15, 23, 42, 0.18);
 
-  /* Border Radii - Clean Flat Radii */
+  /* --- Border Radii - Clean Flat Radii --- */
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 14px;
   --radius-xl: 18px;
   --radius-full: 9999px;
 
-  /* Typography */
+  /* --- Typography --- */
   --font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --font-heading: 'Outfit', 'Inter', sans-serif;
   --font-mono: 'Fira Code', 'Consolas', monospace;
 
-  /* Transitions */
+  /* --- Transitions --- */
   --transition-fast: 0.15s ease;
   --transition-normal: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 
-  /* Sizing */
+  /* --- Sizing --- */
   --header-height: 64px;
   --sidebar-width: 250px;
   --sidebar-width-collapsed: 72px;
+}
+
+/* =====================================================================
+   DARK PALETTE - copy #1: user explicitly chose Dark in Settings.
+   Keep in sync with copy #2 in the media query below.
+   ===================================================================== */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg-primary: #0b1220;
+  --bg-secondary: #131c2e;
+  --bg-tertiary: #263449;
+  --bg-surface: #131c2e;
+  --bg-surface-hover: #1b2740;
+  --bg-muted: #101828;
+  --bg-inset: #0d1523;
+  --bg-glass: #131c2e;
+  --bg-glass-card: #131c2e;
+  --bg-glass-input: #0d1523;
+  --bg-input: #0d1523;
+
+  --accent-primary: #6366f1;
+  --accent-primary-hover: #818cf8;
+  --accent-secondary: #a78bfa;
+  --accent-cyan: #38bdf8;
+  --accent-rose: #fb7185;
+  --accent-emerald: #34d399;
+  --accent-amber: #fbbf24;
+
+  --accent-primary-soft: #1e2547;
+  --accent-primary-softer: #171d38;
+  --accent-secondary-soft: #1f1b38;
+  --accent-secondary-border: #4c3f8a;
+  --accent-rose-soft: #35141d;
+  --accent-rose-border: #7f2c3d;
+  --accent-rose-strong: #fda4af;
+  --accent-on-solid: #ffffff;
+
+  --gradient-primary: #6366f1;
+  --gradient-accent: #a78bfa;
+  --brand-gradient-from: #fbbf24;
+  --brand-gradient-to: #f59e0b;
+
+  --text-main: #e6edf7;
+  --text-muted: #b6c2d4;
+  --text-dim: #8595ab;
+  --text-accent: #a5b4fc;
+  --text-inverse: #0b1220;
+
+  --border-light: #24304a;
+  --border-subtle: #364761;
+  --border-focus: #6366f1;
+
+  --badge-bg: #1e2547;
+  --badge-fg: #c7d2fe;
+  --badge-border: #38406e;
+  --badge-cyan-bg: #0c2c40;
+  --badge-cyan-fg: #7dd3fc;
+  --badge-cyan-border: #17516f;
+  --badge-rose-bg: #3a1520;
+  --badge-rose-fg: #fda4af;
+  --badge-rose-border: #7f2c3d;
+  --badge-emerald-bg: #0d2f26;
+  --badge-emerald-fg: #6ee7b7;
+  --badge-emerald-border: #17614c;
+
+  --chat-em-color: #c4b5fd;
+  --code-inline-bg: #24304a;
+  --code-inline-fg: #a5b4fc;
+  --code-block-bg: #060b16;
+  --code-block-fg: #dbe4f0;
+
+  --titlebar-bg: #101828;
+  --titlebar-btn-hover: #263449;
+  --titlebar-close-hover: #dc2626;
+  --scrollbar-track: #0b1220;
+  --scrollbar-thumb: #334155;
+  --scrollbar-thumb-hover: #475569;
+  --overlay-bg: rgba(2, 6, 16, 0.66);
+  --overlay-bg-soft: rgba(2, 6, 16, 0.5);
+  --tooltip-bg: #e6edf7;
+  --tooltip-fg: #0b1220;
+
+  --shadow-glow: 0 0 0 2px rgba(99, 102, 241, 0.35);
+  --shadow-btn: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-raised: 0 1px 3px rgba(0, 0, 0, 0.35);
+  --shadow-popover: 0 10px 28px -6px rgba(0, 0, 0, 0.6);
+}
+
+/* =====================================================================
+   DARK PALETTE - copy #2: preference is "auto" (no data-theme stamped)
+   and the OS reports a dark colour scheme. `:not([data-theme="light"])`
+   is what lets an explicit Light choice beat the OS preference.
+   Keep in sync with copy #1 above.
+   ===================================================================== */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+
+    --bg-primary: #0b1220;
+    --bg-secondary: #131c2e;
+    --bg-tertiary: #263449;
+    --bg-surface: #131c2e;
+    --bg-surface-hover: #1b2740;
+    --bg-muted: #101828;
+    --bg-inset: #0d1523;
+    --bg-glass: #131c2e;
+    --bg-glass-card: #131c2e;
+    --bg-glass-input: #0d1523;
+    --bg-input: #0d1523;
+
+    --accent-primary: #6366f1;
+    --accent-primary-hover: #818cf8;
+    --accent-secondary: #a78bfa;
+    --accent-cyan: #38bdf8;
+    --accent-rose: #fb7185;
+    --accent-emerald: #34d399;
+    --accent-amber: #fbbf24;
+
+    --accent-primary-soft: #1e2547;
+    --accent-primary-softer: #171d38;
+    --accent-secondary-soft: #1f1b38;
+    --accent-secondary-border: #4c3f8a;
+    --accent-rose-soft: #35141d;
+    --accent-rose-border: #7f2c3d;
+    --accent-rose-strong: #fda4af;
+    --accent-on-solid: #ffffff;
+
+    --gradient-primary: #6366f1;
+    --gradient-accent: #a78bfa;
+    --brand-gradient-from: #fbbf24;
+    --brand-gradient-to: #f59e0b;
+
+    --text-main: #e6edf7;
+    --text-muted: #b6c2d4;
+    --text-dim: #8595ab;
+    --text-accent: #a5b4fc;
+    --text-inverse: #0b1220;
+
+    --border-light: #24304a;
+    --border-subtle: #364761;
+    --border-focus: #6366f1;
+
+    --badge-bg: #1e2547;
+    --badge-fg: #c7d2fe;
+    --badge-border: #38406e;
+    --badge-cyan-bg: #0c2c40;
+    --badge-cyan-fg: #7dd3fc;
+    --badge-cyan-border: #17516f;
+    --badge-rose-bg: #3a1520;
+    --badge-rose-fg: #fda4af;
+    --badge-rose-border: #7f2c3d;
+    --badge-emerald-bg: #0d2f26;
+    --badge-emerald-fg: #6ee7b7;
+    --badge-emerald-border: #17614c;
+
+    --chat-em-color: #c4b5fd;
+    --code-inline-bg: #24304a;
+    --code-inline-fg: #a5b4fc;
+    --code-block-bg: #060b16;
+    --code-block-fg: #dbe4f0;
+
+    --titlebar-bg: #101828;
+    --titlebar-btn-hover: #263449;
+    --titlebar-close-hover: #dc2626;
+    --scrollbar-track: #0b1220;
+    --scrollbar-thumb: #334155;
+    --scrollbar-thumb-hover: #475569;
+    --overlay-bg: rgba(2, 6, 16, 0.66);
+    --overlay-bg-soft: rgba(2, 6, 16, 0.5);
+    --tooltip-bg: #e6edf7;
+    --tooltip-fg: #0b1220;
+
+    --shadow-glow: 0 0 0 2px rgba(99, 102, 241, 0.35);
+    --shadow-btn: 0 1px 2px rgba(0, 0, 0, 0.3);
+    --shadow-raised: 0 1px 3px rgba(0, 0, 0, 0.35);
+    --shadow-popover: 0 10px 28px -6px rgba(0, 0, 0, 0.6);
+  }
 }
 
 @keyframes fadeIn {

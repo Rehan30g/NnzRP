@@ -4,6 +4,8 @@ import { MCPClient } from '../../services/mcpClient.js';
 import { MCPToolRegistry } from '../../services/mcpToolRegistry.js';
 import { Modal } from '../components/modal.js';
 import { Toast } from '../components/toast.js';
+import { dropdownHTML, wireDropdown } from '../components/dropdown.js';
+import { toggleSwitchHTML, toggleRowHTML } from '../components/toggle.js';
 import { escapeHtml, escapeAttr } from '../../utils/sanitize.js';
 
 export class MCPView {
@@ -22,26 +24,26 @@ export class MCPView {
         </div>
       </div>
 
-      <div class="card" style="margin-bottom:1.5rem; background:#f8fafc;">
+      <div class="card card-muted" style="margin-bottom:1.5rem;">
         <p style="color:var(--text-muted); font-size:0.85rem; line-height:1.5; margin:0;">
           Servers you add here are only reachable by name+arguments the model chooses at runtime - the model can never configure or launch a new server itself. Stdio/command servers run as local child processes of this desktop app.
         </p>
       </div>
 
-      <div class="card" style="margin-bottom:1.5rem; display:flex; flex-direction:column; gap:0.85rem;">
-        <div style="display:flex; justify-content:space-between; align-items:center; gap:1rem;">
-          <div>
-            <div style="font-weight:700; font-size:0.95rem;">MCP Tools</div>
-            <div style="font-size:0.78rem; color:var(--text-muted); margin-top:0.15rem;">Master switch - turns all MCP tool-calling on/off across every chat. Same switch is also in the chat drawer's MCP tab.</div>
-          </div>
-          <input type="checkbox" id="mcp-global-toggle" title="Enable MCP tools globally">
-        </div>
-        <div style="display:flex; justify-content:space-between; align-items:center; gap:1rem; border-top:1px solid var(--border-light); padding-top:0.75rem;">
-          <div>
-            <div style="font-weight:700; font-size:0.95rem;">Immersive Roleplay</div>
-            <div style="font-size:0.78rem; color:var(--text-muted); margin-top:0.15rem;">Tells the model to proactively use connected tools in-character (e.g. a websearch tool while a character is browsing, or to pull up-to-date info during the scene) instead of only calling them when explicitly asked.</div>
-          </div>
-          <input type="checkbox" id="mcp-immersive-toggle" title="Enable immersive proactive tool use">
+      <div class="card" style="margin-bottom:1.5rem; display:flex; flex-direction:column; gap:1rem;">
+        ${toggleRowHTML({
+          id: 'mcp-global-toggle',
+          title: 'MCP Tools',
+          description: "Master switch - turns all MCP tool-calling on/off across every chat. Same switch is also in the chat drawer's MCP tab.",
+          ariaLabel: 'Enable MCP tools globally'
+        })}
+        <div style="border-top:1px solid var(--border-light); padding-top:1rem;">
+          ${toggleRowHTML({
+            id: 'mcp-immersive-toggle',
+            title: 'Immersive Roleplay',
+            description: 'Tells the model to proactively use connected tools in-character (e.g. a websearch tool while a character is browsing, or to pull up-to-date info during the scene) instead of only calling them when explicitly asked.',
+            ariaLabel: 'Enable immersive proactive tool use'
+          })}
         </div>
       </div>
 
@@ -64,7 +66,12 @@ export class MCPView {
                     </div>
                   </div>
                   <div style="display:flex; align-items:center; gap:0.4rem;">
-                    <input type="checkbox" class="mcp-enabled-check" data-id="${s.id}" ${s.enabled ? 'checked' : ''} title="Enable this server for roleplay sessions">
+                    ${toggleSwitchHTML({
+                      inputClass: 'mcp-enabled-check',
+                      data: { id: s.id },
+                      checked: !!s.enabled,
+                      title: 'Enable this server for roleplay sessions'
+                    })}
                   </div>
                 </div>
 
@@ -383,10 +390,14 @@ export class MCPView {
 
         <div class="form-group">
           <label class="form-label">Transport</label>
-          <select class="select" id="mcp-transport">
-            <option value="http" ${data.transport !== 'command' ? 'selected' : ''}>HTTP (Streamable JSON-RPC)</option>
-            <option value="command" ${data.transport === 'command' ? 'selected' : ''}>Local Command / Stdio (e.g. npx)</option>
-          </select>
+          ${dropdownHTML({
+            id: 'mcp-transport',
+            value: data.transport === 'command' ? 'command' : 'http',
+            options: [
+              { value: 'http', label: 'HTTP', hint: 'Streamable JSON-RPC endpoint' },
+              { value: 'command', label: 'Local Command / Stdio', hint: 'Spawned child process (e.g. npx)' }
+            ]
+          })}
         </div>
 
         <div id="mcp-http-fields" style="${data.transport === 'command' ? 'display:none;' : ''}">
@@ -420,12 +431,16 @@ export class MCPView {
           <textarea class="textarea" id="mcp-desc" rows="2" placeholder="Ringkasan fungsi server MCP ini...">${escapeHtml(data.description)}</textarea>
         </div>
 
-        <div style="display:flex; align-items:center; gap:0.5rem; margin-top:0.5rem; margin-bottom:1rem;">
-          <input type="checkbox" id="mcp-enabled" ${data.enabled ? 'checked' : ''}>
-          <label for="mcp-enabled" style="font-size:0.85rem; cursor:pointer;">Aktifkan Server MCP ini</label>
+        <div style="margin-top:0.5rem; margin-bottom:1.25rem;">
+          ${toggleRowHTML({
+            id: 'mcp-enabled',
+            checked: !!data.enabled,
+            title: 'Aktifkan Server MCP ini',
+            description: 'Server yang aktif akan didiscover tool-nya saat chat dimulai.'
+          })}
         </div>
 
-        <div class="card" style="background:#f8fafc; padding:0.85rem;">
+        <div class="card card-muted" style="padding:1rem;">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
             <span style="font-size:0.85rem; font-weight:600;">Test Connection</span>
             <button type="button" class="btn btn-secondary btn-sm" id="mcp-discover-btn">Discover Tools</button>
@@ -494,11 +509,11 @@ export class MCPView {
     });
 
     // Transport toggle swaps visible field groups
-    overlay.querySelector('#mcp-transport').onchange = (e) => {
-      const isCommand = e.target.value === 'command';
+    wireDropdown(overlay, 'mcp-transport', (value) => {
+      const isCommand = value === 'command';
       overlay.querySelector('#mcp-http-fields').style.display = isCommand ? 'none' : '';
       overlay.querySelector('#mcp-command-fields').style.display = isCommand ? '' : 'none';
-    };
+    });
 
     // Live "Discover Tools" test using whatever is currently typed in the form.
     // Uses a stable preview id (not saved) so a stdio test process can be found and
@@ -528,12 +543,12 @@ export class MCPView {
         await MCPClient.stopIfRunning(testServer);
       }
       if (status.online) {
-        resultEl.style.color = 'var(--accent-emerald, #16a34a)';
+        resultEl.style.color = 'var(--accent-emerald)';
         resultEl.innerHTML = `Berhasil! ${status.toolCount} tool ditemukan: ${
           status.tools.slice(0, 8).map(t => `<code>${escapeHtml(t.name)}</code>`).join(', ') || '-'
         }`;
       } else {
-        resultEl.style.color = 'var(--accent-rose, #dc2626)';
+        resultEl.style.color = 'var(--accent-rose)';
         resultEl.textContent = `Gagal: ${status.error}`;
       }
     };

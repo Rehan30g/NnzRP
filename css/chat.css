@@ -23,7 +23,7 @@
 /* Top Header Bar - Centered 880px Reading Column */
 .chat-header {
   height: var(--header-height);
-  background: #ffffff;
+  background: var(--bg-surface);
   border-bottom: 1px solid var(--border-light);
   padding: 0 1.5rem;
   z-index: 20;
@@ -95,7 +95,7 @@
 .chat-right-drawer-overlay {
   position: absolute;
   top: 0; bottom: 0; left: 0; right: 0;
-  background: rgba(15, 23, 42, 0.25);
+  background: var(--overlay-bg-soft);
   backdrop-filter: blur(2px);
   z-index: 100;
   display: flex;
@@ -107,7 +107,7 @@
   width: 440px;
   max-width: 90vw;
   height: 100%;
-  background: #ffffff;
+  background: var(--bg-surface);
   border-left: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: column;
@@ -141,7 +141,7 @@
 .drawer-tab-header {
   display: flex;
   border-bottom: 1px solid var(--border-light);
-  background: #f8fafc;
+  background: var(--bg-muted);
 }
 
 .drawer-tab {
@@ -159,7 +159,7 @@
 .drawer-tab.active {
   color: var(--accent-primary);
   border-bottom-color: var(--accent-primary);
-  background: #ffffff;
+  background: var(--bg-surface);
 }
 
 .drawer-body {
@@ -180,24 +180,24 @@
   padding: 0 0 160px 0; /* Generous bottom padding for floating input overlay */
   display: flex;
   flex-direction: column;
-  background: #f8fafc;
+  background: var(--bg-muted);
   height: calc(100% - var(--header-height));
 }
 
 .message-block {
   width: 100%;
   padding: 1.5rem 2rem;
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 1px solid var(--border-light);
   transition: background var(--transition-fast);
   animation: fadeIn var(--transition-fast);
 }
 
 .message-block.user {
-  background: #ffffff;
+  background: var(--bg-surface);
 }
 
 .message-block.assistant {
-  background: #f8fafc;
+  background: var(--bg-muted);
 }
 
 .message-block-inner {
@@ -239,7 +239,7 @@
 .message-content {
   line-height: 1.7;
   font-size: 0.98rem;
-  color: #0f172a;
+  color: var(--text-main);
   word-break: break-word;
   overflow-wrap: anywhere;
 }
@@ -259,7 +259,7 @@
 
 /* Roleplay Text Formatting */
 .message-content em {
-  color: #6d28d9;
+  color: var(--chat-em-color);
   font-style: italic;
   font-weight: 500;
 }
@@ -272,17 +272,17 @@
 }
 
 .message-content code {
-  background: #e2e8f0;
+  background: var(--code-inline-bg);
   padding: 0.2rem 0.45rem;
   border-radius: var(--radius-sm);
   font-family: var(--font-mono);
   font-size: 0.88rem;
-  color: #4338ca;
+  color: var(--code-inline-fg);
 }
 
 .message-content pre {
-  background: #0f172a;
-  color: #f8fafc;
+  background: var(--code-block-bg);
+  color: var(--code-block-fg);
   padding: 1rem;
   border-radius: var(--radius-md);
   overflow-x: auto;
@@ -303,8 +303,8 @@
   display: flex;
   align-items: center;
   gap: 0.4rem;
-  background: #ffffff;
-  padding: 0.2rem 0.6rem;
+  background: var(--bg-surface);
+  padding: 0.25rem 0.7rem;
   border-radius: var(--radius-full);
   border: 1px solid var(--border-subtle);
   box-shadow: var(--shadow-sm);
@@ -365,7 +365,7 @@
   display: flex;
   flex-direction: column;
   gap: 0.6rem;
-  background: #ffffff;
+  background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
   padding: 1rem 1.25rem;
@@ -409,22 +409,22 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 38px;
-  height: 38px;
+  width: 42px;
+  height: 42px;
   flex-shrink: 0;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-full);
-  background: #ffffff;
+  background: var(--bg-surface);
   color: var(--accent-primary);
   cursor: pointer;
-  box-shadow: 0 1px 3px rgba(28,25,23,0.06);
+  box-shadow: var(--shadow-raised);
   transition: background var(--transition-fast), border-color var(--transition-fast), transform var(--transition-fast);
 }
 
 .btn-send-icon:hover {
   background: var(--bg-surface-hover);
   border-color: var(--accent-primary);
-  color: var(--accent-primary-hover, #b45309);
+  color: var(--accent-primary-hover);
   transform: translateY(-1px);
 }
 
@@ -435,16 +435,16 @@
 }
 
 .btn-send-icon.generating {
-  background: #ffffff;
-  color: var(--accent-rose, #e11d48);
-  border: 1.5px solid var(--accent-rose, #e11d48);
-  box-shadow: 0 1px 3px rgba(225, 29, 72, 0.15);
+  background: var(--bg-surface);
+  color: var(--accent-rose);
+  border: 1.5px solid var(--accent-rose);
+  box-shadow: var(--shadow-raised);
 }
 
 .btn-send-icon.generating:hover {
-  background: #fff1f2;
-  border-color: #be123c;
-  color: #be123c;
+  background: var(--accent-rose-soft);
+  border-color: var(--accent-rose-strong);
+  color: var(--accent-rose-strong);
 }
 
 /* Locks message-level actions while a generation is in flight, so a
@@ -462,7 +462,7 @@
 .thinking-block {
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
-  background: #f1f5f9;
+  background: var(--bg-inset);
   overflow: hidden;
 }
 
@@ -488,7 +488,7 @@
   font-size: 0.72rem;
   font-weight: 500;
   color: var(--accent-primary);
-  background: #eef2ff;
+  background: var(--accent-primary-softer);
   border: 1px solid var(--border-light);
   padding: 0.1rem 0.5rem;
   border-radius: var(--radius-full);
@@ -530,7 +530,7 @@
 .tool-trace-block {
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
-  background: #f8fafc;
+  background: var(--bg-muted);
   overflow: hidden;
 }
 
@@ -605,7 +605,7 @@
 .tool-live-block {
   border: 1px solid var(--accent-secondary);
   border-radius: var(--radius-md);
-  background: #f5f3ff;
+  background: var(--accent-secondary-soft);
   padding: 0.5rem 0.75rem;
   margin-bottom: 0.5rem;
   display: flex;
@@ -635,7 +635,7 @@
 .tool-live-spinner {
   width: 11px;
   height: 11px;
-  border: 2px solid #ddd6fe;
+  border: 2px solid var(--accent-secondary-border);
   border-top-color: var(--accent-secondary);
   border-radius: 50%;
   flex-shrink: 0;
@@ -650,11 +650,11 @@
 /* A tool call the user refused - a third state alongside running/finished,
    so "I said no" is legible in the same box the other calls appear in. */
 .tool-live-item-declined {
-  color: var(--accent-rose, #dc2626);
+  color: var(--accent-rose);
 }
 
 .tool-live-cross {
-  color: var(--accent-rose, #dc2626);
+  color: var(--accent-rose);
   font-weight: 700;
   flex-shrink: 0;
 }
@@ -678,7 +678,7 @@
   width: 100%;
   margin-bottom: 0.5rem;
   padding: 0.75rem 0.9rem;
-  background: #ffffff;
+  background: var(--bg-surface);
   border: 1px solid var(--accent-secondary);
   border-radius: var(--radius-lg, 10px);
   box-shadow: var(--shadow-md);
@@ -714,7 +714,7 @@
   font-size: 0.82rem;
   font-weight: 600;
   color: var(--text-main);
-  background: #f5f3ff;
+  background: var(--accent-secondary-soft);
   border-radius: var(--radius-sm, 6px);
   padding: 0.25rem 0.45rem;
   overflow-wrap: anywhere;
@@ -728,7 +728,7 @@
   font-size: 0.75rem;
   line-height: 1.45;
   color: var(--text-muted);
-  background: #f8fafc;
+  background: var(--bg-muted);
   border: 1px solid var(--border-light);
   border-radius: var(--radius-sm, 6px);
   padding: 0.4rem 0.5rem;
@@ -796,9 +796,9 @@
 }
 
 .btn-delete-message:hover {
-  background: #fef2f2 !important;
-  color: #ef4444 !important;
-  border-color: #fca5a5 !important;
+  background: var(--accent-rose-soft) !important;
+  color: var(--accent-rose) !important;
+  border-color: var(--accent-rose-border) !important;
 }
 
 .btn-msg-action svg {

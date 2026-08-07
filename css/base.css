@@ -26,6 +26,10 @@ html, body {
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  /* Theme switches repaint the whole shell; a short fade keeps the swap from
+     reading as a flicker. Kept off `*` so it never fights per-element
+     hover/active transitions. */
+  transition: background-color var(--transition-fast), color var(--transition-fast);
 }
 
 h1, h2, h3, h4, h5, h6 {
@@ -58,16 +62,16 @@ button, input, select, textarea {
 }
 
 ::-webkit-scrollbar-track {
-  background: #f1f5f9;
+  background: var(--scrollbar-track);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
+  background: var(--scrollbar-thumb);
   border-radius: var(--radius-full);
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #94a3b8;
+  background: var(--scrollbar-thumb-hover);
 }
 
 /* Utility Classes */
@@ -91,25 +95,25 @@ button, input, select, textarea {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  background: #e0e7ff;
-  color: #3730a3;
-  border: 1px solid #c7d2fe;
+  background: var(--badge-bg);
+  color: var(--badge-fg);
+  border: 1px solid var(--badge-border);
 }
 
 .badge-cyan {
-  background: #e0f2fe;
-  color: #0369a1;
-  border-color: #bae6fd;
+  background: var(--badge-cyan-bg);
+  color: var(--badge-cyan-fg);
+  border-color: var(--badge-cyan-border);
 }
 
 .badge-rose {
-  background: #ffe4e6;
-  color: #be123c;
-  border-color: #fecdd3;
+  background: var(--badge-rose-bg);
+  color: var(--badge-rose-fg);
+  border-color: var(--badge-rose-border);
 }
 
 .badge-emerald {
-  background: #d1fae5;
-  color: #047857;
-  border-color: #a7f3d0;
+  background: var(--badge-emerald-bg);
+  color: var(--badge-emerald-fg);
+  border-color: var(--badge-emerald-border);
 }

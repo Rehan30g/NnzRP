@@ -3,35 +3,86 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>NnzRP - BYOK AI Roleplay Client</title>
+  <!-- Generic fallback only. js/app.js's navigate() rewrites document.title (and
+       the .titlebar-title span below) to "NnzRP - <current view / character>"
+       on every route change; Electron mirrors document.title to the taskbar. -->
+  <title>NnzRP</title>
   <link rel="icon" type="image/png" href="src/icon.png">
   <link rel="shortcut icon" type="image/x-icon" href="src/icon.ico">
   <link rel="apple-touch-icon" href="src/icon.png">
-  
+
   <!-- Google Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@500;600;700;800&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
-  
+
   <!-- Markdown parser library (Local offline copy) -->
   <script src="js/vendor/marked.min.js"></script>
 
-  <!-- CSS Design System (Direct AI Message Swiping & Clean Floating Input) -->
-  <link rel="stylesheet" href="css/variables.css?v=1.1.4">
-  <link rel="stylesheet" href="css/base.css?v=1.1.4">
-  <link rel="stylesheet" href="css/components.css?v=1.1.5">
-  <link rel="stylesheet" href="css/layout.css?v=1.1.4">
-  <link rel="stylesheet" href="css/chat.css?v=1.1.6">
+  <!-- CSS Design System (Theming: light/dark tokens, toggle + dropdown components) -->
+  <link rel="stylesheet" href="css/variables.css?v=1.2.0">
+  <link rel="stylesheet" href="css/base.css?v=1.2.0">
+  <link rel="stylesheet" href="css/components.css?v=1.2.0">
+  <link rel="stylesheet" href="css/layout.css?v=1.2.0">
+  <link rel="stylesheet" href="css/chat.css?v=1.2.0">
 
-  <!-- Critical Inline Loading Styles to prevent initial flash -->
+  <!--
+    Pre-paint theme bootstrap.
+
+    The theme preference lives in IndexedDB (see js/storage/themeStore.js), which
+    is asynchronous and therefore cannot be consulted before the first paint - a
+    dark-mode user would get a white flash on every launch. Each write is
+    mirrored into localStorage, and this synchronous head script replays that
+    mirror onto <html> before anything renders. js/ui/theme.js re-applies from
+    the IndexedDB source of truth once the app boots.
+
+    Keep the storage keys and the derived custom properties in sync with
+    js/storage/themeStore.js and js/ui/theme.js.
+  -->
+  <script>
+    (function () {
+      try {
+        var mode = localStorage.getItem('nnzrp_theme_mode');
+        // 'auto' (or anything unrecognised) leaves data-theme unset, handing the
+        // decision to the prefers-color-scheme media query in variables.css.
+        if (mode === 'light' || mode === 'dark') {
+          document.documentElement.setAttribute('data-theme', mode);
+        }
+        document.documentElement.setAttribute('data-theme-mode', mode || 'auto');
+
+        var accent = JSON.parse(localStorage.getItem('nnzrp_theme_accent') || '{}');
+        var hex = /^#[0-9a-fA-F]{6}$/;
+        if (hex.test(accent.primary) && accent.primary.toLowerCase() !== '#4f46e5') {
+          var s = document.documentElement.style;
+          s.setProperty('--accent-primary', accent.primary);
+          s.setProperty('--accent-primary-hover', 'color-mix(in srgb, ' + accent.primary + ' 78%, var(--text-main))');
+          s.setProperty('--text-accent', 'color-mix(in srgb, ' + accent.primary + ' 72%, var(--text-main))');
+          s.setProperty('--border-focus', accent.primary);
+          s.setProperty('--gradient-primary', accent.primary);
+          s.setProperty('--accent-primary-soft', 'color-mix(in srgb, ' + accent.primary + ' 18%, var(--bg-surface))');
+          s.setProperty('--accent-primary-softer', 'color-mix(in srgb, ' + accent.primary + ' 10%, var(--bg-surface))');
+          s.setProperty('--shadow-glow', '0 0 0 2px color-mix(in srgb, ' + accent.primary + ' 30%, transparent)');
+          if (hex.test(accent.secondary)) {
+            s.setProperty('--accent-secondary', accent.secondary);
+            s.setProperty('--gradient-accent', accent.secondary);
+            s.setProperty('--accent-secondary-soft', 'color-mix(in srgb, ' + accent.secondary + ' 12%, var(--bg-surface))');
+            s.setProperty('--accent-secondary-border', 'color-mix(in srgb, ' + accent.secondary + ' 40%, var(--bg-surface))');
+          }
+        }
+      } catch (e) { /* no storage access - fall through to the CSS defaults */ }
+    })();
+  </script>
+
+  <!-- Critical inline loading styles (theme-token driven so the splash never
+       flashes light-on-dark before the main stylesheets are parsed). -->
   <style>
-    body { margin: 0; padding: 0; background-color: #f1f5f9; font-family: 'Inter', system-ui, sans-serif; }
-    .app-loading-screen { display: flex; align-items: center; justify-content: center; min-height: 100vh; width: 100%; background: #f1f5f9; }
-    .app-loading-card { display: flex; flex-direction: column; align-items: center; background: #ffffff; padding: 2.5rem 3rem; border-radius: 16px; border: 1px solid #e2e8f0; box-shadow: 0 10px 25px -5px rgba(15,23,42,0.05); text-align: center; max-width: 380px; width: 90%; }
+    body { margin: 0; padding: 0; background-color: var(--bg-primary, #f1f5f9); font-family: 'Inter', system-ui, sans-serif; }
+    .app-loading-screen { display: flex; align-items: center; justify-content: center; min-height: 100vh; width: 100%; background: var(--bg-primary, #f1f5f9); }
+    .app-loading-card { display: flex; flex-direction: column; align-items: center; background: var(--bg-surface, #ffffff); padding: 2.5rem 3rem; border-radius: 16px; border: 1px solid var(--border-light, #e2e8f0); text-align: center; max-width: 380px; width: 90%; }
     .app-loading-logo { width: 56px; height: 56px; background: transparent; border-radius: 14px; display: flex; align-items: center; justify-content: center; margin-bottom: 1.25rem; }
-    .app-loading-title { font-family: 'Outfit', sans-serif; font-size: 1.35rem; font-weight: 700; color: #0f172a; margin: 0 0 1.25rem 0; }
-    .app-loading-spinner { width: 36px; height: 36px; border: 3px solid #e2e8f0; border-top-color: #4f46e5; border-radius: 50%; animation: appSpinnerRotate 0.8s linear infinite; margin-bottom: 1rem; }
-    .app-loading-sub { font-size: 0.85rem; color: #64748b; margin: 0; font-weight: 500; }
+    .app-loading-title { font-family: 'Outfit', sans-serif; font-size: 1.35rem; font-weight: 700; color: var(--text-main, #0f172a); margin: 0 0 1.25rem 0; }
+    .app-loading-spinner { width: 36px; height: 36px; border: 3px solid var(--border-light, #e2e8f0); border-top-color: var(--accent-primary, #4f46e5); border-radius: 50%; animation: appSpinnerRotate 0.8s linear infinite; margin-bottom: 1rem; }
+    .app-loading-sub { font-size: 0.85rem; color: var(--text-dim, #64748b); margin: 0; font-weight: 500; }
     @keyframes appSpinnerRotate { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
   </style>
 </head>
@@ -40,7 +91,7 @@
   <header id="custom-titlebar" class="custom-titlebar">
     <div class="titlebar-left">
       <img src="src/icon.png" class="titlebar-icon" alt="NnzRP Icon">
-      <span class="titlebar-title">NnzRP - BYOK AI Roleplay Client</span>
+      <span class="titlebar-title" id="titlebar-title">NnzRP</span>
     </div>
     <div class="titlebar-drag-region"></div>
     <div class="titlebar-controls" id="titlebar-controls">
@@ -63,7 +114,7 @@
         <div class="app-loading-logo" style="width:64px; height:64px;">
           <img src="src/icon.png" class="pixel-art" style="width:64px; height:64px;" alt="NnzRP Icon">
         </div>
-        <h2 class="app-loading-title" style="background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); -webkit-background-clip:text; -webkit-text-fill-color:transparent;">NnzRP</h2>
+        <h2 class="app-loading-title" style="background: linear-gradient(135deg, var(--brand-gradient-from, #f59e0b) 0%, var(--brand-gradient-to, #d97706) 100%); -webkit-background-clip:text; -webkit-text-fill-color:transparent;">NnzRP</h2>
         <div class="app-loading-spinner"></div>
         <p class="app-loading-sub">Loading Session &amp; Database...</p>
       </div>
@@ -71,6 +122,6 @@
   </div>
 
   <!-- Main JavaScript ES Module -->
-  <script type="module" src="js/app.js?v=1.1.4"></script>
+  <script type="module" src="js/app.js?v=1.2.0"></script>
 </body>
 </html>
