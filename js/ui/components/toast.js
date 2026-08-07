@@ -13,8 +13,14 @@ export class Toast {
     return container;
   }
 
-  static show(message, type = 'info', duration = 3500) {
+  static show(message, type = 'info', duration = 2200) {
     const container = this.getContainer();
+
+    // Phone-style: only one banner at a time. A new one replaces whatever is
+    // currently showing/animating instead of stacking below it.
+    if (this._activeTimeout) clearTimeout(this._activeTimeout);
+    if (this._activeToast) this._activeToast.remove();
+
     const toast = document.createElement('div');
     toast.className = `toast toast-${type}`;
 
@@ -24,15 +30,24 @@ export class Toast {
 
     toast.innerHTML = `
       <span class="badge badge-${type === 'success' ? 'emerald' : (type === 'error' ? 'rose' : 'cyan')}">${label}</span>
-      <span style="flex:1; font-size:0.85rem;">${escapeHtml(message)}</span>
+      <span class="toast-message">${escapeHtml(message)}</span>
     `;
 
     container.appendChild(toast);
+    this._activeToast = toast;
 
-    setTimeout(() => {
-      toast.style.opacity = '0';
-      toast.style.transform = 'translateY(10px)';
-      setTimeout(() => toast.remove(), 250);
+    // Force layout so the enter transition actually plays instead of being
+    // coalesced with the initial (hidden) state.
+    void toast.offsetHeight;
+    toast.classList.add('toast-visible');
+
+    this._activeTimeout = setTimeout(() => {
+      toast.classList.remove('toast-visible');
+      toast.classList.add('toast-leaving');
+      setTimeout(() => {
+        toast.remove();
+        if (this._activeToast === toast) this._activeToast = null;
+      }, 160);
     }, duration);
   }
 

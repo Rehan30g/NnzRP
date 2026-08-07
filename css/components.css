@@ -808,41 +808,57 @@ input[type="color"] {
   background: var(--bg-muted);
 }
 
-/* Toasts - Clean Flat Alerts (Positioned at Bottom Right Dead Zone) */
+/* Toasts - Phone-style banner: drops from the top, never stacks, gets out of the way fast. */
 .toast-container {
   position: fixed;
-  bottom: 1.5rem;
-  right: 1.5rem;
+  top: 44px; /* clears the 36px custom titlebar */
+  left: 50%;
+  transform: translateX(-50%);
   display: flex;
-  flex-direction: column-reverse;
-  gap: 0.6rem;
-  z-index: 9999;
+  justify-content: center;
+  z-index: 11000; /* above the titlebar (10000), below the dropdown portal (12000) */
   pointer-events: none;
 }
 
 @media (max-width: 768px) {
   .toast-container {
-    bottom: 75px; /* Clear of 60px mobile bottom navigation bar */
-    right: 1rem;
-    left: auto;
     max-width: calc(100vw - 2rem);
   }
 }
 
 .toast {
-  pointer-events: auto;
+  pointer-events: none;
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
   color: var(--text-main);
-  padding: 0.85rem 1.35rem;
+  padding: 0.55rem 0.95rem;
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-popover);
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  min-width: 260px;
-  animation: fadeIn var(--transition-fast);
+  gap: 0.55rem;
+  min-width: 180px;
+  max-width: 340px;
   font-weight: 500;
+  font-size: 0.8rem;
+  opacity: 0;
+  transform: translateY(-14px) scale(0.98);
+  transition: transform 0.16s ease, opacity 0.16s ease;
+}
+
+.toast-visible {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+.toast-leaving {
+  opacity: 0;
+  transform: translateY(-10px) scale(0.98);
+}
+
+.toast-message {
+  flex: 1;
+  font-size: 0.8rem;
 }
 
 .toast-success { border-left: 4px solid var(--accent-emerald); }
