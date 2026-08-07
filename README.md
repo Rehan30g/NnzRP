@@ -168,7 +168,7 @@ NnzRP/
 
 ## Contributing
 
-Issues and pull requests are welcome. `CLAUDE.md` and `AGENTS.md` in the repo root document the current architecture in more depth for anyone (human or AI-assisted) working on the codebase.
+Issues and pull requests are welcome. `CLAUDE.md` in the repo root document the current architecture in more depth for anyone (human or AI-assisted) working on the codebase.
 
 ---
 
