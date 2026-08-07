@@ -1810,7 +1810,10 @@ export class ChatView {
     // the final/abort-partial swipe save).
     let liveSegments = [];
     let currentRoundText = liveContent;
-    const swipePlaceholderHTML = '<em style="color:var(--text-dim);">Menggenerasi variasi baru...</em>';
+    // Same "{name} sedang mengetik..." wording as triggerAIGeneration's typing
+    // indicator - was "Menggenerasi variasi baru..." before, which read as an
+    // inconsistent status between a fresh reply and a swiped one.
+    const swipePlaceholderHTML = `<em style="color:var(--text-dim);">${escapeHtml(activeChar.name)} sedang mengetik...</em>`;
 
     // Coalesce rapid/bursty chunk delivery into at most one DOM update per
     // ~50ms - see createThrottledRenderer's comment.
