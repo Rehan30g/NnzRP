@@ -532,6 +532,37 @@ input[type="color"] {
 .settings-shell {
   max-width: 940px;
   margin: 0 auto;
+  /* .settings-savebar is `position: fixed` now (see its own comment), so it
+     permanently occupies this much space at the bottom of the viewport
+     regardless of scroll position - unlike the old sticky+padding attempts,
+     there's no "settles into place, gap left over" failure mode here to
+     worry about, since a fixed element was never part of this container's
+     scrollable flow to begin with. This just reserves room so the last
+     card's own content can scroll clear of it. */
+  padding-bottom: 5.5rem;
+}
+
+/* Embedded mode (Settings opened from the chat drawer, inside a Modal - see
+   settingsView.js's `embedded` option and chatView.js's
+   `btn-open-global-settings`). No fixed savebar in a popup - the Modal gets
+   its own "Save Settings" footer button instead, next to Close - so none of
+   its reserved bottom clearance applies either. Section descriptions are
+   dropped too, purely for space: a Modal is a lot more cramped than the
+   dedicated Settings page. */
+.settings-shell-embedded {
+  padding-bottom: 0.5rem;
+}
+
+.settings-shell-embedded .settings-savebar {
+  display: none;
+}
+
+.settings-shell-embedded .settings-section-desc {
+  display: none;
+}
+
+.settings-shell-embedded .settings-section-title {
+  margin-bottom: 0.75rem;
 }
 
 .settings-tabbar {
@@ -602,33 +633,50 @@ input[type="color"] {
   margin-bottom: 1rem;
 }
 
-/* Sticky save bar - the Save button used to sit at the very bottom of one long
-   page; with tabs it has to stay reachable from whichever tab you're editing.
-   Hidden entirely on the Proxies and Data tabs, whose controls save themselves
-   (see `savebarEl` handling in settingsView.js's switchTab) - a Save button
-   that does nothing for the visible panel reads as broken.
+/* Floating save bar - the Save button used to sit at the very bottom of one
+   long page; with tabs it has to stay reachable from whichever tab you're
+   editing. Hidden entirely on the Proxies and Data tabs, whose controls save
+   themselves (see `savebarEl` handling in settingsView.js's switchTab) - a
+   Save button that does nothing for the visible panel reads as broken.
 
-   Solid background, not a transparent-to-opaque gradient: a fade only reads
-   as a graceful transition for plain text scrolling under it - real content
-   (card borders, colour swatches, buttons) partially visible through the
-   transparent portion instead just looked like the last card was glitching/
-   bleeding through the bar (reported as content "piercing through" on Save).
-   A flat opaque bar + top border + shadow is the standard sticky-toolbar
-   treatment and has no viewport-height-dependent failure mode - it looks the
-   same whether the tab's content is one card taller than the window or five. */
+   `position: fixed`, NOT sticky - sticky positioning is relative to the
+   scrolling container's own padding box, which went through three rounds of
+   fighting that container's padding (gradient bleed-through, then a dead gap
+   from leftover clearance padding, then a version-caching red herring on top
+   of it) without ever actually looking right. Fixed positioning is anchored
+   to the viewport instead, so it has no dependency on any ancestor's padding,
+   scroll state, or content height - it is simply always in the same place,
+   the same way `.chat-input-container` already floats over the message
+   stream in chat.css. `left` is offset by the sidebar's current width (the
+   `.app-sidebar.collapsed` rule below swaps it to the collapsed width) so it
+   spans the content area only, never the sidebar. `.settings-savebar-inner`
+   re-centers the actual bar content to match `.settings-shell`'s own
+   max-width/centering, since the outer bar itself now spans the full content
+   width instead of being naturally inset by .settings-shell's own layout. */
 .settings-savebar {
-  position: sticky;
+  position: fixed;
+  left: var(--sidebar-width);
+  right: 0;
   bottom: 0;
+  z-index: 40;
+  background: var(--bg-primary);
+  border-top: 1px solid var(--border-light);
+  box-shadow: 0 -4px 12px rgba(15, 23, 42, 0.06);
+}
+
+.app-sidebar.collapsed ~ .app-main .settings-savebar {
+  left: var(--sidebar-width-collapsed);
+}
+
+.settings-savebar-inner {
+  max-width: 940px;
+  margin: 0 auto;
   display: flex;
   justify-content: flex-end;
   gap: 0.75rem;
   align-items: center;
   flex-wrap: wrap;
-  padding: 0.9rem 0;
-  margin-top: 1.5rem;
-  background: var(--bg-primary);
-  border-top: 1px solid var(--border-light);
-  box-shadow: 0 -4px 12px rgba(15, 23, 42, 0.06);
+  padding: 0.9rem 2rem;
 }
 
 /* Accent colour swatch picker (Settings -> Appearance) */

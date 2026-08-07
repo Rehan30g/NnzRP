@@ -70,6 +70,17 @@ export class SettingsView {
     const accent = await ThemeStore.getAccent();
 
     const initialTab = TABS.some(t => t.id === options.tab) ? options.tab : 'appearance';
+    // Embedded mode (opened from the chat drawer's "Settings" shortcut, inside
+    // a Modal) drops the page title/section descriptions and hides the
+    // internal floating save bar via CSS (.settings-shell-embedded, see
+    // components.css) - a `position: fixed` bar escapes the Modal entirely
+    // (fixed positioning is relative to the viewport, not any ancestor,
+    // Modal included), and the descriptions just ate space in an already
+    // cramped popup. `#btn-save-settings` itself still exists (just hidden)
+    // and still holds the real save logic - chatView.js's
+    // `btn-open-global-settings` adds its own "Save Settings" Modal footer
+    // button that clicks this hidden one, rather than duplicating the logic.
+    const embedded = !!options.embedded;
 
     const proxyOptions = proxies.map(p => ({
       value: p.id,
@@ -102,11 +113,13 @@ export class SettingsView {
     `;
 
     container.innerHTML = `
-      <div class="settings-shell">
+      <div class="settings-shell${embedded ? ' settings-shell-embedded' : ''}">
+        ${embedded ? '' : `
         <div style="margin-bottom:1.25rem;">
           <h2 style="font-size:1.6rem; margin-bottom:0.3rem;">Settings</h2>
           <p style="color:var(--text-muted); font-size:0.9rem;">Appearance, generation behaviour, model parameters, API proxies and backups - all in one place.</p>
         </div>
+        `}
 
         <div class="settings-tabbar" role="tablist">
           ${TABS.map(t => `
@@ -368,8 +381,10 @@ export class SettingsView {
         </div>
 
         <div class="settings-savebar${initialTab === 'proxies' || initialTab === 'data' ? ' hidden' : ''}" id="settings-savebar">
-          <span style="font-size:0.8rem; color:var(--text-dim);">Theme &amp; accent save instantly; everything else needs Save.</span>
-          <button class="btn btn-primary" id="btn-save-settings">Save Settings</button>
+          <div class="settings-savebar-inner">
+            <span style="font-size:0.8rem; color:var(--text-dim);">Theme &amp; accent save instantly; everything else needs Save.</span>
+            <button class="btn btn-primary" id="btn-save-settings">Save Settings</button>
+          </div>
         </div>
       </div>
     `;

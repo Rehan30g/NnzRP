@@ -1231,9 +1231,23 @@ export class ChatView {
       const overlay = Modal.open({
         title: 'Global Settings',
         contentHTML: '<div id="embedded-settings-view"></div>',
-        buttons: [{ id: 'btn-close-settings-modal', label: 'Tutup', className: 'btn-secondary', onClick: () => Modal.close() }]
+        buttons: [
+          { id: 'btn-close-settings-modal', label: 'Tutup', className: 'btn-secondary', onClick: () => Modal.close() },
+          {
+            id: 'btn-save-settings-modal',
+            label: 'Save Settings',
+            className: 'btn-primary',
+            onClick: () => {
+              // settingsView.js's own #btn-save-settings still holds the real
+              // save logic - `embedded: true` just hides that button (a fixed
+              // savebar has no sane place inside a Modal), this footer button
+              // triggers the exact same handler instead of duplicating it.
+              overlay.querySelector('#btn-save-settings')?.click();
+            }
+          }
+        ]
       });
-      SettingsView.render(overlay.querySelector('#embedded-settings-view'));
+      SettingsView.render(overlay.querySelector('#embedded-settings-view'), { embedded: true });
     };
 
     container.querySelector('#btn-delete-current-session').onclick = async () => {
