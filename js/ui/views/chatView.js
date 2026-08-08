@@ -7,13 +7,14 @@ import { PromptBuilder } from '../../services/promptBuilder.js';
 import { ProviderManager } from '../../services/providerManager.js';
 import { MCPToolRegistry } from '../../services/mcpToolRegistry.js';
 import { AgentRunner } from '../../services/agentRunner.js';
+import { GreetingWizardService, GREETING_WIZARD_TOTAL_QUESTIONS } from '../../services/greetingWizardService.js';
 import { MCPStore } from '../../storage/mcpStore.js';
 import { MCPClient } from '../../services/mcpClient.js';
 import { Modal } from '../components/modal.js';
 import { Toast } from '../components/toast.js';
 import { ProxiesView } from './proxiesView.js';
 import { SettingsView } from './settingsView.js';
-import { MCPView } from './mcpView.js';
+import { MCPView, INTENSITY_LABELS, MCP_INTENSITY_HINTS } from './mcpView.js';
 import { dropdownHTML, wireDropdown, setDropdownOptions, setDropdownDisabled } from '../components/dropdown.js';
 import { toggleSwitchHTML, toggleRowHTML } from '../components/toggle.js';
 import { escapeHtml, escapeAttr } from '../../utils/sanitize.js';
@@ -821,6 +822,27 @@ export class ChatView {
                     description: `${escapeHtml(activeChar.name)} proactively uses tools in-character (e.g. websearch while browsing) without being explicitly asked.`,
                     ariaLabel: 'Enable immersive proactive tool use'
                   })}
+                  <div id="drawer-mcp-intensity-row" style="margin-top:0.8rem; padding-top:0.8rem; border-top:1px solid var(--border-light);">
+                    <div class="form-label" style="margin-bottom:0.5rem;">Tool Use Frequency</div>
+                    <div class="segmented" role="group" id="drawer-mcp-intensity-group">
+                      <button type="button" class="segmented-option" data-value="medium">Medium</button>
+                      <button type="button" class="segmented-option" data-value="high">High</button>
+                      <button type="button" class="segmented-option" data-value="max">MAX</button>
+                    </div>
+                    <p id="drawer-mcp-intensity-hint" style="font-size:0.76rem; color:var(--text-muted); margin:0.5rem 0 0;"></p>
+                  </div>
+                </div>
+                <div style="border-top:1px solid var(--border-light); padding-top:0.9rem;">
+                  ${toggleRowHTML({
+                    id: 'drawer-mcp-iteration-limit-toggle',
+                    title: 'Custom Tool Call Limit',
+                    description: "Caps how many tool-call rounds the model may chain in a single reply. Off by default (built-in cap of 6 rounds).",
+                    ariaLabel: 'Enable a custom tool call round limit'
+                  })}
+                  <div id="drawer-mcp-iteration-limit-row" style="margin-top:0.7rem; display:flex; align-items:center; gap:0.6rem;">
+                    <label class="form-label" for="drawer-mcp-iteration-limit-value" style="margin:0;">Max rounds per reply:</label>
+                    <input class="input" type="number" id="drawer-mcp-iteration-limit-value" min="1" max="500" step="1" style="width:90px;">
+                  </div>
                 </div>
               </div>
 
@@ -1147,6 +1169,9 @@ export class ChatView {
     const mcpGlobalToggle = container.querySelector('#drawer-mcp-global-toggle');
     const mcpImmersiveToggle = container.querySelector('#drawer-mcp-immersive-toggle');
     const mcpServersSection = container.querySelector('#drawer-mcp-servers-section');
+    const mcpIntensityRow = container.querySelector('#drawer-mcp-intensity-row');
+    const mcpIntensityGroup = container.querySelector('#drawer-mcp-intensity-group');
+    const mcpIntensityHint = container.querySelector('#drawer-mcp-intensity-hint');
 
     const applyMcpMasterVisualState = (enabled) => {
       if (mcpServersSection) {
@@ -1154,6 +1179,24 @@ export class ChatView {
         mcpServersSection.style.pointerEvents = enabled ? '' : 'none';
       }
       if (mcpImmersiveToggle) mcpImmersiveToggle.disabled = !enabled;
+    };
+
+    // Tool Use Frequency only applies while Immersive Roleplay is on - see
+    // the matching dimming pattern in mcpView.js (single source of truth for
+    // the wording is that file's exported MCP_INTENSITY_HINTS/INTENSITY_LABELS).
+    const applyMcpIntensityVisualState = (immersiveOn) => {
+      if (mcpIntensityRow) {
+        mcpIntensityRow.style.opacity = immersiveOn ? '1' : '0.5';
+        mcpIntensityRow.style.pointerEvents = immersiveOn ? '' : 'none';
+      }
+    };
+
+    const setActiveMcpIntensityButton = (value) => {
+      if (!mcpIntensityGroup) return;
+      mcpIntensityGroup.querySelectorAll('.segmented-option').forEach(b => {
+        b.classList.toggle('active', b.dataset.value === value);
+      });
+      if (mcpIntensityHint) mcpIntensityHint.textContent = MCP_INTENSITY_HINTS[value] || '';
     };
 
     if (mcpGlobalToggle) {
@@ -1169,9 +1212,54 @@ export class ChatView {
     if (mcpImmersiveToggle) {
       mcpImmersiveToggle.checked = await MCPStore.getImmersiveRoleplay();
       mcpImmersiveToggle.disabled = !mcpGlobalToggle?.checked;
+      applyMcpIntensityVisualState(mcpImmersiveToggle.checked);
       mcpImmersiveToggle.onchange = async (e) => {
         await MCPStore.setImmersiveRoleplay(e.target.checked);
+        applyMcpIntensityVisualState(e.target.checked);
         Toast.info(`Immersive Roleplay ${e.target.checked ? 'diaktifkan' : 'dinonaktifkan'}.`);
+      };
+    }
+
+    setActiveMcpIntensityButton(await MCPStore.getImmersiveIntensity());
+    if (mcpIntensityGroup) {
+      mcpIntensityGroup.querySelectorAll('.segmented-option').forEach(btn => {
+        btn.onclick = async () => {
+          const value = btn.dataset.value;
+          await MCPStore.setImmersiveIntensity(value);
+          setActiveMcpIntensityButton(value);
+          Toast.info(`Tool Use Frequency diset ke ${INTENSITY_LABELS[value] || value}.`);
+        };
+      });
+    }
+
+    // Custom Tool Call Limit (drawer copy - mirrors mcpView.js). Independent
+    // of Immersive Roleplay/intensity, off by default.
+    const mcpIterationLimitToggle = container.querySelector('#drawer-mcp-iteration-limit-toggle');
+    const mcpIterationLimitRow = container.querySelector('#drawer-mcp-iteration-limit-row');
+    const mcpIterationLimitInput = container.querySelector('#drawer-mcp-iteration-limit-value');
+
+    const applyMcpIterationLimitVisualState = (enabled) => {
+      if (mcpIterationLimitRow) {
+        mcpIterationLimitRow.style.opacity = enabled ? '1' : '0.5';
+        mcpIterationLimitRow.style.pointerEvents = enabled ? '' : 'none';
+      }
+    };
+
+    if (mcpIterationLimitToggle && mcpIterationLimitInput) {
+      const storedMcpLimit = await MCPStore.getMaxToolIterations();
+      mcpIterationLimitToggle.checked = storedMcpLimit.enabled;
+      mcpIterationLimitInput.value = storedMcpLimit.value;
+      applyMcpIterationLimitVisualState(storedMcpLimit.enabled);
+
+      mcpIterationLimitToggle.onchange = async (e) => {
+        await MCPStore.setMaxToolIterations({ enabled: e.target.checked, value: mcpIterationLimitInput.value });
+        applyMcpIterationLimitVisualState(e.target.checked);
+        Toast.info(`Custom Tool Call Limit ${e.target.checked ? 'diaktifkan' : 'dinonaktifkan'}.`);
+      };
+      mcpIterationLimitInput.onchange = async (e) => {
+        await MCPStore.setMaxToolIterations({ enabled: mcpIterationLimitToggle.checked, value: e.target.value });
+        const savedMcpLimit = await MCPStore.getMaxToolIterations();
+        mcpIterationLimitInput.value = savedMcpLimit.value;
       };
     }
 
@@ -1414,6 +1502,11 @@ export class ChatView {
                       <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="18" r="3"></circle><circle cx="6" cy="6" r="3"></circle><circle cx="18" cy="6" r="3"></circle><path d="M18 9v2a2 2 0 01-2 2H8a2 2 0 01-2-2V9"></path><path d="M12 12v3"></path></svg>
                     </button>
                   ` : ''}
+                  ${!isUser && idx === 0 && msgs.length === 1 ? `
+                    <button class="btn-msg-action btn-personalize-greeting" data-id="${m.id}" title="Personalisasi pesan pembuka dengan AI">
+                      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M18.4 5.6l-2.8 2.8M8.4 15.6l-2.8 2.8"></path></svg>
+                    </button>
+                  ` : ''}
                   <button class="btn-msg-action btn-delete-message" data-id="${m.id}" title="Hapus pesan ini">
                     <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"></path></svg>
                   </button>
@@ -1531,6 +1624,21 @@ export class ChatView {
       // Generate AI response on last user message
       messagesEl.querySelectorAll('.btn-generate-ai-response').forEach(btn => {
         btn.onclick = () => triggerAIGeneration();
+      });
+
+      // AI-driven step-by-step greeting personalization wizard - only ever
+      // rendered on a fresh chat's sole greeting message (see the button's
+      // own idx===0 && msgs.length===1 guard in the template above).
+      messagesEl.querySelectorAll('.btn-personalize-greeting').forEach(btn => {
+        btn.onclick = () => {
+          const msgId = btn.dataset.id;
+          ChatView.openGreetingWizard({
+            messageId: msgId,
+            character: activeChar,
+            persona: activePersonaObj,
+            onApplied: () => refreshMessageBlock(msgId, 'next')
+          });
+        };
       });
 
       // Inline message editing (both user and assistant messages)
@@ -1660,6 +1768,13 @@ export class ChatView {
       const globalPrompt = await ProxyStore.getGlobalSystemPrompt();
       const activeTools = await MCPToolRegistry.getActiveTools();
       const immersiveRoleplay = await MCPStore.getImmersiveRoleplay();
+      const immersiveIntensity = await MCPStore.getImmersiveIntensity();
+      // Deliberately NOT derived from immersive intensity - an earlier version
+      // auto-raised this for High/MAX, but a hard round cap fights against
+      // "use tools massively" (AgentRunner throws once it's hit) instead of
+      // enabling it. This is purely the user's own opt-in override now.
+      const storedMcpLimit = await MCPStore.getMaxToolIterations();
+      const mcpMaxIterations = storedMcpLimit.enabled ? storedMcpLimit.value : undefined;
 
       const promptPayload = applyPrefill(genSettings, PromptBuilder.buildPromptPayload({
         character: activeChar,
@@ -1668,7 +1783,8 @@ export class ChatView {
         messages: currentMessages,
         contextLimit: genSettings.contextLimit || 20,
         tools: activeTools,
-        immersiveRoleplay
+        immersiveRoleplay,
+        immersiveIntensity
       }));
 
       const messagesEl = container.querySelector('#messages-container');
@@ -1733,6 +1849,7 @@ export class ChatView {
           tools: activeTools,
           streaming: genSettings.streamingEnabled,
           signal: abortSignal,
+          maxIterations: mcpMaxIterations,
           transformFirstResult: (result) => mergePrefillResult(genSettings, result),
           callbacks: {
             onContentChunk: (delta) => {
@@ -1985,6 +2102,11 @@ export class ChatView {
     const globalPrompt = await ProxyStore.getGlobalSystemPrompt();
     const activeTools = await MCPToolRegistry.getActiveTools();
     const immersiveRoleplay = await MCPStore.getImmersiveRoleplay();
+    const immersiveIntensity = await MCPStore.getImmersiveIntensity();
+    // See the matching comment in triggerAIGeneration - independent of
+    // immersive intensity, purely the user's own opt-in override.
+    const storedMcpLimit = await MCPStore.getMaxToolIterations();
+    const mcpMaxIterations = storedMcpLimit.enabled ? storedMcpLimit.value : undefined;
 
     // History up to the message before this assistant message
     const historyBefore = msgs.slice(0, msgIndex);
@@ -1995,7 +2117,8 @@ export class ChatView {
       messages: historyBefore,
       contextLimit: genSettings.contextLimit || 20,
       tools: activeTools,
-      immersiveRoleplay
+      immersiveRoleplay,
+      immersiveIntensity
     }));
 
     activeAbortController = new AbortController();
@@ -2095,6 +2218,7 @@ export class ChatView {
         tools: activeTools,
         streaming: genSettings.streamingEnabled,
         signal: abortSignal,
+        maxIterations: mcpMaxIterations,
         transformFirstResult: (result) => mergePrefillResult(genSettings, result),
         callbacks: {
           onContentChunk: (delta) => {
@@ -2180,6 +2304,176 @@ export class ChatView {
       setGeneratingState(false);
       await flushQueuedMessageIfAny();
     }
+  }
+
+  /**
+   * AI-driven step-by-step wizard for personalizing a fresh chat's opening
+   * greeting message. Asks ONE question at a time (3 preset options + a
+   * free-text input), each next question built from every answer given so
+   * far (`GreetingWizardService.nextQuestion`), then writes a brand new
+   * greeting from the full Q&A (`GreetingWizardService.generateGreeting`).
+   * The result is applied as a NEW SWIPE VARIATION on the target message
+   * (`messageId`, the chat's already-persisted greeting) via
+   * `ChatStore.updateMessageSwipes` - the original greeting is never lost,
+   * just no longer the active variation, exactly like a normal swipe.
+   * `Modal` has no "update body in place" API, so this manipulates the
+   * returned `overlay`'s `.modal-body` directly across every step instead of
+   * opening/closing a new modal per step (which would read as flicker/lost
+   * position) - see the file-level `Modal` class for why that's safe (it
+   * just returns the live overlay element, no other file does this yet).
+   */
+  static async openGreetingWizard({ messageId, character, persona, onApplied }) {
+    const proxy = await ProxyStore.getDefault();
+    if (!proxy) {
+      Toast.error('Silakan konfigurasi Multi-Proxy API terlebih dahulu di menu Multi-Proxy Config!');
+      return;
+    }
+    const genSettings = await ProxyStore.getGenerationSettings();
+
+    const answers = [];
+    // questionHistory[step] is the {question, options} shown at that step -
+    // cached so "Kembali" can redisplay a prior question without a new AI call.
+    const questionHistory = [];
+    let step = 0;
+    let generatedText = '';
+
+    const overlay = Modal.open({
+      title: 'Personalisasi Pesan Pembuka (AI)',
+      contentHTML: '<div style="text-align:center; padding:2rem 0; color:var(--text-muted);">Memuat...</div>'
+    });
+    const body = () => overlay.querySelector('.modal-body');
+
+    const renderLoading = (msg) => {
+      body().innerHTML = `
+        <div style="display:flex; flex-direction:column; align-items:center; padding:2rem 0; gap:0.75rem;">
+          <div class="app-loading-spinner" style="width:28px; height:28px;"></div>
+          <p style="color:var(--text-muted); font-size:0.85rem; margin:0;">${escapeHtml(msg)}</p>
+        </div>
+      `;
+    };
+
+    const renderError = (message, { onRetry, onBack }) => {
+      body().innerHTML = `
+        <div style="text-align:center; padding:1rem 0;">
+          <p style="color:var(--accent-rose); font-size:0.88rem; margin-bottom:1rem;">${escapeHtml(message)}</p>
+          <div style="display:flex; justify-content:center; gap:0.5rem;">
+            ${onBack ? '<button class="btn btn-secondary btn-sm" id="wizard-err-back">Kembali</button>' : ''}
+            <button class="btn btn-primary btn-sm" id="wizard-err-retry">Coba Lagi</button>
+            <button class="btn btn-secondary btn-sm" id="wizard-err-cancel">Batal</button>
+          </div>
+        </div>
+      `;
+      body().querySelector('#wizard-err-retry').onclick = onRetry;
+      if (onBack) body().querySelector('#wizard-err-back').onclick = onBack;
+      body().querySelector('#wizard-err-cancel').onclick = () => Modal.closeOverlay(overlay);
+    };
+
+    const goBackToQuestion = (targetStep) => {
+      step = targetStep;
+      answers.pop();
+      renderQuestion(questionHistory[step]);
+    };
+
+    const renderQuestion = (q) => {
+      body().innerHTML = `
+        <p style="color:var(--text-muted); font-size:0.78rem; margin-bottom:0.6rem;">Pertanyaan ${step + 1} dari ${GREETING_WIZARD_TOTAL_QUESTIONS}</p>
+        <p style="font-weight:600; margin-bottom:0.9rem;">${escapeHtml(q.question)}</p>
+        <div style="display:flex; flex-direction:column; gap:0.5rem;">
+          ${q.options.map(opt => `<button type="button" class="btn btn-secondary wizard-option-btn" data-value="${escapeAttr(opt)}" style="justify-content:flex-start; text-align:left; white-space:normal; width:100%;">${escapeHtml(opt)}</button>`).join('')}
+        </div>
+        <div style="display:flex; gap:0.5rem; margin-top:0.9rem;">
+          <input class="input" id="wizard-custom-input" placeholder="Atau ketik jawabanmu sendiri..." style="flex:1;">
+          <button class="btn btn-primary" id="wizard-custom-submit">Kirim</button>
+        </div>
+        <div style="display:flex; justify-content:space-between; margin-top:1.1rem;">
+          <button class="btn btn-secondary btn-sm" id="wizard-back" ${step === 0 ? 'disabled' : ''}>Kembali</button>
+          <button class="btn btn-secondary btn-sm" id="wizard-cancel">Batal</button>
+        </div>
+      `;
+
+      const submitAnswer = (answer) => {
+        const trimmed = (answer || '').trim();
+        if (!trimmed) return;
+        answers.push({ question: q.question, answer: trimmed });
+        if (answers.length >= GREETING_WIZARD_TOTAL_QUESTIONS) {
+          loadPreview();
+        } else {
+          step += 1;
+          loadQuestion();
+        }
+      };
+
+      body().querySelectorAll('.wizard-option-btn').forEach(btn => {
+        btn.onclick = () => submitAnswer(btn.dataset.value);
+      });
+      const customInput = body().querySelector('#wizard-custom-input');
+      body().querySelector('#wizard-custom-submit').onclick = () => submitAnswer(customInput.value);
+      customInput.onkeydown = (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); submitAnswer(customInput.value); }
+      };
+      body().querySelector('#wizard-back').onclick = () => { if (step > 0) goBackToQuestion(step - 1); };
+      body().querySelector('#wizard-cancel').onclick = () => Modal.closeOverlay(overlay);
+    };
+
+    const loadQuestion = async () => {
+      renderLoading(step === 0 ? 'Membuat pertanyaan pertama...' : 'Membuat pertanyaan berikutnya...');
+      try {
+        const q = await GreetingWizardService.nextQuestion({ proxy, character, persona, answers });
+        questionHistory[step] = q;
+        renderQuestion(q);
+      } catch (err) {
+        renderError(err.message || 'Gagal membuat pertanyaan.', {
+          onRetry: loadQuestion,
+          onBack: step > 0 ? () => goBackToQuestion(step - 1) : null
+        });
+      }
+    };
+
+    const loadPreview = async () => {
+      renderLoading('Menulis pesan pembuka baru...');
+      try {
+        generatedText = await GreetingWizardService.generateGreeting({ proxy, genSettings, character, persona, answers });
+        renderPreview();
+      } catch (err) {
+        renderError(err.message || 'Gagal membuat pesan pembuka.', {
+          onRetry: loadPreview,
+          onBack: () => goBackToQuestion(GREETING_WIZARD_TOTAL_QUESTIONS - 1)
+        });
+      }
+    };
+
+    const renderPreview = () => {
+      body().innerHTML = `
+        <p style="font-weight:600; margin-bottom:0.6rem;">Pratinjau Pesan Pembuka Baru</p>
+        <textarea class="textarea" id="wizard-preview-text" style="min-height:180px;">${escapeHtml(generatedText)}</textarea>
+        <div style="display:flex; flex-wrap:wrap; gap:0.5rem; justify-content:flex-end; margin-top:1rem;">
+          <button class="btn btn-secondary btn-sm" id="wizard-preview-back">Ubah Jawaban</button>
+          <button class="btn btn-secondary btn-sm" id="wizard-preview-regenerate">Buat Ulang</button>
+          <button class="btn btn-primary btn-sm" id="wizard-preview-apply">Gunakan Pesan Ini</button>
+        </div>
+      `;
+      body().querySelector('#wizard-preview-back').onclick = () => goBackToQuestion(GREETING_WIZARD_TOTAL_QUESTIONS - 1);
+      body().querySelector('#wizard-preview-regenerate').onclick = () => loadPreview();
+      body().querySelector('#wizard-preview-apply').onclick = async () => {
+        const finalText = body().querySelector('#wizard-preview-text').value.trim();
+        if (!finalText) {
+          Toast.error('Teks pesan pembuka tidak boleh kosong.');
+          return;
+        }
+        const msg = await ChatStore.getMessageById(messageId);
+        if (!msg) {
+          Modal.closeOverlay(overlay);
+          return;
+        }
+        const updatedSwipes = [...(msg.swipes && msg.swipes.length ? msg.swipes : [msg.content]), finalText];
+        await ChatStore.updateMessageSwipes(messageId, updatedSwipes, updatedSwipes.length - 1);
+        Modal.closeOverlay(overlay);
+        Toast.success('Pesan pembuka berhasil dipersonalisasi!');
+        if (onApplied) await onApplied();
+      };
+    };
+
+    await loadQuestion();
   }
 
   static formatRoleplayMarkdown(text = '', userName = '', charName = '') {

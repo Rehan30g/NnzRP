@@ -107,6 +107,59 @@ export class MCPStore {
     await db.put('settings', { key: 'mcpImmersiveRoleplay', value: !!enabled });
   }
 
+  /**
+   * Immersive Roleplay intensity - how aggressively the model is told to
+   * reach for tools once Immersive Roleplay is on. Only meaningful when
+   * getImmersiveRoleplay() is true; PromptBuilder ignores it otherwise.
+   *   - 'medium' (default): the original Immersive Roleplay behavior - use
+   *     tools on natural in-character openings.
+   *   - 'high': actively look for excuses to use tools nearly every turn,
+   *     even for minor things.
+   *   - 'max': NOT RECOMMENDED - tool use becomes the default instinct,
+   *     fired even when the scene doesn't call for it at all.
+   * Anything else stored (missing key, corrupted value, old data) fails
+   * safe to 'medium', same normalize-on-every-read approach as permissions.
+   */
+  static normalizeImmersiveIntensity(value) {
+    return value === 'high' || value === 'max' ? value : 'medium';
+  }
+
+  static async getImmersiveIntensity() {
+    const record = await db.get('settings', 'mcpImmersiveIntensity');
+    return this.normalizeImmersiveIntensity(record?.value);
+  }
+
+  static async setImmersiveIntensity(level) {
+    await db.put('settings', { key: 'mcpImmersiveIntensity', value: this.normalizeImmersiveIntensity(level) });
+  }
+
+  /**
+   * Optional custom cap on AgentRunner's tool-use loop (js/services/agentRunner.js),
+   * completely independent of Immersive Roleplay/intensity - those only ever
+   * affect prompt wording, never this. Off by default: AgentRunner then falls
+   * back through its own existing chain (settings.mcpMaxToolIterations, then a
+   * hardcoded 6), i.e. behavior for anyone who never touches this control is
+   * unchanged. This was deliberately NOT auto-derived from immersive intensity
+   * (an earlier version bumped it to 15/30 for High/MAX) - that silently
+   * capped the model at a hard wall (AgentRunner throws once the cap is hit),
+   * which fought against "use tools massively" instead of enabling it; a
+   * manual, explicit, opt-in number the user sets themselves is clearer.
+   */
+  static async getMaxToolIterations() {
+    const record = await db.get('settings', 'mcpCustomMaxIterations');
+    const stored = record?.value;
+    const enabled = !!(stored && stored.enabled);
+    const rawValue = Number(stored?.value);
+    const value = Number.isFinite(rawValue) && rawValue > 0 ? Math.floor(rawValue) : 20;
+    return { enabled, value };
+  }
+
+  static async setMaxToolIterations({ enabled, value }) {
+    const rawValue = Number(value);
+    const safeValue = Number.isFinite(rawValue) && rawValue > 0 ? Math.floor(rawValue) : 20;
+    await db.put('settings', { key: 'mcpCustomMaxIterations', value: { enabled: !!enabled, value: safeValue } });
+  }
+
   /* ---------------------------------------------------------------------
    * Per-tool execution permissions (Ask / Allow / Decline)
    *

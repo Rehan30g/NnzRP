@@ -8,6 +8,17 @@ import { dropdownHTML, wireDropdown } from '../components/dropdown.js';
 import { toggleSwitchHTML, toggleRowHTML } from '../components/toggle.js';
 import { escapeHtml, escapeAttr } from '../../utils/sanitize.js';
 
+// Shared between this view's own "Tool Use Frequency" segmented control and
+// its mirrored copy in the chat drawer's MCP tab (chatView.js imports these
+// directly), so the wording can't drift between the two like the toggle rows
+// they sit under could if hand-copied.
+export const INTENSITY_LABELS = { medium: 'Medium', high: 'High', max: 'MAX' };
+export const MCP_INTENSITY_HINTS = {
+  medium: 'Default - uses tools on natural in-character openings.',
+  high: 'Uses tools more often, even for minor or not-strictly-necessary things.',
+  max: 'Not recommended - massively increases tool calls, even for complex questions or situations that clearly don’t need one.'
+};
+
 export class MCPView {
   static async render(container) {
     const servers = await MCPStore.getAll();
@@ -44,6 +55,27 @@ export class MCPView {
             description: 'Tells the model to proactively use connected tools in-character (e.g. a websearch tool while a character is browsing, or to pull up-to-date info during the scene) instead of only calling them when explicitly asked.',
             ariaLabel: 'Enable immersive proactive tool use'
           })}
+          <div id="mcp-intensity-row" style="margin-top:0.9rem; padding-top:0.9rem; border-top:1px solid var(--border-light);">
+            <div class="form-label" style="margin-bottom:0.5rem;">Tool Use Frequency</div>
+            <div class="segmented" role="group" id="mcp-intensity-group">
+              <button type="button" class="segmented-option" data-value="medium">Medium</button>
+              <button type="button" class="segmented-option" data-value="high">High</button>
+              <button type="button" class="segmented-option" data-value="max">MAX</button>
+            </div>
+            <p id="mcp-intensity-hint" style="font-size:0.78rem; color:var(--text-muted); margin:0.5rem 0 0;"></p>
+          </div>
+        </div>
+        <div style="border-top:1px solid var(--border-light); padding-top:1rem;">
+          ${toggleRowHTML({
+            id: 'mcp-iteration-limit-toggle',
+            title: 'Custom Tool Call Limit',
+            description: "Caps how many tool-call rounds the model may chain in a single reply before it must give a final answer. Off by default, which keeps the app's original built-in cap of 6 rounds - turn this on to raise (or lower) it yourself.",
+            ariaLabel: 'Enable a custom tool call round limit'
+          })}
+          <div id="mcp-iteration-limit-row" style="margin-top:0.9rem; display:flex; align-items:center; gap:0.6rem;">
+            <label class="form-label" for="mcp-iteration-limit-value" style="margin:0;">Max rounds per reply:</label>
+            <input class="input" type="number" id="mcp-iteration-limit-value" min="1" max="500" step="1" style="width:90px;">
+          </div>
         </div>
       </div>
 
@@ -116,6 +148,9 @@ export class MCPView {
     const globalToggle = container.querySelector('#mcp-global-toggle');
     const immersiveToggle = container.querySelector('#mcp-immersive-toggle');
     const serversSection = container.querySelector('#mcp-servers-section');
+    const intensityRow = container.querySelector('#mcp-intensity-row');
+    const intensityGroup = container.querySelector('#mcp-intensity-group');
+    const intensityHint = container.querySelector('#mcp-intensity-hint');
 
     const applyMasterVisualState = (enabled) => {
       if (serversSection) {
@@ -123,6 +158,24 @@ export class MCPView {
         serversSection.style.pointerEvents = enabled ? '' : 'none';
       }
       if (immersiveToggle) immersiveToggle.disabled = !enabled;
+    };
+
+    // Tool Use Frequency only means anything while Immersive Roleplay itself
+    // is on - dimmed/inert otherwise, same visual pattern as the master
+    // switch dimming the server list below it.
+    const applyIntensityVisualState = (immersiveOn) => {
+      if (intensityRow) {
+        intensityRow.style.opacity = immersiveOn ? '1' : '0.5';
+        intensityRow.style.pointerEvents = immersiveOn ? '' : 'none';
+      }
+    };
+
+    const setActiveIntensityButton = (value) => {
+      if (!intensityGroup) return;
+      intensityGroup.querySelectorAll('.segmented-option').forEach(b => {
+        b.classList.toggle('active', b.dataset.value === value);
+      });
+      if (intensityHint) intensityHint.textContent = MCP_INTENSITY_HINTS[value] || '';
     };
 
     globalToggle.checked = await MCPStore.getGlobalEnabled();
@@ -135,10 +188,56 @@ export class MCPView {
 
     immersiveToggle.checked = await MCPStore.getImmersiveRoleplay();
     immersiveToggle.disabled = !globalToggle.checked;
+    applyIntensityVisualState(immersiveToggle.checked);
     immersiveToggle.onchange = async (e) => {
       await MCPStore.setImmersiveRoleplay(e.target.checked);
+      applyIntensityVisualState(e.target.checked);
       Toast.info(`Immersive Roleplay ${e.target.checked ? 'diaktifkan' : 'dinonaktifkan'}.`);
     };
+
+    setActiveIntensityButton(await MCPStore.getImmersiveIntensity());
+    if (intensityGroup) {
+      intensityGroup.querySelectorAll('.segmented-option').forEach(btn => {
+        btn.onclick = async () => {
+          const value = btn.dataset.value;
+          await MCPStore.setImmersiveIntensity(value);
+          setActiveIntensityButton(value);
+          Toast.info(`Tool Use Frequency diset ke ${INTENSITY_LABELS[value] || value}.`);
+        };
+      });
+    }
+
+    // Custom Tool Call Limit - independent of Immersive Roleplay/intensity,
+    // off by default (see MCPStore.getMaxToolIterations()).
+    const iterationLimitToggle = container.querySelector('#mcp-iteration-limit-toggle');
+    const iterationLimitRow = container.querySelector('#mcp-iteration-limit-row');
+    const iterationLimitInput = container.querySelector('#mcp-iteration-limit-value');
+
+    const applyIterationLimitVisualState = (enabled) => {
+      if (iterationLimitRow) {
+        iterationLimitRow.style.opacity = enabled ? '1' : '0.5';
+        iterationLimitRow.style.pointerEvents = enabled ? '' : 'none';
+      }
+    };
+
+    if (iterationLimitToggle && iterationLimitInput) {
+      const storedLimit = await MCPStore.getMaxToolIterations();
+      iterationLimitToggle.checked = storedLimit.enabled;
+      iterationLimitInput.value = storedLimit.value;
+      applyIterationLimitVisualState(storedLimit.enabled);
+
+      iterationLimitToggle.onchange = async (e) => {
+        await MCPStore.setMaxToolIterations({ enabled: e.target.checked, value: iterationLimitInput.value });
+        applyIterationLimitVisualState(e.target.checked);
+        Toast.info(`Custom Tool Call Limit ${e.target.checked ? 'diaktifkan' : 'dinonaktifkan'}.`);
+      };
+      iterationLimitInput.onchange = async (e) => {
+        await MCPStore.setMaxToolIterations({ enabled: iterationLimitToggle.checked, value: e.target.value });
+        // Reflect back whatever got clamped/defaulted server-side (e.g. blank or 0 input).
+        const saved = await MCPStore.getMaxToolIterations();
+        iterationLimitInput.value = saved.value;
+      };
+    }
 
     container.querySelectorAll('.mcp-enabled-check').forEach(chk => {
       chk.onchange = async (e) => {
