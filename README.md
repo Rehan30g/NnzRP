@@ -47,10 +47,10 @@ That reply took **six tool calls**. He really did read the repo. The scepticism 
 
 |  | |
 |---|---|
-| **Agentic, not one-shot** | The model chains multiple tool calls per turn, feeding each result back and deciding what to reach for next — bounded by a safety limit of 6 rounds. |
+| **Agentic, not one-shot** | The model chains multiple tool calls per turn, feeding each result back and deciding what to reach for next — bounded by a safety limit of 6 rounds, or your own custom cap if you turn that on. |
 | **One message, however many rounds** | Narration written before a tool call and narration written after it land in a single message, not fragmented into robotic separate turns. |
 | **Inline markers** | A small marker sits at the exact point in the prose where each tool fired, so you can see what happened where without it interrupting the read. |
-| **Immersive Roleplay mode** | An opt-in nudge for characters to reach for tools *proactively and in-character* — "browsing" when the scene calls for it — instead of waiting to be told. |
+| **Immersive Roleplay mode** | An opt-in nudge for characters to reach for tools *proactively and in-character* — "browsing" when the scene calls for it — instead of waiting to be told. Three intensity levels (Medium / High / MAX) control how eagerly, from natural openings only up to constant, unprompted tool use. |
 | **Permission-gated** | Every tool defaults to **Ask**. Approve per call, or set Allow / Decline per tool. Global kill switch included. |
 | **HTTP + local stdio** | Connect a hosted JSON-RPC endpoint, or let NnzRP spawn a local MCP server as a child process. |
 
@@ -84,6 +84,7 @@ That reply took **six tool calls**. He really did read the repo. The scepticism 
 |---|---|
 | **BYOK, no middleman** | Configure as many providers as you like as named profiles, and switch between them mid-conversation. |
 | **Storybook chat** | Centered stream, floating composer, live streaming, swipe-to-regenerate, session forking, inline editing. |
+| **AI-personalized greetings** | Regenerate a fresh chat's opening line through a short back-and-forth with the AI — one question at a time, three quick options or type your own — instead of settling for the character's default. |
 | **Never blocks you** | Keep typing while a reply generates — your next message queues and fires automatically. |
 | **Character Card V2** | Import and export cards compatible with Tavern / SillyTavern / Janitor AI. |
 | **Characters & personas** | Avatars by URL or upload, keyword-triggered lorebooks, switchable system prompt presets. |

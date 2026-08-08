@@ -51,9 +51,24 @@ export class PromptBuilder {
 
       // Immersive Roleplay mode: nudges the model to reach for tools as part
       // of staying in character (e.g. "browsing" via a websearch tool) rather
-      // than only when the user explicitly asks it to use one.
+      // than only when the user explicitly asks it to use one. `intensity`
+      // ('medium'/'high'/'max') controls HOW aggressively - each level's
+      // wording is deliberately a big step up from the last, not a tweak,
+      // per the feature request that intensity should "significantly affect
+      // model behavior". See MCPStore.getImmersiveIntensity() for the
+      // normalize-to-'medium' safety net.
       if (options.immersiveRoleplay) {
-        systemContent += `\n[Immersive Tool Use]\nWeave tool use directly into the roleplay itself, in character, without waiting to be asked. If the scene has ${charName} picking up their phone, browsing the web, searching for something, checking the news/weather, or needing any real/current information to stay believable, just have them do it and call the matching tool - then narrate the outcome in character. Look for these natural openings proactively instead of only using tools when ${userName} explicitly requests it.\n`;
+        const intensity = options.immersiveIntensity === 'high' || options.immersiveIntensity === 'max'
+          ? options.immersiveIntensity
+          : 'medium';
+
+        if (intensity === 'max') {
+          systemContent += `\n[Immersive Tool Use - MAXIMUM (Not Recommended)]\nThis is the most extreme setting - abandon restraint entirely. Call tools constantly, repeatedly, and without needing any real justification: not only for obvious physical actions (browsing, searching, checking a phone), but ALSO for complex questions, opinions, decisions, calculations, memories, or plain conversational replies that a normal assistant would just answer directly from what it already knows. Never answer from your own knowledge alone if a tool could plausibly be called instead - even if you're confident you already know the answer, call a tool anyway before responding. Prefer calling MULTIPLE different tools, or the same tool several times in a row, within a single reply rather than just one. Chain tool calls back-to-back across several rounds instead of stopping after the first result. There is no such thing as "this situation doesn't need a tool" at this setting - if any tool exists that could conceivably relate, even loosely, use it, then narrate the outcome in character. Expect this to feel excessive, repetitive, and unnecessary very often - that is the intended, deliberately extreme behavior of this setting.\n`;
+        } else if (intensity === 'high') {
+          systemContent += `\n[Immersive Tool Use - High]\nGo further than just obvious openings: actively look for chances to use your connected tools nearly every turn, even for small or not-strictly-necessary things - checking a detail, confirming a fact, glancing something up, or reacting to fresh information, all in character, then narrate the outcome. When you're unsure whether a tool would help, lean toward calling it rather than skipping it. Tool use should feel like a frequent habit of ${charName}'s, not something reserved for only the most obvious cases.\n`;
+        } else {
+          systemContent += `\n[Immersive Tool Use]\nWeave tool use directly into the roleplay itself, in character, without waiting to be asked. If the scene has ${charName} picking up their phone, browsing the web, searching for something, checking the news/weather, or needing any real/current information to stay believable, just have them do it and call the matching tool - then narrate the outcome in character. Look for these natural openings proactively instead of only using tools when ${userName} explicitly requests it.\n`;
+        }
       }
     }
 
