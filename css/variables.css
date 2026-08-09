@@ -101,6 +101,18 @@
   --code-block-bg: #0f172a;
   --code-block-fg: #f8fafc;
 
+  /* Fenced code-block syntax highlighting (js/utils/syntaxHighlight.js).
+     Deliberately theme-INVARIANT (defined once here, not duplicated in the
+     dark blocks below) - code blocks intentionally stay on a fixed dark
+     background regardless of app theme (--code-block-bg above is dark navy
+     in both palettes already), same convention most editors/GitHub use. */
+  --hl-tag: #f87171;
+  --hl-attr: #fbbf24;
+  --hl-string: #34d399;
+  --hl-comment: #64748b;
+  --hl-keyword: #a78bfa;
+  --hl-number: #38bdf8;
+
   /* --- Chrome: titlebar, scrollbars, overlays, tooltips --- */
   --titlebar-bg: #ffffff;
   --titlebar-btn-hover: #e2e8f0;

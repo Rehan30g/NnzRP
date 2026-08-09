@@ -4,6 +4,7 @@
  * feature's single prompt-only "pretend you have tools" call. */
 import { ProviderManager } from './providerManager.js';
 import { MCPToolRegistry } from './mcpToolRegistry.js';
+import { BUILTIN_VIEW_IMAGE_TOOL, executeBuiltinImageTool, BUILTIN_EMBED_HTML_TOOL, executeBuiltinEmbedHtmlTool } from './builtinTools.js';
 
 /**
  * What both the persisted tool trace AND the model itself are told when the
@@ -136,6 +137,15 @@ export class AgentRunner {
         }
 
         let content;
+        // Only set for the builtin view-image tool's successful runs - see
+        // the payload-injection comment below for why this rides in as a
+        // separate message instead of living inside the tool-result entry.
+        let fetchedImages = null;
+        // Only set for the builtin embed-html tool's successful runs - unlike
+        // fetchedImages this never needs to go back into `payload` (the model
+        // gets no pixels/markup back, it's UI-only), it just rides along on
+        // the trace entry for chatView.js to persist/render.
+        let embeddedHtml = null;
         if (decision === 'decline') {
           // Never touches MCPToolRegistry.executeTool - the tool genuinely
           // does not run. Still traced (exactly like an error result is) so
@@ -146,17 +156,60 @@ export class AgentRunner {
         } else {
           callbacks.onToolExecuting?.(call);
           try {
-            content = await MCPToolRegistry.executeTool(call.name, call.args);
+            // The builtin image-fetch and embed-html tools
+            // (js/services/builtinTools.js) have no MCP server behind them,
+            // so they're dispatched here instead of going through
+            // MCPToolRegistry.executeTool.
+            if (call.name === BUILTIN_VIEW_IMAGE_TOOL) {
+              const result = await executeBuiltinImageTool(call.args);
+              content = result.text;
+              fetchedImages = result.images;
+            } else if (call.name === BUILTIN_EMBED_HTML_TOOL) {
+              const result = await executeBuiltinEmbedHtmlTool(call.args);
+              content = result.text;
+              embeddedHtml = { html: result.html, title: result.title };
+            } else {
+              content = await MCPToolRegistry.executeTool(call.name, call.args);
+            }
           } catch (err) {
             content = `Error: ${err.message}`;
           }
         }
         const entry = { name: call.name, args: call.args, result: content };
         if (decision === 'decline') entry.declined = true;
+        // Lets chatView.js persist/render the fetched image as part of the
+        // final chat message too, not just feed it to the model (see the
+        // synthetic payload turn below) - the user should be able to SEE what
+        // the character just "looked at".
+        if (fetchedImages && fetchedImages.length) entry.images = fetchedImages;
+        // Same idea for the embed-html tool: chatView.js's collectToolEmbeds()
+        // picks these up to build the persisted message's `embeds` field, so
+        // the sandboxed iframe renders once the message commits. Never set
+        // when `decision === 'decline'` (embeddedHtml stays null in that
+        // branch above) - a declined call must never render anything.
+        if (embeddedHtml) {
+          entry.html = embeddedHtml.html;
+          entry.htmlTitle = embeddedHtml.title;
+        }
         toolTrace.push(entry);
         roundTrace.push(entry);
         callbacks.onToolResult?.(call, content);
         payload = [...payload, { role: 'tool', toolCallId: call.id, toolName: call.name, content }];
+        if (fetchedImages && fetchedImages.length) {
+          // OpenAI tool-role messages must be plain text (no image content
+          // blocks allowed there) and Gemini's functionResponse part has no
+          // image slot either, so instead of special-casing every provider's
+          // tool-result wire format, the fetched image rides in as a normal
+          // app-injected user turn right after the tool result. This reuses
+          // the exact same `images` field/handling real user-uploaded
+          // attachments use in providerManager.js's translators, so it needs
+          // no provider-specific code of its own.
+          payload = [...payload, {
+            role: 'user',
+            content: '[System note: the image requested above was fetched successfully and is attached for you to view.]',
+            images: fetchedImages
+          }];
+        }
       }
 
       segments.push({ text: result.content || '', tools: roundTrace });

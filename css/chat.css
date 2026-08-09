@@ -280,14 +280,90 @@
   color: var(--code-inline-fg);
 }
 
-.message-content pre {
-  background: var(--code-block-bg);
+/* Fenced code blocks are rendered by a custom marked renderer
+   (js/ui/views/chatView.js, marked.use({renderer:{code,...}})) as
+   .code-block-wrap > .code-block-header + pre > code, NOT plain .message-content
+   pre/code - resets the inline-code look here so the syntax-highlight .hl-*
+   spans (js/utils/syntaxHighlight.js) provide the actual token colors instead
+   of every character rendering in one flat indigo shade. */
+.message-content pre code {
+  background: none;
+  padding: 0;
+  border-radius: 0;
+  font-size: 0.85rem;
   color: var(--code-block-fg);
-  padding: 1rem;
-  border-radius: var(--radius-md);
-  overflow-x: auto;
-  margin: 0.6rem 0;
 }
+
+.code-block-wrap {
+  margin: 0.6rem 0;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--code-block-bg);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.code-block-wrap pre {
+  margin: 0;
+  padding: 1rem;
+  overflow-x: auto;
+  background: none;
+  color: var(--code-block-fg);
+}
+
+.code-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.4rem 0.75rem;
+  background: rgba(255, 255, 255, 0.03);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.code-block-lang {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--code-block-fg);
+  opacity: 0.55;
+  font-family: var(--font-mono);
+}
+
+.code-copy-btn {
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.25rem 0.6rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: transparent;
+  color: var(--code-block-fg);
+  opacity: 0.8;
+  cursor: pointer;
+  transition: opacity var(--transition-fast), background var(--transition-fast);
+}
+
+.code-copy-btn:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.code-copy-btn.copied {
+  opacity: 1;
+  color: var(--accent-emerald);
+  border-color: var(--accent-emerald);
+}
+
+/* Syntax highlight token colors (js/utils/syntaxHighlight.js) - tuned
+   against --code-block-bg, which stays a fixed dark navy in both app themes
+   (see the token comment in variables.css), so these don't need light/dark
+   variants either. */
+.hl-tag { color: var(--hl-tag); }
+.hl-attr { color: var(--hl-attr); }
+.hl-string { color: var(--hl-string); }
+.hl-comment { color: var(--hl-comment); font-style: italic; }
+.hl-keyword { color: var(--hl-keyword); font-weight: 600; }
+.hl-number { color: var(--hl-number); }
+.hl-punct { color: var(--code-block-fg); opacity: 0.7; }
 
 /* Message Actions & Swiping Footer */
 .message-footer {
@@ -394,6 +470,258 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+}
+
+/* ===================================================
+   Image attach ("+") button, popup menu, and draft preview strip
+   =================================================== */
+.chat-attach-wrap {
+  position: relative;
+  display: flex;
+}
+
+.chat-attach-btn {
+  color: var(--text-muted);
+}
+
+.chat-attach-btn:hover {
+  color: var(--accent-primary);
+}
+
+/* Anchored to `.chat-attach-wrap` (position:relative), NOT portalled to
+   <body> like js/ui/components/dropdown.js's menu - it only ever needs to
+   sit right above its own trigger, and position:absolute (unlike :fixed)
+   isn't trapped by `.chat-input-container`'s own transform. */
+.chat-attach-menu {
+  position: absolute;
+  bottom: calc(100% + 0.4rem);
+  left: 0;
+  min-width: 160px;
+  padding: 0.3rem;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-popover);
+  z-index: 20;
+  animation: fadeIn var(--transition-fast);
+}
+
+.chat-attach-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 0.5rem 0.7rem;
+  border: none;
+  background: none;
+  border-radius: var(--radius-sm);
+  font-size: 0.86rem;
+  color: var(--text-main);
+  cursor: pointer;
+}
+
+.chat-attach-menu-item:hover {
+  background: var(--bg-surface-hover);
+}
+
+.chat-attach-preview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.chat-attach-thumb {
+  position: relative;
+  width: 56px;
+  height: 56px;
+  flex-shrink: 0;
+}
+
+.chat-attach-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-light);
+  background: var(--bg-inset);
+}
+
+.chat-attach-thumb-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+}
+
+.chat-attach-thumb-remove:hover {
+  color: var(--accent-rose);
+  border-color: var(--accent-rose-border);
+}
+
+/* Thumbnails on a PERSISTED user message (as opposed to the not-yet-sent
+   draft preview above), rendered by messageImagesHTML() in chatView.js. */
+.message-image-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+}
+
+.message-image-thumb {
+  max-width: 220px;
+  max-height: 220px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-light);
+  object-fit: cover;
+}
+
+/* Sandboxed HTML/CSS/JS embeds the builtin "Embed HTML" tool
+   (js/services/builtinTools.js) produced mid-reply, rendered by
+   messageEmbedsHTML() in chatView.js. Small/neutral card treatment - same
+   family as `.tool-trace-block` - since this is quiet persisted content, not
+   something that needs to grab attention the way `.tool-live-block` does. */
+.message-embed-card {
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-muted);
+  padding: 0.6rem;
+  margin-top: 0.5rem;
+  overflow: hidden;
+}
+
+.message-embed-label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-dim);
+  margin-bottom: 0.5rem;
+}
+
+.message-embed-label svg {
+  width: 11px;
+  height: 11px;
+  flex-shrink: 0;
+  opacity: 0.85;
+}
+
+/* Fixed size so one large/tall embed can't blow out the chat layout - the
+   embedded content can still scroll internally if it's taller than this.
+   `sandbox="allow-scripts"` (no `allow-same-origin`) is set inline by
+   messageEmbedsHTML(), not here - that's the actual security boundary. */
+.message-embed-frame {
+  display: block;
+  width: 100%;
+  height: 320px;
+  border: none;
+  background: var(--bg-surface);
+}
+
+/* ===================================================
+   Context-capacity gauge (chat header) - a plain CSS conic-gradient donut
+   ring, not SVG: cheap to redraw on every renderMessages() call and matches
+   the app's flat design language. Color/percentage/background are set
+   inline by refreshContextGauge() in chatView.js, not here.
+   =================================================== */
+.context-gauge {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-full);
+  flex-shrink: 0;
+  cursor: default;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background var(--transition-fast);
+}
+
+.context-gauge-inner {
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-full);
+  background: var(--bg-surface);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.52rem;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+/* ===================================================
+   Compact Chat recommendation banner
+   =================================================== */
+.compact-chat-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  max-width: 880px;
+  margin: 0 auto 1rem;
+  padding: 0.75rem 1rem;
+  background: var(--accent-secondary-soft);
+  border: 1px solid var(--accent-secondary-border);
+  border-radius: var(--radius-md);
+}
+
+.compact-chat-banner-text {
+  font-size: 0.85rem;
+  color: var(--text-main);
+}
+
+.compact-chat-banner-text strong {
+  color: var(--accent-secondary);
+}
+
+.compact-chat-banner-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+/* Auto-generated conversation recap message (ChatStore.createCompactedChat) -
+   deliberately quiet/neutral, NOT styled like a normal character chat bubble,
+   so it reads as an app-inserted note rather than something the character
+   "said". */
+.summary-message-block .message-header {
+  opacity: 0.7;
+}
+
+.summary-message-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 0.4rem;
+}
+
+.summary-message-block .message-content {
+  background: var(--bg-inset);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  padding: 0.85rem 1rem;
+  font-style: italic;
+  color: var(--text-muted);
 }
 
 .token-indicator {

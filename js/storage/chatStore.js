@@ -76,9 +76,91 @@ export class ChatStore {
         swipes: source.swipes,
         toolTrace: source.toolTrace || [],
         toolSegments: source.toolSegments || [],
+        images: source.images || [],
         createdAt: source.createdAt
       };
       await db.put('messages', copy);
+    }
+
+    return newChat;
+  }
+
+  /**
+   * "Compact Chat" - the AI-summarization counterpart to forkChat(). Instead
+   * of copying the whole history verbatim (which is exactly what got a
+   * session too long to begin with), this keeps the first `keepFirst`
+   * messages as-is (the character's opening + earliest scene-setting, which
+   * chatView.js deliberately never lets the compact recommendation touch)
+   * and replaces everything else with ONE AI-generated recap message. The
+   * summary text itself is produced by the caller (chatView.js, via
+   * ProviderManager) - this method only owns the data-shuffling: create the
+   * new chat, copy the kept messages, append the recap.
+   * @param {string} originalChatId
+   * @param {string} summaryContent - AI-generated recap text (already trimmed).
+   * @param {number} [keepFirst=4]
+   * @returns {Promise<object>} the newly created chat record.
+   */
+  static async createCompactedChat(originalChatId, summaryContent, keepFirst = 4) {
+    const originalChat = await db.get('chats', originalChatId);
+    if (!originalChat) {
+      throw new Error('Chat asal tidak ditemukan.');
+    }
+
+    const messages = await this.getMessages(originalChatId);
+    const kept = messages.slice(0, keepFirst);
+
+    const now = Date.now();
+    const newChat = {
+      id: `chat-${now}`,
+      characterId: originalChat.characterId,
+      personaId: originalChat.personaId,
+      title: `${originalChat.title} (Ringkasan)`,
+      compactedFrom: originalChatId,
+      compactedAt: now,
+      createdAt: now,
+      updatedAt: now
+    };
+    await db.put('chats', newChat);
+
+    // The recap goes FIRST (top of the new chat), kept messages follow below
+    // it - stored as role:'assistant' so PromptBuilder folds it into context
+    // with zero new plumbing (a stored message's role is only ever 'user' or
+    // 'assistant' today), flagged `isSummary` so chatView.js renders it as a
+    // quiet recap card instead of a normal character bubble. Every copied
+    // message below gets a NEW sequential timestamp (now+1, now+2, ...)
+    // instead of keeping its OWN older original createdAt, so
+    // getMessages()'s sort-by-createdAt actually places them after the
+    // recap regardless of how old the originals were.
+    await db.put('messages', {
+      id: `msg-${now}-summary-${Math.random().toString(36).substr(2, 4)}`,
+      chatId: newChat.id,
+      role: 'assistant',
+      content: summaryContent,
+      thoughts: '',
+      swipeIndex: 0,
+      swipes: [summaryContent],
+      toolTrace: [],
+      toolSegments: [],
+      images: [],
+      isSummary: true,
+      createdAt: now
+    });
+
+    for (let i = 0; i < kept.length; i++) {
+      const source = kept[i];
+      await db.put('messages', {
+        id: `msg-${now}-${i}-${Math.random().toString(36).substr(2, 4)}`,
+        chatId: newChat.id,
+        role: source.role,
+        content: source.content,
+        thoughts: source.thoughts,
+        swipeIndex: source.swipeIndex,
+        swipes: source.swipes,
+        toolTrace: source.toolTrace || [],
+        toolSegments: source.toolSegments || [],
+        images: source.images || [],
+        createdAt: now + i + 1
+      });
     }
 
     return newChat;
@@ -112,8 +194,21 @@ export class ChatStore {
    *   as before, since other code (prompt history, editing, forking, search)
    *   depends on those. Same single-current-variation limitation as `thoughts`/
    *   `toolTrace` - not retained per past swipe, see CLAUDE.md.
+   * @param {Array<string>} [images] - optional base64 `data:` URLs attached to
+   *   this message. On a USER message these come from the composer's
+   *   image-upload button; on an ASSISTANT message these come from the
+   *   builtin view-image tool (js/services/builtinTools.js) actually
+   *   fetching something mid-reply, surfaced from AgentRunner's toolTrace so
+   *   the user can see what the character just "looked at", not just have it
+   *   fed silently to the model.
+   * @param {Array<{html:string, title:string}>} [embeds] - optional HTML/CSS/JS
+   *   snippets the builtin "Embed HTML" tool (js/services/builtinTools.js)
+   *   produced mid-reply, surfaced from AgentRunner's toolTrace the same way
+   *   `images` is (see chatView.js's `collectToolEmbeds`). Rendered in a
+   *   sandboxed iframe by chatView.js's `messageEmbedsHTML()`. Same
+   *   single-current-variation limitation as `thoughts`/`toolTrace`/`images`.
    */
-  static async addMessage(chatId, role, content, thoughts = '', swipes = [], toolTrace = [], toolSegments = []) {
+  static async addMessage(chatId, role, content, thoughts = '', swipes = [], toolTrace = [], toolSegments = [], images = [], embeds = []) {
     const now = Date.now();
     const message = {
       id: `msg-${now}-${Math.random().toString(36).substr(2, 4)}`,
@@ -125,6 +220,8 @@ export class ChatStore {
       swipes: swipes.length ? swipes : [content],
       toolTrace: toolTrace || [],
       toolSegments: toolSegments || [],
+      images: images || [],
+      embeds: embeds || [],
       createdAt: now
     };
     await db.put('messages', message);
@@ -136,7 +233,7 @@ export class ChatStore {
     return message;
   }
 
-  static async updateMessageSwipes(messageId, swipes, activeIndex, thoughts = '', toolTrace = [], toolSegments = []) {
+  static async updateMessageSwipes(messageId, swipes, activeIndex, thoughts = '', toolTrace = [], toolSegments = [], images = [], embeds = []) {
     const message = await db.get('messages', messageId);
     if (!message) return;
     const content = swipes[activeIndex] || message.content;
@@ -146,6 +243,11 @@ export class ChatStore {
     message.thoughts = thoughts;
     message.toolTrace = toolTrace || [];
     message.toolSegments = toolSegments || [];
+    // Same single-current-variation limitation as thoughts/toolTrace above -
+    // a fresh swipe's tool-fetched images/embeds replace whatever the
+    // previous variation had, not stored per-swipe.
+    message.images = images || [];
+    message.embeds = embeds || [];
     await db.put('messages', message);
   }
 

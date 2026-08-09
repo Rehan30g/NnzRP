@@ -160,6 +160,59 @@ export class MCPStore {
     await db.put('settings', { key: 'mcpCustomMaxIterations', value: { enabled: !!enabled, value: safeValue } });
   }
 
+  /**
+   * Permission for the builtin "view image from URL" tool (js/services/builtinTools.js)
+   * - it isn't owned by any MCP server, so it can't live in a server's
+   * `toolPermissions` map like the rest of this section. Same 'ask'/'allow'/
+   * 'decline' semantics and the same 'ask'-is-default safety guarantee,
+   * just a single global flag since there is only ever one builtin tool.
+   */
+  static async getBuiltinToolPermission() {
+    const record = await db.get('settings', 'mcpBuiltinImageToolPermission');
+    return this.normalizePermission(record?.value);
+  }
+
+  static async setBuiltinToolPermission(permission) {
+    await db.put('settings', { key: 'mcpBuiltinImageToolPermission', value: this.normalizePermission(permission) });
+  }
+
+  /**
+   * Global opt-in toggle for the builtin "Embed HTML" tool
+   * (js/services/builtinTools.js) - lets the model render a self-contained
+   * HTML/CSS/JS snippet in a sandboxed iframe directly in chat. Unlike
+   * getGlobalEnabled() (default true), this defaults to FALSE: it's the one
+   * builtin tool that actually executes AI-generated script content (even
+   * sandboxed), so it must be an explicit opt-in, not an opt-out. Same
+   * fail-safe `typeof ... === 'boolean'` pattern as every other boolean
+   * setting in this file - an absent/corrupted stored value resolves to the
+   * safe OFF state, never accidentally on.
+   */
+  static async getEmbedHtmlEnabled() {
+    const record = await db.get('settings', 'mcpEmbedHtmlEnabled');
+    return record && typeof record.value === 'boolean' ? record.value : false;
+  }
+
+  static async setEmbedHtmlEnabled(enabled) {
+    await db.put('settings', { key: 'mcpEmbedHtmlEnabled', value: !!enabled });
+  }
+
+  /**
+   * Permission for the builtin "Embed HTML" tool - same pattern/safety
+   * guarantee as getBuiltinToolPermission()/setBuiltinToolPermission() above
+   * (the view-image tool), just its own storage key: it isn't owned by any
+   * MCP server either, so it needs its own single global Ask/Allow/Decline
+   * flag rather than a per-server toolPermissions entry. Always normalized
+   * through normalizePermission(), so an unset/corrupted value is 'ask'.
+   */
+  static async getEmbedHtmlToolPermission() {
+    const record = await db.get('settings', 'mcpEmbedHtmlToolPermission');
+    return this.normalizePermission(record?.value);
+  }
+
+  static async setEmbedHtmlToolPermission(permission) {
+    await db.put('settings', { key: 'mcpEmbedHtmlToolPermission', value: this.normalizePermission(permission) });
+  }
+
   /* ---------------------------------------------------------------------
    * Per-tool execution permissions (Ask / Allow / Decline)
    *

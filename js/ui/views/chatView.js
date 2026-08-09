@@ -7,6 +7,11 @@ import { PromptBuilder } from '../../services/promptBuilder.js';
 import { ProviderManager } from '../../services/providerManager.js';
 import { MCPToolRegistry } from '../../services/mcpToolRegistry.js';
 import { AgentRunner } from '../../services/agentRunner.js';
+import { getBuiltinTools } from '../../services/builtinTools.js';
+import { supportsVision } from '../../utils/modelVision.js';
+import { readFileAsDataURL, MAX_IMAGE_BYTES, MAX_IMAGES_PER_MESSAGE } from '../../utils/imageUtils.js';
+import { estimateTokens } from '../../utils/tokenEstimate.js';
+import { getContextWindowSize } from '../../utils/contextWindowSize.js';
 import { GreetingWizardService, GREETING_WIZARD_TOTAL_QUESTIONS } from '../../services/greetingWizardService.js';
 import { MCPStore } from '../../storage/mcpStore.js';
 import { MCPClient } from '../../services/mcpClient.js';
@@ -17,9 +22,51 @@ import { SettingsView } from './settingsView.js';
 import { MCPView, INTENSITY_LABELS, MCP_INTENSITY_HINTS } from './mcpView.js';
 import { dropdownHTML, wireDropdown, setDropdownOptions, setDropdownDisabled } from '../components/dropdown.js';
 import { toggleSwitchHTML, toggleRowHTML } from '../components/toggle.js';
-import { escapeHtml, escapeAttr } from '../../utils/sanitize.js';
+import { escapeHtml, escapeAttr, unescapeHtml } from '../../utils/sanitize.js';
 import { extractThinking } from '../../utils/thinkingParser.js';
 import { replaceMacros } from '../../utils/macroReplacer.js';
+import { highlightCode } from '../../utils/syntaxHighlight.js';
+
+/**
+ * Custom fenced-code-block/inline-code renderers, registered once at module
+ * load (js/vendor/marked.min.js is loaded as a plain <script> before this
+ * module, so `window.marked` already exists here).
+ *
+ * WHY this is needed at all: formatRoleplayMarkdown() below escapeHtml()'s
+ * the WHOLE message before handing it to marked.parse() - the load-bearing
+ * XSS guard for chat content. marked's OWN default code/codespan renderers
+ * then escape the text again when building their output, since they assume
+ * they're receiving raw unescaped markdown source. The result was visible
+ * double-escaping - a literal "<!DOCTYPE html>" in a code block rendered as
+ * the LITERAL TEXT "&lt;!DOCTYPE html&gt;" instead of the angle brackets.
+ * These renderers unescapeHtml() the token's text back to the original
+ * characters first, then build the output HTML themselves (via
+ * highlightCode(), which re-escapes exactly once as it emits highlight
+ * spans) - so escaping happens exactly once, end to end.
+ */
+if (window.marked) {
+  window.marked.use({
+    renderer: {
+      code({ text, lang }) {
+        const rawCode = unescapeHtml(text);
+        const langLabel = (lang || '').trim().split(/\s+/)[0] || '';
+        const highlighted = highlightCode(rawCode, langLabel);
+        return `
+          <div class="code-block-wrap">
+            <div class="code-block-header">
+              <span class="code-block-lang">${escapeHtml(langLabel || 'text')}</span>
+              <button type="button" class="code-copy-btn" data-code="${escapeAttr(rawCode)}">Copy</button>
+            </div>
+            <pre><code class="language-${escapeAttr(langLabel)}">${highlighted}</code></pre>
+          </div>
+        `;
+      },
+      codespan({ text }) {
+        return `<code>${escapeHtml(unescapeHtml(text))}</code>`;
+      }
+    }
+  });
+}
 
 // Module-level generation state - only one ChatView is ever mounted at a time
 // in this SPA, so a shared abort/generating flag is simpler than threading it
@@ -33,14 +80,34 @@ let isGenerating = false;
 // `queuedMessageHandlers` is (re)bound by ChatView.render() to the currently
 // mounted chat's own send/refresh closures.
 let queuedMessage = null;
-let queuedMessageHandlers = null; // { flush(text): Promise<void>, refreshIndicator(): void }
+let queuedImages = []; // images attached to the queued message, if any - see pendingAttachedImages below
+let queuedMessageHandlers = null; // { flush(text, images): Promise<void>, refreshIndicator(): void }
+
+// Images attached via the composer's "+" button but not sent yet - same
+// module-level/singleton reasoning as `queuedMessage` above, and cleared
+// alongside it in `clearQueuedMessage()` so a draft attachment can never leak
+// into a different session than the one it was picked in.
+let pendingAttachedImages = [];
+
+// Compact Chat recommendation - in-memory-only "already dismissed/offered"
+// tracking, keyed by chatId. Deliberately NOT persisted to IndexedDB: this is
+// a light nudge, not a setting, so it resets on app restart rather than
+// permanently silencing the recommendation for a chat the user is still
+// actively growing.
+const compactDismissedChats = new Set();
+const COMPACT_RECOMMEND_THRESHOLD = 40;
+// The character's opening + earliest scene-setting turns - never folded into
+// the AI summary, so the new chat still opens the same way the original did.
+const COMPACT_KEEP_FIRST = 4;
 
 async function flushQueuedMessageIfAny() {
-  if (!queuedMessage || !queuedMessageHandlers) return;
+  if ((!queuedMessage && !queuedImages.length) || !queuedMessageHandlers) return;
   const next = queuedMessage;
+  const nextImages = queuedImages;
   queuedMessage = null;
+  queuedImages = [];
   queuedMessageHandlers.refreshIndicator();
-  await queuedMessageHandlers.flush(next);
+  await queuedMessageHandlers.flush(next || '', nextImages);
 }
 
 // Wrench icon used on the "Tools Used" chip so an MCP-tool-triggering message
@@ -79,11 +146,12 @@ function setGeneratingState(generating) {
 let isThinkingCollapsedDefault = localStorage.getItem('aetheria_thinking_collapsed') === '1';
 
 /**
- * Estimates token count for thinking text (~3.8 chars per token).
+ * Estimates token count for thinking text - thin wrapper over the shared
+ * estimator (js/utils/tokenEstimate.js), kept as its own named function since
+ * every call site here reads as "thinking tokens" specifically.
  */
 function estimateThinkingTokens(thinkingText = '') {
-  if (!thinkingText || !thinkingText.trim()) return 0;
-  return Math.max(1, Math.ceil(thinkingText.trim().length / 3.8));
+  return estimateTokens(thinkingText);
 }
 
 /**
@@ -218,6 +286,32 @@ function toolTraceNames(toolTrace = []) {
 }
 
 /**
+ * Flattens every `images` array a `toolTrace` entry carries (currently only
+ * the builtin view-image tool ever sets one, see agentRunner.js) into a
+ * single list - what actually gets persisted as the message's own `images`
+ * field, so a fetched image renders in chat via the exact same
+ * messageImagesHTML() thumbnail path a user-uploaded image uses.
+ */
+function collectToolImages(toolTrace = []) {
+  return toolTrace.flatMap(t => (t && Array.isArray(t.images)) ? t.images : []);
+}
+
+/**
+ * Same pattern as `collectToolImages` above, for the builtin "Embed HTML"
+ * tool (js/services/builtinTools.js): flattens every `{html, htmlTitle}` a
+ * `toolTrace` entry carries (see agentRunner.js's dispatch of
+ * BUILTIN_EMBED_HTML_TOOL) into the `{html, title}` array shape persisted as
+ * the message's own `embeds` field, rendered by `messageEmbedsHTML()` below.
+ * A declined call never has `.html` set (agentRunner.js only attaches it on
+ * a successful, allowed execution), so this naturally excludes those too.
+ */
+function collectToolEmbeds(toolTrace = []) {
+  return toolTrace
+    .filter(t => t && typeof t.html === 'string' && t.html)
+    .map(t => ({ html: t.html, title: t.htmlTitle || '' }));
+}
+
+/**
  * HTML for one `.tool-inline-note` marker covering a group of tool call(s)
  * (comma-joined + de-duplicated names, same as the old whole-message note),
  * or '' if that group called no tools. When the group represents more than
@@ -295,17 +389,71 @@ function groupToolSegments(segments) {
  * segment's text still goes through it, same as `m.content` always has, so
  * macros/escaping/markdown are never skipped.
  */
+/**
+ * Thumbnail strip for a message's attached images - a user's composer upload
+ * on a 'user' message, or something the builtin view-image tool fetched
+ * mid-reply on an 'assistant' message (see ChatStore.addMessage's JSDoc).
+ * Data URLs are app-generated (FileReader output / fetched image bytes), not
+ * model/character text, but still run through `escapeAttr` for consistency
+ * with every other `src=` in this file.
+ */
+function messageImagesHTML(msg) {
+  if (!Array.isArray(msg.images) || !msg.images.length) return '';
+  return `<div class="message-image-row">${msg.images.map(src =>
+    `<img class="message-image-thumb" src="${escapeAttr(src)}" alt="">`
+  ).join('')}</div>`;
+}
+
+/**
+ * Renders `msg.embeds` (see `collectToolEmbeds` above) - HTML/CSS/JS the
+ * builtin "Embed HTML" tool produced mid-reply - as one bordered card per
+ * entry, each holding a SANDBOXED iframe. This is the security-critical
+ * render path for that tool:
+ *   - `sandbox="allow-scripts"` and NOTHING else. Deliberately no
+ *     `allow-same-origin` - omitting it is what gives the iframe a unique,
+ *     opaque origin even though scripts run inside it, so an embedded script
+ *     can't reach this window, can't read/write the app's DOM, can't touch
+ *     IndexedDB/localStorage, and has no path to Node/Electron internals
+ *     (this renderer already runs with `nodeIntegration:false`). No
+ *     `allow-forms`/`allow-popups`/`allow-modals`/`allow-top-navigation`
+ *     either - no form posts, no popup spam, no alert()/confirm()/prompt()
+ *     floods, no navigating the app away.
+ *   - Content is set via the `srcdoc` ATTRIBUTE (not `src="data:..."`), the
+ *     standard way to hand an iframe inline sandboxed markup. `e.html` is
+ *     model-generated untrusted text, so it goes through `escapeAttr()` same
+ *     as every other attribute value in this file - the browser HTML-decodes
+ *     the attribute value back into the iframe's srcdoc document, so
+ *     entity-escaping here is exactly the correct (and only) encoding step,
+ *     not a double-escape.
+ *   - Fixed size (`.message-embed-frame` in css/chat.css) so one large/tall
+ *     embed can't blow out the surrounding chat layout; the embed can still
+ *     scroll internally if its own content is taller.
+ * `e.title` (also model-generated, also escaped) is an optional label shown
+ * above the frame; falls back to a generic "AI-generated embed" caption so
+ * the card always reads as distinct from normal chat content, the same way
+ * `.tool-trace-block`/`.tool-live-block` are visually set apart elsewhere.
+ */
+function messageEmbedsHTML(msg) {
+  if (!Array.isArray(msg.embeds) || !msg.embeds.length) return '';
+  return msg.embeds.map(e => `
+    <div class="message-embed-card">
+      <div class="message-embed-label">${WRENCH_ICON_SVG}<span>${e.title ? escapeHtml(e.title) : 'AI-generated embed'}</span></div>
+      <iframe class="message-embed-frame" sandbox="allow-scripts" srcdoc="${escapeAttr(e.html)}"></iframe>
+    </div>
+  `).join('');
+}
+
 function renderMessageBodyHTML(msg, formatFn, userName, charName) {
   if (hasToolSegments(msg)) {
     const groups = groupToolSegments(msg.toolSegments);
-    return groups.map(g => g.type === 'text'
+    return messageImagesHTML(msg) + groups.map(g => g.type === 'text'
       ? `<div class="message-content" data-msgid="${msg.id}">${formatFn(g.text, userName, charName)}</div>`
       : toolInlineNoteHTML(g.tools)
-    ).join('');
+    ).join('') + messageEmbedsHTML(msg);
   }
   const toolTrace = Array.isArray(msg.toolTrace) ? msg.toolTrace : [];
   const text = formatFn(msg.content, userName, charName);
-  return `<div class="message-content" data-msgid="${msg.id}">${text}</div>${toolInlineNoteHTML(toolTrace)}`;
+  return `${messageImagesHTML(msg)}<div class="message-content" data-msgid="${msg.id}">${text}</div>${toolInlineNoteHTML(toolTrace)}${messageEmbedsHTML(msg)}`;
 }
 
 /**
@@ -700,10 +848,30 @@ export class ChatView {
               </div>
 
               <!-- Right Button Aligned with Central Chat Column -->
-              <button class="btn btn-secondary btn-sm" id="btn-open-right-drawer" title="Config & Chat Sessions (Keybind: Ctrl+.)">
-                <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path></svg>
-                <span>Config</span>
-              </button>
+              <div style="display:flex; align-items:center; gap:0.6rem;">
+                <!-- Context-capacity gauge (js/utils/contextWindowSize.js) - a
+                     CSS conic-gradient donut ring, refreshed by refreshContextGauge()
+                     whenever the message list or active proxy changes. -->
+                <div class="context-gauge hidden" id="context-gauge" title="">
+                  <div class="context-gauge-inner" id="context-gauge-label">0%</div>
+                </div>
+                <button class="btn btn-secondary btn-sm" id="btn-open-right-drawer" title="Config & Chat Sessions (Keybind: Ctrl+.)">
+                  <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path></svg>
+                  <span>Config</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Compact Chat recommendation - shown once a session gets long
+               (see refreshCompactBanner() below), dismissible per-session. -->
+          <div class="compact-chat-banner hidden" id="compact-chat-banner">
+            <div class="compact-chat-banner-text">
+              <strong>Percakapan sudah panjang.</strong> Rangkum otomatis ke chat baru agar tetap ringan tanpa kehilangan konteks?
+            </div>
+            <div class="compact-chat-banner-actions">
+              <button type="button" class="btn btn-secondary btn-sm" id="btn-compact-dismiss">Nanti</button>
+              <button type="button" class="btn btn-primary btn-sm" id="btn-compact-now">Compact Chat</button>
             </div>
           </div>
 
@@ -718,17 +886,30 @@ export class ChatView {
                 <span id="queued-message-text" style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"></span>
                 <button type="button" id="btn-cancel-queued" title="Batalkan" aria-label="Batalkan pesan yang diantrikan" style="background:none; border:none; cursor:pointer; color:var(--text-accent); font-size:1rem; line-height:1; padding:0 0.2rem;">&times;</button>
               </div>
+              <div class="chat-attach-preview hidden" id="chat-attach-preview"></div>
               <textarea class="chat-textarea" id="chat-input" rows="2" placeholder="Type action (*looks around*) or dialogue (&quot;Hello...&quot;)... (Shift+Enter for new line)"></textarea>
               <div class="chat-input-toolbar" style="justify-content:space-between;">
-                ${dropdownHTML({
-                  id: 'chat-model-select',
-                  options: [],
-                  title: 'Active Model',
-                  ariaLabel: 'Active Model',
-                  small: true,
-                  placeholder: 'No Proxy',
-                  wrapperStyle: 'max-width:260px; width:auto; min-width:150px;'
-                })}
+                <div style="display:flex; align-items:center; gap:0.4rem;">
+                  <!-- Only shown when the active model looks vision-capable (js/utils/modelVision.js) -->
+                  <div class="chat-attach-wrap hidden" id="chat-attach-wrap">
+                    <button type="button" class="btn-icon chat-attach-btn" id="btn-chat-attach" title="Attach" aria-label="Attach image">
+                      <svg width="19" height="19" fill="none" stroke="currentColor" stroke-width="2.3" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"></path></svg>
+                    </button>
+                    <div class="chat-attach-menu hidden" id="chat-attach-menu">
+                      <button type="button" class="chat-attach-menu-item" id="btn-chat-attach-upload">Upload Image</button>
+                    </div>
+                    <input type="file" id="chat-image-file" accept="image/*" multiple style="display:none;">
+                  </div>
+                  ${dropdownHTML({
+                    id: 'chat-model-select',
+                    options: [],
+                    title: 'Active Model',
+                    ariaLabel: 'Active Model',
+                    small: true,
+                    placeholder: 'No Proxy',
+                    wrapperStyle: 'max-width:260px; width:auto; min-width:150px;'
+                  })}
+                </div>
                 <button class="btn-send-icon" id="btn-send-message" title="Send Message" aria-label="Send Message">
                   <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"></path></svg>
                 </button>
@@ -783,6 +964,36 @@ export class ChatView {
                   <button class="btn btn-secondary btn-sm btn-font-opt" data-size="medium" style="flex:1;">Medium</button>
                   <button class="btn btn-secondary btn-sm btn-font-opt" data-size="big" style="flex:1;">Big</button>
                 </div>
+              </div>
+
+              <!-- Context Capacity (js/utils/contextWindowSize.js) - moved here from the
+                   chat header; the header copy is opt-in via the toggle below, off by default. -->
+              <div class="card" style="padding:1rem; display:flex; align-items:center; gap:0.85rem;">
+                <div class="context-gauge hidden" id="drawer-context-gauge" title="">
+                  <div class="context-gauge-inner" id="drawer-context-gauge-label">0%</div>
+                </div>
+                <div style="flex:1; min-width:0;">
+                  <div style="font-weight:700; font-size:0.88rem;">Context Capacity</div>
+                  <div style="font-size:0.78rem; color:var(--text-muted);" id="drawer-context-gauge-detail">Menghitung...</div>
+                </div>
+              </div>
+              <div class="form-group">
+                ${toggleRowHTML({
+                  id: 'drawer-show-context-gauge',
+                  title: 'Tampilkan di Header Chat',
+                  description: 'Tampilkan indikator kapasitas konteks ini juga di header chat, di samping tombol Config.',
+                  ariaLabel: 'Show context gauge in chat header'
+                })}
+              </div>
+
+              <!-- Compact Chat - manual trigger, independent of the >=40-message
+                   recommendation banner (chatView.js's refreshCompactBanner()). -->
+              <div class="card" style="padding:1rem;">
+                <div style="font-weight:700; font-size:0.88rem; margin-bottom:0.3rem;">Compact Chat</div>
+                <p style="font-size:0.78rem; color:var(--text-muted); margin-bottom:0.75rem;">
+                  Rangkum percakapan ini dengan AI ke sesi chat baru agar tetap ringan tanpa kehilangan konteks. 4 pesan pertama tidak akan dirangkum.
+                </p>
+                <button class="btn btn-secondary btn-sm" id="btn-drawer-compact-chat" style="width:100%;">Compact Chat Sekarang</button>
               </div>
 
               <!-- Quick Config Shortcuts -->
@@ -843,6 +1054,14 @@ export class ChatView {
                     <label class="form-label" for="drawer-mcp-iteration-limit-value" style="margin:0;">Max rounds per reply:</label>
                     <input class="input" type="number" id="drawer-mcp-iteration-limit-value" min="1" max="500" step="1" style="width:90px;">
                   </div>
+                </div>
+                <div style="border-top:1px solid var(--border-light); padding-top:0.9rem;">
+                  ${toggleRowHTML({
+                    id: 'drawer-mcp-embed-html-toggle',
+                    title: 'Embed HTML (Eksperimental)',
+                    description: 'Lets the AI render HTML/JS/CSS directly in chat (charts, small animations, interactive diagrams) inside a sandboxed frame. This means AI-generated script content actually executes in the app - OFF by default for safety. Same Ask/Allow/Decline permission gate as every other tool.',
+                    ariaLabel: 'Enable the builtin embed HTML tool'
+                  })}
                 </div>
               </div>
 
@@ -915,6 +1134,28 @@ export class ChatView {
       }
     };
     window.addEventListener('keydown', handleKeydown);
+
+    // Copy button for fenced code blocks (marked.use({renderer:{code}}) above)
+    // - ONE delegated listener on the container that outlives every
+    // renderMessages()/syncMessageBody() innerHTML replacement, instead of
+    // rewiring a listener per button on every render. `data-code` is the raw
+    // (already HTML-attribute-decoded by the browser) code text.
+    container.addEventListener('click', async (e) => {
+      const btn = e.target.closest('.code-copy-btn');
+      if (!btn) return;
+      try {
+        await navigator.clipboard.writeText(btn.dataset.code || '');
+        btn.classList.add('copied');
+        const originalLabel = btn.textContent;
+        btn.textContent = 'Copied';
+        setTimeout(() => {
+          btn.classList.remove('copied');
+          btn.textContent = originalLabel;
+        }, 1500);
+      } catch (err) {
+        Toast.error('Gagal menyalin kode.');
+      }
+    });
 
     // Back Button Handler
     const backBtn = container.querySelector('#btn-chat-back');
@@ -1020,7 +1261,304 @@ export class ChatView {
           Toast.success(`Ukuran teks diset: ${newSize.toUpperCase()}`);
         };
       });
+
+      // Context gauge header-visibility toggle - default OFF, so the gauge
+      // only lives here in the drawer unless the user explicitly opts into
+      // also showing it in the chat header.
+      const showGaugeToggle = container.querySelector('#drawer-show-context-gauge');
+      if (showGaugeToggle) {
+        showGaugeToggle.checked = genSettings.showContextGaugeInChat === true;
+        showGaugeToggle.onchange = async () => {
+          const latestSettings = await ProxyStore.getGenerationSettings();
+          latestSettings.showContextGaugeInChat = showGaugeToggle.checked;
+          await ProxyStore.saveGenerationSettings(latestSettings);
+          await refreshContextGauge();
+        };
+      }
+
+      const compactBtn = container.querySelector('#btn-drawer-compact-chat');
+      if (compactBtn) compactBtn.onclick = handleCompactChat;
     };
+
+    /* -----------------------------------------------------------------
+     * Image attach button (composer "+" menu) - multimodal input.
+     * Declared here (ahead of its first use inside populateModelSelect
+     * below, which is itself called before the sendInput/sendBtn wiring
+     * further down the file) so every const it closes over already exists
+     * on first call.
+     * --------------------------------------------------------------- */
+    const attachWrap = container.querySelector('#chat-attach-wrap');
+    const attachBtn = container.querySelector('#btn-chat-attach');
+    const attachMenu = container.querySelector('#chat-attach-menu');
+    const attachUploadItem = container.querySelector('#btn-chat-attach-upload');
+    const attachFileInput = container.querySelector('#chat-image-file');
+    const attachPreviewEl = container.querySelector('#chat-attach-preview');
+
+    const refreshAttachPreview = () => {
+      if (!attachPreviewEl) return;
+      if (!pendingAttachedImages.length) {
+        attachPreviewEl.classList.add('hidden');
+        attachPreviewEl.innerHTML = '';
+        return;
+      }
+      attachPreviewEl.classList.remove('hidden');
+      attachPreviewEl.innerHTML = pendingAttachedImages.map((src, i) => `
+        <div class="chat-attach-thumb">
+          <img src="${escapeAttr(src)}" alt="">
+          <button type="button" class="chat-attach-thumb-remove" data-idx="${i}" title="Remove" aria-label="Remove image">&times;</button>
+        </div>
+      `).join('');
+      attachPreviewEl.querySelectorAll('.chat-attach-thumb-remove').forEach(btn => {
+        btn.onclick = () => {
+          pendingAttachedImages.splice(parseInt(btn.dataset.idx, 10), 1);
+          refreshAttachPreview();
+        };
+      });
+    };
+
+    // Menu listeners are added only while open and torn down on close - same
+    // idiom as js/ui/components/dropdown.js - so re-opening this chat page
+    // repeatedly never piles up stray document-level listeners.
+    let closeAttachMenuListeners = null;
+    const closeAttachMenu = () => {
+      if (!attachMenu) return;
+      attachMenu.classList.add('hidden');
+      if (closeAttachMenuListeners) { closeAttachMenuListeners(); closeAttachMenuListeners = null; }
+    };
+    const openAttachMenu = () => {
+      if (!attachMenu || !attachWrap) return;
+      attachMenu.classList.remove('hidden');
+      const onDocMouseDown = (e) => { if (!attachWrap.contains(e.target)) closeAttachMenu(); };
+      const onKeyDown = (e) => { if (e.key === 'Escape') closeAttachMenu(); };
+      document.addEventListener('mousedown', onDocMouseDown, true);
+      document.addEventListener('keydown', onKeyDown, true);
+      closeAttachMenuListeners = () => {
+        document.removeEventListener('mousedown', onDocMouseDown, true);
+        document.removeEventListener('keydown', onKeyDown, true);
+      };
+    };
+
+    if (attachBtn && attachMenu) {
+      attachBtn.onclick = (e) => {
+        e.stopPropagation();
+        if (attachMenu.classList.contains('hidden')) openAttachMenu();
+        else closeAttachMenu();
+      };
+    }
+
+    if (attachUploadItem && attachFileInput) {
+      attachUploadItem.onclick = () => {
+        closeAttachMenu();
+        attachFileInput.click();
+      };
+      attachFileInput.onchange = async () => {
+        const files = Array.from(attachFileInput.files || []);
+        attachFileInput.value = '';
+        for (const file of files) {
+          if (pendingAttachedImages.length >= MAX_IMAGES_PER_MESSAGE) {
+            Toast.error(`Maksimal ${MAX_IMAGES_PER_MESSAGE} gambar per pesan.`);
+            break;
+          }
+          if (!file.type.startsWith('image/')) {
+            Toast.error(`"${file.name}" bukan file gambar.`);
+            continue;
+          }
+          if (file.size > MAX_IMAGE_BYTES) {
+            Toast.error(`"${file.name}" terlalu besar (maks ${Math.floor(MAX_IMAGE_BYTES / 1024 / 1024)}MB).`);
+            continue;
+          }
+          try {
+            pendingAttachedImages.push(await readFileAsDataURL(file));
+          } catch {
+            Toast.error(`Gagal membaca file "${file.name}".`);
+          }
+        }
+        refreshAttachPreview();
+      };
+    }
+
+    // Shows/hides the attach button based on the ACTIVE proxy's currently
+    // selected model - re-run whenever the proxy or its selected model
+    // changes (populateModelSelect covers both cases below).
+    const refreshAttachButtonVisibility = async () => {
+      if (!attachWrap) return;
+      const proxy = await ProxyStore.getDefault();
+      const visionOk = supportsVision(proxy);
+      attachWrap.classList.toggle('hidden', !visionOk);
+      if (!visionOk) closeAttachMenu();
+      if (!visionOk && pendingAttachedImages.length) {
+        // Switched to a non-vision model mid-draft - drop the pending
+        // attachments rather than silently send images it can't see.
+        pendingAttachedImages = [];
+        refreshAttachPreview();
+      }
+    };
+
+    /**
+     * Context capacity gauge - replaces the old hard message-count context
+     * cap (see promptBuilder.js) with visibility instead of silent
+     * truncation: a donut ring showing roughly how full the active model's
+     * context window is, so a long-running chat's growing history is
+     * something the user can SEE and act on (Compact Chat) rather than
+     * something that silently made the character forget old turns.
+     *
+     * Lives primarily in the drawer's Options tab (#drawer-context-gauge,
+     * always shown there when a proxy is active); the chat-header copy
+     * (#context-gauge) is opt-in via the "Tampilkan di Header Chat" toggle in
+     * that same tab, OFF by default (ProxyStore generation settings key
+     * `showContextGaugeInChat`) so the header stays uncluttered unless asked for.
+     */
+    const refreshContextGauge = async () => {
+      const headerGaugeEl = container.querySelector('#context-gauge');
+      const headerLabelEl = container.querySelector('#context-gauge-label');
+      const drawerGaugeEl = container.querySelector('#drawer-context-gauge');
+      const drawerLabelEl = container.querySelector('#drawer-context-gauge-label');
+      const drawerDetailEl = container.querySelector('#drawer-context-gauge-detail');
+      if (!headerGaugeEl && !drawerGaugeEl) return;
+
+      const proxy = await ProxyStore.getDefault();
+      if (!proxy) {
+        headerGaugeEl?.classList.add('hidden');
+        drawerGaugeEl?.classList.add('hidden');
+        if (drawerDetailEl) drawerDetailEl.textContent = 'Belum ada Proxy aktif.';
+        return;
+      }
+
+      const genSettings = await ProxyStore.getGenerationSettings();
+      const msgs = await ChatStore.getMessages(currentChatId);
+      const activePersonaObj = await PersonaStore.getDefault();
+      const globalPrompt = await ProxyStore.getGlobalSystemPrompt();
+
+      // Reuse the exact same payload assembly generation uses (minus tools,
+      // which barely move the needle and would cost an extra MCP round-trip
+      // just for this estimate) so the number reflects what's actually sent,
+      // not a separately-drifting approximation.
+      const payload = PromptBuilder.buildPromptPayload({
+        character: activeChar,
+        persona: activePersonaObj,
+        globalSystemPrompt: globalPrompt,
+        messages: msgs
+      });
+
+      let tokens = 0;
+      for (const m of payload) {
+        tokens += estimateTokens(m.content || '');
+        // Vision content isn't text but still costs real tokens - a flat
+        // per-image estimate keeps the gauge from silently under-reporting a
+        // heavily image-attached conversation (~800 tokens/image roughly
+        // matches published provider ballparks for a moderate-size upload).
+        if (Array.isArray(m.images)) tokens += m.images.length * 800;
+      }
+
+      const windowSize = getContextWindowSize(proxy);
+      const percent = Math.min(100, Math.round((tokens / windowSize) * 100));
+      const color = percent >= 85 ? 'var(--accent-rose)' : percent >= 60 ? 'var(--accent-amber)' : 'var(--accent-emerald)';
+      const gaugeBg = `conic-gradient(${color} ${percent}%, var(--bg-tertiary) 0)`;
+      const tooltip = `${tokens.toLocaleString()} / ${windowSize.toLocaleString()} token konteks terpakai (~${percent}%)`;
+
+      if (headerGaugeEl) {
+        headerGaugeEl.classList.toggle('hidden', genSettings.showContextGaugeInChat !== true);
+        headerGaugeEl.style.background = gaugeBg;
+        headerGaugeEl.title = tooltip;
+      }
+      if (headerLabelEl) headerLabelEl.textContent = `${percent}%`;
+
+      if (drawerGaugeEl) {
+        drawerGaugeEl.classList.remove('hidden');
+        drawerGaugeEl.style.background = gaugeBg;
+        drawerGaugeEl.title = tooltip;
+      }
+      if (drawerLabelEl) drawerLabelEl.textContent = `${percent}%`;
+      if (drawerDetailEl) drawerDetailEl.textContent = `${tokens.toLocaleString()} / ${windowSize.toLocaleString()} token (~${percent}%)`;
+    };
+
+    /**
+     * Shows/hides the Compact Chat recommendation banner based on message
+     * count - a light nudge once a session gets long, not a hard gate (the
+     * hard context cap this replaces is gone, see promptBuilder.js).
+     */
+    const refreshCompactBanner = async () => {
+      const bannerEl = container.querySelector('#compact-chat-banner');
+      if (!bannerEl) return;
+      const msgs = await ChatStore.getMessages(currentChatId);
+      const shouldShow = msgs.length >= COMPACT_RECOMMEND_THRESHOLD && !compactDismissedChats.has(currentChatId);
+      bannerEl.classList.toggle('hidden', !shouldShow);
+    };
+
+    /**
+     * Compact Chat: summarizes everything after the first COMPACT_KEEP_FIRST
+     * messages via the active proxy, then creates a brand-new chat session
+     * (ChatStore.createCompactedChat) carrying the kept opening turns plus
+     * that one recap message, and switches straight into it. The original
+     * chat is left completely untouched - this is additive, not destructive,
+     * so a bad summary never costs the user their real history.
+     */
+    const handleCompactChat = async () => {
+      if (isGenerating) {
+        Toast.error('Tunggu proses generate selesai dulu sebelum compact chat.');
+        return;
+      }
+      const msgs = await ChatStore.getMessages(currentChatId);
+      if (msgs.length <= COMPACT_KEEP_FIRST) {
+        Toast.info('Belum cukup pesan untuk di-compact.');
+        return;
+      }
+
+      const proxyObj = await ProxyStore.getDefault();
+      if (!proxyObj) {
+        Toast.error('Belum ada Proxy aktif.');
+        return;
+      }
+
+      const bannerEl = container.querySelector('#compact-chat-banner');
+      bannerEl?.classList.add('hidden');
+      Toast.info('Merangkum percakapan...');
+
+      try {
+        const activePersonaObj = await PersonaStore.getDefault();
+        const userName = activePersonaObj?.name || 'User';
+        const charName = activeChar?.name || 'Character';
+
+        const toSummarize = msgs.slice(COMPACT_KEEP_FIRST);
+        const transcript = toSummarize
+          .map(m => `${m.role === 'user' ? userName : charName}: ${m.content}`)
+          .join('\n\n');
+
+        const summaryPayload = [
+          {
+            role: 'system',
+            content: `You are compressing a roleplay conversation between ${userName} and ${charName} so it can continue in a brand new chat without losing context. Write a thorough but concise "story so far" recap in prose (third person, no markdown headers/lists): established facts, the relationship/emotional state between them, unresolved plot threads, and any concrete details either party would need to remember. This is NOT a message ${charName} would say in character - it is an out-of-character summary the engine will read as background before continuing the scene.`
+          },
+          { role: 'user', content: transcript }
+        ];
+
+        const genSettings = await ProxyStore.getGenerationSettings();
+        const { content: summary } = await ProviderManager.sendChatCompletion(proxyObj, summaryPayload, {
+          ...genSettings,
+          temperature: 0.4,
+          maxTokens: genSettings.unlimitedTokens ? genSettings.maxTokens : Math.max(genSettings.maxTokens || 1024, 1536)
+        });
+
+        if (!summary || !summary.trim()) throw new Error('Ringkasan kosong dari AI.');
+
+        const newChat = await ChatStore.createCompactedChat(currentChatId, summary.trim(), COMPACT_KEEP_FIRST);
+        compactDismissedChats.add(currentChatId);
+
+        currentChatId = newChat.id;
+        await updateSessionList();
+        await renderMessages();
+        Toast.success(`Chat baru "${newChat.title}" berhasil dibuat.`);
+      } catch (err) {
+        Toast.error(`Gagal compact chat: ${err.message}`);
+        await refreshCompactBanner();
+      }
+    };
+
+    container.querySelector('#btn-compact-dismiss').onclick = () => {
+      compactDismissedChats.add(currentChatId);
+      container.querySelector('#compact-chat-banner')?.classList.add('hidden');
+    };
+    container.querySelector('#btn-compact-now').onclick = handleCompactChat;
 
     // Compact model switcher next to the send button (Claude-style) - reads
     // the active proxy's `models` list (js/ui/views/proxiesView.js lets you
@@ -1032,6 +1570,8 @@ export class ChatView {
       if (!proxy) {
         setDropdownOptions(container, 'chat-model-select', [], '');
         setDropdownDisabled(container, 'chat-model-select', true);
+        await refreshAttachButtonVisibility();
+        await refreshContextGauge();
         return;
       }
 
@@ -1043,6 +1583,8 @@ export class ChatView {
       // Same rule as before the dropdown swap: a single-model proxy has nothing
       // to switch to, so the control is shown but inert.
       setDropdownDisabled(container, 'chat-model-select', candidates.length <= 1);
+      await refreshAttachButtonVisibility();
+      await refreshContextGauge();
 
       wireDropdown(container, 'chat-model-select', async (value) => {
         const updatedProxy = await ProxyStore.getById(proxy.id);
@@ -1050,6 +1592,8 @@ export class ChatView {
         updatedProxy.selectedModel = value;
         await ProxyStore.save(updatedProxy);
         Toast.info(`Model diset ke: ${value}`);
+        await refreshAttachButtonVisibility();
+        await refreshContextGauge();
         if (onProxyChanged) onProxyChanged();
       });
     };
@@ -1263,6 +1807,18 @@ export class ChatView {
       };
     }
 
+    // Embed HTML (Experimental, drawer copy - mirrors mcpView.js). Independent
+    // of everything else here except the master MCP switch above. Defaults
+    // OFF - see MCPStore.getEmbedHtmlEnabled()'s safe-default comment.
+    const mcpEmbedHtmlToggle = container.querySelector('#drawer-mcp-embed-html-toggle');
+    if (mcpEmbedHtmlToggle) {
+      mcpEmbedHtmlToggle.checked = await MCPStore.getEmbedHtmlEnabled();
+      mcpEmbedHtmlToggle.onchange = async (e) => {
+        await MCPStore.setEmbedHtmlEnabled(e.target.checked);
+        Toast.info(`Embed HTML ${e.target.checked ? 'diaktifkan' : 'dinonaktifkan'}.`);
+      };
+    }
+
     const manageMcpBtn = container.querySelector('#btn-drawer-manage-mcp');
     if (manageMcpBtn) {
       manageMcpBtn.onclick = () => {
@@ -1439,6 +1995,8 @@ export class ChatView {
             </div>
           </div>
         `;
+        await refreshContextGauge();
+        await refreshCompactBanner();
         return;
       }
 
@@ -1460,12 +2018,19 @@ export class ChatView {
         const toolTrace = Array.isArray(m.toolTrace) ? m.toolTrace : [];
 
         return `
-          <div class="message-block ${isUser ? 'user' : 'assistant'}" data-id="${m.id}">
+          <div class="message-block ${isUser ? 'user' : 'assistant'}${m.isSummary ? ' summary-message-block' : ''}" data-id="${m.id}">
             <div class="message-block-inner">
               <div class="message-header">
                 <img src="${escapeAttr(avatar)}" class="message-avatar" onerror="this.src='https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(senderName)}'">
                 <div class="message-sender-name">${escapeHtml(senderName)}</div>
               </div>
+
+              ${m.isSummary ? `
+                <div class="summary-message-badge">
+                  <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"></path></svg>
+                  <span>Ringkasan Otomatis</span>
+                </div>
+              ` : ''}
 
               ${!isUser && thoughtsText ? `
                 <div class="thinking-block ${isThinkingCollapsedDefault ? '' : 'expanded'}" data-msgid="${m.id}">
@@ -1712,6 +2277,9 @@ export class ChatView {
           }
         };
       });
+
+      await refreshContextGauge();
+      await refreshCompactBanner();
     };
 
     // Auto-generate a short session title every 10 messages, unless the user
@@ -1766,7 +2334,9 @@ export class ChatView {
       const activePersonaObj = await PersonaStore.getDefault();
       const genSettings = await ProxyStore.getGenerationSettings();
       const globalPrompt = await ProxyStore.getGlobalSystemPrompt();
-      const activeTools = await MCPToolRegistry.getActiveTools();
+      // MCP tools + the default builtin view-image tool (only offered for a
+      // vision-capable model, see js/services/builtinTools.js).
+      const activeTools = [...(await MCPToolRegistry.getActiveTools()), ...(await getBuiltinTools(proxyObj))];
       const immersiveRoleplay = await MCPStore.getImmersiveRoleplay();
       const immersiveIntensity = await MCPStore.getImmersiveIntensity();
       // Deliberately NOT derived from immersive intensity - an earlier version
@@ -1781,7 +2351,6 @@ export class ChatView {
         persona: activePersonaObj,
         globalSystemPrompt: globalPrompt,
         messages: currentMessages,
-        contextLimit: genSettings.contextLimit || 20,
         tools: activeTools,
         immersiveRoleplay,
         immersiveIntensity
@@ -1925,7 +2494,7 @@ export class ChatView {
         // (joined by AgentRunner) plus every tool call it made along the way,
         // plus the per-round breakdown so the UI can place an inline marker at
         // each round's actual tool-call boundary instead of one note at the end.
-        await ChatStore.addMessage(currentChatId, 'assistant', finalContent, finalThinking, [finalContent], finalToolTrace, finalSegments);
+        await ChatStore.addMessage(currentChatId, 'assistant', finalContent, finalThinking, [finalContent], finalToolTrace, finalSegments, collectToolImages(finalToolTrace), collectToolEmbeds(finalToolTrace));
         await renderMessages();
 
         const updatedMessages = await ChatStore.getMessages(currentChatId);
@@ -1945,7 +2514,7 @@ export class ChatView {
           // falls back to the old single-blob + trailing-note rendering, which is
           // exactly what that fallback path exists for.
           if (liveContent.trim() || liveToolTrace.length) {
-            await ChatStore.addMessage(currentChatId, 'assistant', liveContent, liveThinking, [liveContent], liveToolTrace);
+            await ChatStore.addMessage(currentChatId, 'assistant', liveContent, liveThinking, [liveContent], liveToolTrace, [], collectToolImages(liveToolTrace), collectToolEmbeds(liveToolTrace));
             await renderMessages();
             Toast.info('Generasi dihentikan - jawaban sebagian tersimpan.');
           } else {
@@ -1966,8 +2535,8 @@ export class ChatView {
       }
     };
 
-    const sendMessageText = async (text) => {
-      await ChatStore.addMessage(currentChatId, 'user', text);
+    const sendMessageText = async (text, images = []) => {
+      await ChatStore.addMessage(currentChatId, 'user', text, '', [], [], [], images);
       await renderMessages();
       await triggerAIGeneration();
     };
@@ -1976,15 +2545,22 @@ export class ChatView {
       const indicatorEl = container.querySelector('#queued-message-indicator');
       const textEl = container.querySelector('#queued-message-text');
       if (!indicatorEl || !textEl) return;
-      indicatorEl.classList.toggle('hidden', !queuedMessage);
-      if (queuedMessage) textEl.textContent = queuedMessage;
+      const hasQueued = !!queuedMessage || queuedImages.length > 0;
+      indicatorEl.classList.toggle('hidden', !hasQueued);
+      if (hasQueued) {
+        textEl.textContent = queuedMessage || (queuedImages.length ? `[${queuedImages.length} image${queuedImages.length > 1 ? 's' : ''}]` : '');
+      }
     };
 
     // A queued draft belongs to the session it was typed in - drop it
     // whenever `currentChatId` changes so it can never fire into a
-    // different session than the one the user was looking at.
+    // different session than the one the user was looking at. Also drops any
+    // not-yet-sent attached images for the same reason.
     const clearQueuedMessage = () => {
       queuedMessage = null;
+      queuedImages = [];
+      pendingAttachedImages = [];
+      refreshAttachPreview();
       refreshQueuedIndicator();
     };
 
@@ -1994,23 +2570,29 @@ export class ChatView {
     // flushQueuedMessageIfAny above).
     queuedMessageHandlers = { flush: sendMessageText, refreshIndicator: refreshQueuedIndicator };
     queuedMessage = null; // discard any leftover queue from a previous render/session
+    queuedImages = [];
+    pendingAttachedImages = [];
     refreshQueuedIndicator();
 
     const handleSendMessage = async () => {
       const text = sendInput.value.trim();
-      if (!text) return;
+      const images = pendingAttachedImages;
+      if (!text && !images.length) return;
       sendInput.value = '';
+      pendingAttachedImages = [];
+      refreshAttachPreview();
 
       if (isGenerating) {
         // Don't block drafting while the AI is responding - queue it and
         // send automatically once the in-flight generation ends.
         queuedMessage = text;
+        queuedImages = images;
         refreshQueuedIndicator();
         Toast.info('Pesan diantrikan, akan dikirim setelah respons ini selesai.');
         return;
       }
 
-      await sendMessageText(text);
+      await sendMessageText(text, images);
     };
 
     sendBtn.onclick = () => {
@@ -2028,9 +2610,12 @@ export class ChatView {
     };
 
     container.querySelector('#btn-cancel-queued').onclick = () => {
-      if (!queuedMessage) return;
-      sendInput.value = queuedMessage;
+      if (!queuedMessage && !queuedImages.length) return;
+      sendInput.value = queuedMessage || '';
+      pendingAttachedImages = queuedImages;
       queuedMessage = null;
+      queuedImages = [];
+      refreshAttachPreview();
       refreshQueuedIndicator();
       sendInput.focus();
     };
@@ -2070,6 +2655,14 @@ export class ChatView {
     }
     const msg = await ChatStore.getMessageById(messageId);
     if (!msg) return;
+    if (msg.isSummary) {
+      // An auto-generated recap (ChatStore.createCompactedChat) isn't
+      // something the character "said" - regenerating it would ask the model
+      // for an in-character reply instead of a summary, which reads as
+      // broken. Only ever has one swipe variation by construction anyway.
+      Toast.error('Pesan ringkasan otomatis tidak bisa di-regenerate.');
+      return;
+    }
     const msgs = await ChatStore.getMessages(chatId);
     const msgIndex = msgs.findIndex(m => m.id === messageId);
     if (msgIndex === -1) return;
@@ -2100,7 +2693,9 @@ export class ChatView {
     const activePersonaObj = await PersonaStore.getDefault();
     const genSettings = await ProxyStore.getGenerationSettings();
     const globalPrompt = await ProxyStore.getGlobalSystemPrompt();
-    const activeTools = await MCPToolRegistry.getActiveTools();
+    // See the matching comment in triggerAIGeneration - MCP tools + the
+    // default builtin view-image tool (vision-gated).
+    const activeTools = [...(await MCPToolRegistry.getActiveTools()), ...(await getBuiltinTools(activeProxy))];
     const immersiveRoleplay = await MCPStore.getImmersiveRoleplay();
     const immersiveIntensity = await MCPStore.getImmersiveIntensity();
     // See the matching comment in triggerAIGeneration - independent of
@@ -2115,7 +2710,6 @@ export class ChatView {
       persona: activePersonaObj,
       globalSystemPrompt: globalPrompt,
       messages: historyBefore,
-      contextLimit: genSettings.contextLimit || 20,
       tools: activeTools,
       immersiveRoleplay,
       immersiveIntensity
@@ -2275,7 +2869,7 @@ export class ChatView {
 
       const updatedSwipes = [...(msg.swipes || [msg.content]), newContent];
       const newIndex = updatedSwipes.length - 1;
-      await ChatStore.updateMessageSwipes(messageId, updatedSwipes, newIndex, newThinking, toolTrace, newSegments);
+      await ChatStore.updateMessageSwipes(messageId, updatedSwipes, newIndex, newThinking, toolTrace, newSegments, collectToolImages(toolTrace), collectToolEmbeds(toolTrace));
       onDone();
     } catch (err) {
       if (err.name === 'AbortError') {
@@ -2287,7 +2881,7 @@ export class ChatView {
           // single-blob + trailing-note rendering.
           const updatedSwipes = [...(msg.swipes || [msg.content]), liveContent];
           const newIndex = updatedSwipes.length - 1;
-          await ChatStore.updateMessageSwipes(messageId, updatedSwipes, newIndex, liveThinking, liveToolTrace);
+          await ChatStore.updateMessageSwipes(messageId, updatedSwipes, newIndex, liveThinking, liveToolTrace, [], collectToolImages(liveToolTrace), collectToolEmbeds(liveToolTrace));
           onDone();
           Toast.info('Generasi dihentikan - jawaban sebagian tersimpan.');
         } else {
@@ -2485,10 +3079,25 @@ export class ChatView {
     // Escape raw HTML first so chat content (user-typed or AI-generated) can
     // never inject tags/scripts through here - only markdown syntax survives.
     let formatted = escapeHtml(textToFormat);
-    // Format actions in italics (*action* -> <em>action</em>)
-    formatted = formatted.replace(/\*(.*?)\*/g, '<em>$1</em>');
-    // Format quotes ("speech" -> <strong>"speech"</strong>)
-    formatted = formatted.replace(/"([^"]+)"/g, '<span style="color:var(--text-main); font-weight:500;">"$1"</span>');
+    // The *action*/"quote" regex styling below must never touch the inside
+    // of a fenced code block (```...```) - it used to run over the WHOLE
+    // escaped message unconditionally, which mangled any code sample
+    // containing a quoted string (e.g. class="box", extremely common in
+    // HTML/JS/JSON/CSS) by injecting a raw <span style="..."> BEFORE
+    // marked.parse() ever saw the fence, corrupting the code block's actual
+    // content. Backticks survive escapeHtml() untouched, so splitting on
+    // fence boundaries here and only formatting the non-code segments keeps
+    // code blocks byte-for-byte as escaped source until marked + the custom
+    // code renderer (registered at module load, above) handle them.
+    const segments = formatted.split(/(```[\s\S]*?```)/g);
+    formatted = segments.map((seg, i) => {
+      if (i % 2 === 1) return seg; // odd indices are fenced code blocks
+      // Format actions in italics (*action* -> <em>action</em>)
+      let s = seg.replace(/\*(.*?)\*/g, '<em>$1</em>');
+      // Format quotes ("speech" -> <span>"speech"</span>)
+      s = s.replace(/"([^"]+)"/g, '<span style="color:var(--text-main); font-weight:500;">"$1"</span>');
+      return s;
+    }).join('');
     // Use marked parser if available. `breaks: true` makes single newlines
     // render as <br> instead of being collapsed away - AI/roleplay replies
     // are usually formatted with single line breaks, not blank-line paragraphs.

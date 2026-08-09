@@ -3,6 +3,7 @@
  * back to the correct server. */
 import { MCPStore } from '../storage/mcpStore.js';
 import { MCPClient } from './mcpClient.js';
+import { BUILTIN_VIEW_IMAGE_TOOL, BUILTIN_EMBED_HTML_TOOL } from './builtinTools.js';
 
 const TOOL_CACHE_TTL_MS = 60000;
 const toolCache = new Map(); // serverId -> { tools, fetchedAt }
@@ -76,6 +77,12 @@ export class MCPToolRegistry {
    * has the same unset -> 'ask' guarantee.
    */
   static async getToolPermission(qualifiedName) {
+    // The builtin image-fetch and embed-html tools (js/services/builtinTools.js)
+    // aren't owned by any MCP server, so neither has a `toolIndex` entry -
+    // each gets its own single global permission flag instead of a
+    // per-server map entry.
+    if (qualifiedName === BUILTIN_VIEW_IMAGE_TOOL) return MCPStore.getBuiltinToolPermission();
+    if (qualifiedName === BUILTIN_EMBED_HTML_TOOL) return MCPStore.getEmbedHtmlToolPermission();
     const entry = toolIndex.get(qualifiedName);
     if (!entry) return 'ask';
     return MCPStore.getToolPermission(entry.serverId, entry.toolName);
@@ -83,6 +90,14 @@ export class MCPToolRegistry {
 
   /** Persists a permission for a qualified tool name (used by the chat's "Always Allow" button). */
   static async setToolPermission(qualifiedName, permission) {
+    if (qualifiedName === BUILTIN_VIEW_IMAGE_TOOL) {
+      await MCPStore.setBuiltinToolPermission(permission);
+      return true;
+    }
+    if (qualifiedName === BUILTIN_EMBED_HTML_TOOL) {
+      await MCPStore.setEmbedHtmlToolPermission(permission);
+      return true;
+    }
     const entry = toolIndex.get(qualifiedName);
     if (!entry) return false;
     await MCPStore.setToolPermission(entry.serverId, entry.toolName, permission);
