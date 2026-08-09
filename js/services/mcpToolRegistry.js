@@ -3,6 +3,7 @@
  * back to the correct server. */
 import { MCPStore } from '../storage/mcpStore.js';
 import { MCPClient } from './mcpClient.js';
+import { BUILTIN_VIEW_IMAGE_TOOL, BUILTIN_EMBED_HTML_TOOL } from './builtinTools.js';
 
 const TOOL_CACHE_TTL_MS = 60000;
 const toolCache = new Map(); // serverId -> { tools, fetchedAt }
@@ -76,6 +77,18 @@ export class MCPToolRegistry {
    * has the same unset -> 'ask' guarantee.
    */
   static async getToolPermission(qualifiedName) {
+    // The builtin image-fetch and embed-html tools (js/services/builtinTools.js)
+    // aren't owned by any MCP server, so neither has a `toolIndex` entry -
+    // each gets its own single global permission flag instead of a
+    // per-server map entry.
+    if (qualifiedName === BUILTIN_VIEW_IMAGE_TOOL) return MCPStore.getBuiltinToolPermission();
+    // Deliberately bypasses MCPStore.getEmbedHtmlToolPermission() (still
+    // there, just unused by this gate) - the embed-html tool already sits
+    // behind its OWN explicit opt-in master toggle (MCPStore.getEmbedHtmlEnabled,
+    // default OFF), which is the real gate: once a user has turned the
+    // feature on at all, prompting again on every single call read as
+    // redundant friction rather than added safety, so every call auto-allows.
+    if (qualifiedName === BUILTIN_EMBED_HTML_TOOL) return 'allow';
     const entry = toolIndex.get(qualifiedName);
     if (!entry) return 'ask';
     return MCPStore.getToolPermission(entry.serverId, entry.toolName);
@@ -83,13 +96,29 @@ export class MCPToolRegistry {
 
   /** Persists a permission for a qualified tool name (used by the chat's "Always Allow" button). */
   static async setToolPermission(qualifiedName, permission) {
+    if (qualifiedName === BUILTIN_VIEW_IMAGE_TOOL) {
+      await MCPStore.setBuiltinToolPermission(permission);
+      return true;
+    }
+    if (qualifiedName === BUILTIN_EMBED_HTML_TOOL) {
+      await MCPStore.setEmbedHtmlToolPermission(permission);
+      return true;
+    }
     const entry = toolIndex.get(qualifiedName);
     if (!entry) return false;
     await MCPStore.setToolPermission(entry.serverId, entry.toolName, permission);
     return true;
   }
 
-  /** Executes a previously-listed qualified tool name against its owning MCP server. */
+  /**
+   * Executes a previously-listed qualified tool name against its owning MCP
+   * server. Returns `{ text, images }` (see parseResult below) - a server
+   * like a browser-automation MCP that returns a screenshot as an MCP
+   * `image` content block is not just flattened to a "[Non-text tool result
+   * content omitted]" placeholder anymore; agentRunner.js handles this
+   * identically to the builtin view-image tool's fetched images from here on
+   * (same trace/persist/feed-back-to-model path).
+   */
   static async executeTool(qualifiedName, args) {
     const entry = toolIndex.get(qualifiedName);
     if (!entry) throw new Error(`Unknown tool "${qualifiedName}" (not currently registered/enabled).`);
@@ -98,18 +127,40 @@ export class MCPToolRegistry {
     if (!server || !server.enabled) throw new Error(`MCP server for "${qualifiedName}" is no longer available.`);
 
     const result = await MCPClient.callTool(server, entry.toolName, args || {});
-    return this.stringifyResult(result);
+    return this.parseResult(result);
   }
 
-  /** Flattens an MCP CallToolResult's content blocks into plain text for the model. */
-  static stringifyResult(result) {
-    if (!result) return '';
+  /**
+   * Splits an MCP CallToolResult's content blocks into flattened text (for
+   * the model's tool-result message) and images (base64 `data:` URLs, so a
+   * tool that returns an MCP `image` content block - e.g. a browser-
+   * automation server's screenshot capability - can actually be SEEN in chat
+   * and by the model, instead of being silently discarded). Per the MCP
+   * spec a content block is one of `{type:'text', text}` /
+   * `{type:'image', data, mimeType}` / other types (resource links etc.)
+   * this doesn't specially handle and simply ignores.
+   */
+  static parseResult(result) {
+    if (!result) return { text: '', images: [] };
     const blocks = Array.isArray(result.content) ? result.content : [];
-    const text = blocks
-      .map(b => (b && typeof b === 'object' && typeof b.text === 'string') ? b.text : (typeof b === 'string' ? b : ''))
-      .filter(Boolean)
-      .join('\n');
-    const finalText = text || (blocks.length ? '[Non-text tool result content omitted]' : JSON.stringify(result));
-    return result.isError ? `Error: ${finalText}` : finalText;
+    const textParts = [];
+    const images = [];
+    for (const block of blocks) {
+      if (typeof block === 'string') {
+        textParts.push(block);
+      } else if (block && typeof block === 'object') {
+        if (typeof block.text === 'string') {
+          textParts.push(block.text);
+        } else if (block.type === 'image' && typeof block.data === 'string' && block.data) {
+          const mimeType = (typeof block.mimeType === 'string' && block.mimeType) ? block.mimeType : 'image/png';
+          images.push(`data:${mimeType};base64,${block.data}`);
+        }
+      }
+    }
+    const text = textParts.filter(Boolean).join('\n');
+    const finalText = text
+      || (images.length ? `[${images.length} image${images.length > 1 ? 's' : ''} attached]` : '')
+      || (blocks.length ? '[Non-text tool result content omitted]' : JSON.stringify(result));
+    return { text: result.isError ? `Error: ${finalText}` : finalText, images };
   }
 }

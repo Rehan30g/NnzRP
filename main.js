@@ -118,13 +118,35 @@ function createWindow() {
     }
   });
 
-  // Handle external link clicks to open in default OS browser
+  // Handle external link clicks to open in default OS browser. This only
+  // covers window.open()/target="_blank"/middle-click-new-window - a plain
+  // <a href> click (or the browser's built-in autolinking of a bare URL in
+  // AI/character chat text, e.g. an image link) navigates the CURRENT
+  // window instead, which setWindowOpenHandler never sees. See the
+  // will-navigate handler right below for that case - both are needed.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('http://') || url.startsWith('https://')) {
       shell.openExternal(url);
       return { action: 'deny' };
     }
     return { action: 'allow' };
+  });
+
+  // Same-window navigation guard. Without this, clicking ANY link rendered
+  // inside chat content (a markdown link, an auto-linked bare image URL the
+  // AI wrote, etc.) navigates this window itself to that URL - Chromium's
+  // default handling of a direct navigation to an image resource is to
+  // render it full-page. This is a frameless single-BrowserWindow app with
+  // no back/forward/address-bar UI, so that navigation had no way back short
+  // of restarting the app. The only legitimate navigation is this window's
+  // own initial `loadFile(index.html)` - everything else gets redirected to
+  // the OS's default browser instead of replacing the app.
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (url.startsWith('file://') && url.includes('index.html')) return;
+    event.preventDefault();
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      shell.openExternal(url);
+    }
   });
 
   // Smooth transition from Splash window to Main window

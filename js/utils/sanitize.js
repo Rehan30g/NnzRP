@@ -22,3 +22,20 @@ export function escapeAttr(str) {
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 }
+
+/**
+ * Reverses escapeHtml(). Needed specifically for syntax-highlighting fenced
+ * code blocks (js/utils/syntaxHighlight.js): chatView.js's markdown pipeline
+ * escapeHtml()'s the WHOLE message before handing it to marked.parse() (the
+ * load-bearing XSS guard for chat content), so by the time marked's code
+ * renderer sees a fenced block's text it's already HTML-entity-escaped -
+ * the highlighter needs the original characters back to tokenize
+ * tags/strings/keywords correctly, then re-escapes as it builds spans.
+ */
+export function unescapeHtml(str) {
+  if (str === null || str === undefined) return '';
+  return String(str)
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&');
+}

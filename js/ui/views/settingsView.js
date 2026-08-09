@@ -295,14 +295,22 @@ export class SettingsView {
             <div class="form-group">
               <label class="form-label">
                 <span>Max Tokens</span>
-                <span class="slider-value" id="val-tokens">${settings.maxTokens ?? 1024}</span>
+                <span class="slider-value" id="val-tokens">${settings.maxTokens ?? 2048}</span>
               </label>
               <div class="slider-container">
-                <input type="range" class="range-slider" id="slider-tokens" min="100" max="4096" step="64" value="${settings.maxTokens ?? 1024}">
+                <input type="range" class="range-slider" id="slider-tokens" min="100" max="32768" step="64" value="${settings.maxTokens ?? 2048}" ${settings.unlimitedTokens ? 'disabled' : ''}>
+              </div>
+              <div style="margin-top:0.6rem;">
+                ${toggleRowHTML({
+                  id: 'setting-unlimited-tokens',
+                  checked: !!settings.unlimitedTokens,
+                  title: 'Unlimited',
+                  description: 'Use the highest output length each provider allows instead of the slider above - prevents long thinking/replies from being cut off mid-way.'
+                })}
               </div>
             </div>
 
-            <div class="form-group">
+            <div class="form-group" style="margin-bottom:0;">
               <label class="form-label">
                 <span>Repetition Penalty</span>
                 <span class="slider-value" id="val-penalty">${settings.repetitionPenalty ?? 1.15}</span>
@@ -310,17 +318,6 @@ export class SettingsView {
               <div class="slider-container">
                 <input type="range" class="range-slider" id="slider-penalty" min="1.0" max="2.0" step="0.05" value="${settings.repetitionPenalty ?? 1.15}">
               </div>
-            </div>
-
-            <div class="form-group" style="margin-bottom:0;">
-              <label class="form-label">
-                <span>Context Message Limit</span>
-                <span class="slider-value" id="val-context">${settings.contextLimit ?? 20}</span>
-              </label>
-              <div class="slider-container">
-                <input type="range" class="range-slider" id="slider-context" min="5" max="50" step="1" value="${settings.contextLimit ?? 20}">
-              </div>
-              <span class="form-hint">Number of recent chat history turns sent to the API per completion.</span>
             </div>
           </div>
 
@@ -508,8 +505,15 @@ export class SettingsView {
     bindSlider('#slider-topp', '#val-topp');
     bindSlider('#slider-tokens', '#val-tokens');
     bindSlider('#slider-penalty', '#val-penalty');
-    bindSlider('#slider-context', '#val-context');
     bindSlider('#slider-reasoning-tokens', '#val-reasoning-tokens');
+
+    const unlimitedTokensToggle = container.querySelector('#setting-unlimited-tokens');
+    const tokensSlider = container.querySelector('#slider-tokens');
+    if (unlimitedTokensToggle && tokensSlider) {
+      unlimitedTokensToggle.onchange = () => {
+        tokensSlider.disabled = unlimitedTokensToggle.checked;
+      };
+    }
 
     /* ---------------- Dropdowns ---------------- */
     wireDropdown(container, 'setting-active-proxy');
@@ -614,8 +618,8 @@ export class SettingsView {
         temperature: parseFloat(container.querySelector('#slider-temp').value),
         topP: parseFloat(container.querySelector('#slider-topp').value),
         maxTokens: parseInt(container.querySelector('#slider-tokens').value),
+        unlimitedTokens: container.querySelector('#setting-unlimited-tokens').checked,
         repetitionPenalty: parseFloat(container.querySelector('#slider-penalty').value),
-        contextLimit: parseInt(container.querySelector('#slider-context').value),
         reasoningEffort: container.querySelector('#setting-reasoning-effort').value,
         reasoningMaxTokens: parseInt(container.querySelector('#slider-reasoning-tokens').value),
         streamingEnabled: container.querySelector('#setting-streaming-enabled').checked,

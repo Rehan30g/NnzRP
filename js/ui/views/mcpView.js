@@ -77,6 +77,14 @@ export class MCPView {
             <input class="input" type="number" id="mcp-iteration-limit-value" min="1" max="500" step="1" style="width:90px;">
           </div>
         </div>
+        <div style="border-top:1px solid var(--border-light); padding-top:1rem;">
+          ${toggleRowHTML({
+            id: 'mcp-embed-html-toggle',
+            title: 'Embed HTML (Eksperimental)',
+            description: 'Lets the AI render HTML/JS/CSS directly in chat (charts, small animations, interactive diagrams) inside a sandboxed frame. This means AI-generated script content actually executes in the app - OFF by default for safety. Same Ask/Allow/Decline permission gate as every other tool.',
+            ariaLabel: 'Enable the builtin embed HTML tool'
+          })}
+        </div>
       </div>
 
       <div id="mcp-servers-section">
@@ -236,6 +244,19 @@ export class MCPView {
         // Reflect back whatever got clamped/defaulted server-side (e.g. blank or 0 input).
         const saved = await MCPStore.getMaxToolIterations();
         iterationLimitInput.value = saved.value;
+      };
+    }
+
+    // Embed HTML (Experimental) - the builtin AI-generated-content-executes-in-app
+    // tool (js/services/builtinTools.js). Independent of everything else on this
+    // page except the master MCP switch above (getBuiltinTools() gates on both).
+    // Defaults OFF - see MCPStore.getEmbedHtmlEnabled()'s safe-default comment.
+    const embedHtmlToggle = container.querySelector('#mcp-embed-html-toggle');
+    if (embedHtmlToggle) {
+      embedHtmlToggle.checked = await MCPStore.getEmbedHtmlEnabled();
+      embedHtmlToggle.onchange = async (e) => {
+        await MCPStore.setEmbedHtmlEnabled(e.target.checked);
+        Toast.info(`Embed HTML ${e.target.checked ? 'diaktifkan' : 'dinonaktifkan'}.`);
       };
     }
 

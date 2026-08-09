@@ -2,6 +2,25 @@
 
 import { extractThinking, ThinkingStreamParser } from '../utils/thinkingParser.js';
 import { ToolCallAccumulator } from '../utils/toolCallAccumulator.js';
+import { parseDataUrl } from '../utils/imageUtils.js';
+
+// "Unlimited" can't literally mean infinite - every provider still requires
+// (or effectively caps at) some numeric max_tokens value. When the user picks
+// Unlimited (settings.unlimitedTokens, set in Settings -> Model Configurations)
+// this sends the highest value that works WITHOUT extra opt-in headers/beta
+// flags across the current model lineup, instead of the low default that was
+// silently truncating thinking + reply together. Anthropic REQUIRES
+// max_tokens outright and most current Claude models cap a standard
+// (non-extended-output-beta) response around 8192; OpenAI-compatible and
+// Gemini endpoints tolerate a much higher requested value fine.
+const UNLIMITED_MAX_TOKENS = { anthropic: 8192, default: 16384 };
+
+function resolveMaxTokens(provider, settings) {
+  if (settings.unlimitedTokens) {
+    return provider === 'anthropic' ? UNLIMITED_MAX_TOKENS.anthropic : UNLIMITED_MAX_TOKENS.default;
+  }
+  return settings.maxTokens ? parseInt(settings.maxTokens) : 1024;
+}
 
 function safeParseJSON(str) {
   if (!str) return {};
@@ -45,8 +64,17 @@ function buildOpenAIToolsParam(tools) {
   }));
 }
 
+// OpenAI's `image_url.url` accepts a base64 `data:` URI directly, so no
+// mime/base64 split is needed here (unlike Anthropic/Gemini below) - just a
+// sanity check via parseDataUrl that it really is one before sending it.
+function buildOpenAIImageParts(images) {
+  return (images || [])
+    .filter(img => parseDataUrl(img))
+    .map(img => ({ type: 'image_url', image_url: { url: img } }));
+}
+
 /** Translates the internal payload (role/content + optional toolCalls/tool role) into
- * OpenAI-compatible `messages`. A no-tool-calls payload maps through unchanged. */
+ * OpenAI-compatible `messages`. A no-tool-calls, no-images payload maps through unchanged. */
 function toOpenAIMessages(payload) {
   return payload.map(m => {
     if (m.role === 'tool') {
@@ -63,6 +91,14 @@ function toOpenAIMessages(payload) {
         }))
       };
     }
+    // Only ever set on a 'user' message (composer upload, or the builtin
+    // image-fetch tool's app-injected follow-up turn - see agentRunner.js).
+    if (m.role === 'user' && Array.isArray(m.images) && m.images.length) {
+      const parts = [];
+      if (m.content) parts.push({ type: 'text', text: m.content });
+      parts.push(...buildOpenAIImageParts(m.images));
+      return { role: 'user', content: parts.length ? parts : m.content };
+    }
     return { role: m.role, content: m.content };
   });
 }
@@ -70,6 +106,16 @@ function toOpenAIMessages(payload) {
 function buildAnthropicToolsParam(tools) {
   if (!tools || tools.length === 0) return undefined;
   return tools.map(t => ({ name: t.qualifiedName, description: t.description || '', input_schema: t.inputSchema }));
+}
+
+function buildAnthropicImageBlocks(images) {
+  const blocks = [];
+  for (const img of images || []) {
+    const parsed = parseDataUrl(img);
+    if (!parsed) continue;
+    blocks.push({ type: 'image', source: { type: 'base64', media_type: parsed.mimeType, data: parsed.base64 } });
+  }
+  return blocks;
 }
 
 /** Translates the internal payload into Anthropic `messages` (system messages excluded - caller joins those separately). */
@@ -90,6 +136,13 @@ function toAnthropicMessages(payload) {
       for (const tc of m.toolCalls) blocks.push({ type: 'tool_use', id: tc.id, name: tc.name, input: tc.args || {} });
       return { role: 'assistant', content: blocks };
     }
+    // Only ever set on a 'user' message - see the matching comment in toOpenAIMessages.
+    if (m.role === 'user' && Array.isArray(m.images) && m.images.length) {
+      const blocks = [];
+      if (m.content) blocks.push({ type: 'text', text: m.content });
+      blocks.push(...buildAnthropicImageBlocks(m.images));
+      return { role: 'user', content: blocks.length ? blocks : m.content };
+    }
     return { role: m.role, content: m.content };
   });
 }
@@ -99,6 +152,16 @@ function buildGeminiToolsParam(tools) {
   return [{
     functionDeclarations: tools.map(t => ({ name: t.qualifiedName, description: t.description || '', parameters: t.inputSchema }))
   }];
+}
+
+function buildGeminiImageParts(images) {
+  const parts = [];
+  for (const img of images || []) {
+    const parsed = parseDataUrl(img);
+    if (!parsed) continue;
+    parts.push({ inlineData: { mimeType: parsed.mimeType, data: parsed.base64 } });
+  }
+  return parts;
 }
 
 /** Translates the internal payload into Gemini `contents` (system messages excluded - caller joins those into systemInstruction). */
@@ -118,6 +181,13 @@ function toGeminiContents(payload) {
       if (m.content) parts.push({ text: m.content });
       for (const tc of m.toolCalls) parts.push({ functionCall: { name: tc.name, args: tc.args || {} } });
       return { role: 'model', parts };
+    }
+    // Only ever set on a 'user' message - see the matching comment in toOpenAIMessages.
+    if (m.role === 'user' && Array.isArray(m.images) && m.images.length) {
+      const parts = [];
+      if (m.content) parts.push({ text: m.content });
+      parts.push(...buildGeminiImageParts(m.images));
+      return { role: 'user', parts };
     }
     return { role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] };
   });
@@ -197,7 +267,7 @@ export class ProviderManager {
 
     const temp = settings.temperature !== undefined ? parseFloat(settings.temperature) : 0.8;
     const topP = settings.topP !== undefined ? parseFloat(settings.topP) : 0.95;
-    const maxTokens = settings.maxTokens ? parseInt(settings.maxTokens) : 1024;
+    const maxTokens = resolveMaxTokens(provider, settings);
     const repPenalty = settings.repetitionPenalty ? parseFloat(settings.repetitionPenalty) : 1.0;
     const reasoningEffort = proxy.reasoningEffort || settings.reasoningEffort || 'off';
     const reasoningMaxTokens = proxy.reasoningMaxTokens || settings.reasoningMaxTokens || 2048;
@@ -408,7 +478,7 @@ export class ProviderManager {
 
     const temp = settings.temperature !== undefined ? parseFloat(settings.temperature) : 0.8;
     const topP = settings.topP !== undefined ? parseFloat(settings.topP) : 0.95;
-    const maxTokens = settings.maxTokens ? parseInt(settings.maxTokens) : 1024;
+    const maxTokens = resolveMaxTokens(provider, settings);
     const repPenalty = settings.repetitionPenalty ? parseFloat(settings.repetitionPenalty) : 1.0;
     const reasoningEffort = proxy.reasoningEffort || settings.reasoningEffort || 'off';
     const reasoningMaxTokens = proxy.reasoningMaxTokens || settings.reasoningMaxTokens || 2048;

@@ -12,7 +12,6 @@ export class PromptBuilder {
     const persona = options.persona;
     const globalSystemPrompt = options.globalSystemPrompt || '';
     const messages = options.messages || [];
-    const contextLimit = options.contextLimit || 25;
     const tools = options.tools || [];
 
     const userName = persona?.name || 'User';
@@ -81,13 +80,42 @@ export class PromptBuilder {
       payload.push({ role: 'assistant', content: replaceMacros(character.first_mes, userName, charName) });
     }
 
-    // 5. Slice History Messages
-    const recentMessages = messages.slice(-contextLimit);
-    for (const msg of recentMessages) {
-      payload.push({
+    // 5. Full History - no hard message-count cap. An older cap here silently
+    // dropped old turns from the model's context, which read as the character
+    // "forgetting" earlier established facts/relationships. Context-window
+    // pressure is now surfaced to the user instead (the chat header's
+    // capacity gauge, js/utils/contextWindowSize.js) with a Compact Chat
+    // recommendation once a session gets long, rather than silently
+    // truncating history out from under them.
+    const historyPayload = [];
+    for (const msg of messages) {
+      const entry = {
         role: msg.role === 'user' ? 'user' : 'assistant',
         content: replaceMacros(msg.content, userName, charName)
-      });
+      };
+      // Only a user message can carry image attachments (composer upload) -
+      // passed through as-is (already base64 data: URLs, nothing to macro-
+      // replace) for providerManager.js's translators to turn into each
+      // provider's own multimodal content blocks.
+      if (Array.isArray(msg.images) && msg.images.length) entry.images = msg.images;
+      historyPayload.push(entry);
+    }
+
+    // Merge consecutive same-role turns into one (e.g. ChatStore.createCompactedChat's
+    // AI recap message immediately followed by the kept opening/first_mes message,
+    // both 'assistant') instead of pushing them as two separate back-to-back
+    // turns. Most providers tolerate consecutive same-role messages fine, but
+    // Anthropic specifically requires strict user/assistant alternation and
+    // errors otherwise - merging keeps every provider happy uniformly, and
+    // reads naturally either way (one assistant-authored block instead of two).
+    for (const entry of historyPayload) {
+      const last = payload[payload.length - 1];
+      if (last && last.role === entry.role) {
+        last.content = [last.content, entry.content].filter(Boolean).join('\n\n');
+        if (entry.images?.length) last.images = [...(last.images || []), ...entry.images];
+      } else {
+        payload.push(entry);
+      }
     }
 
     return payload;

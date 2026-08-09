@@ -7,6 +7,11 @@ import { PromptBuilder } from '../../services/promptBuilder.js';
 import { ProviderManager } from '../../services/providerManager.js';
 import { MCPToolRegistry } from '../../services/mcpToolRegistry.js';
 import { AgentRunner } from '../../services/agentRunner.js';
+import { getBuiltinTools, BUILTIN_EMBED_HTML_TOOL } from '../../services/builtinTools.js';
+import { supportsVision } from '../../utils/modelVision.js';
+import { readFileAsDataURL, MAX_IMAGE_BYTES, MAX_IMAGES_PER_MESSAGE } from '../../utils/imageUtils.js';
+import { estimateTokens } from '../../utils/tokenEstimate.js';
+import { getContextWindowSize } from '../../utils/contextWindowSize.js';
 import { GreetingWizardService, GREETING_WIZARD_TOTAL_QUESTIONS } from '../../services/greetingWizardService.js';
 import { MCPStore } from '../../storage/mcpStore.js';
 import { MCPClient } from '../../services/mcpClient.js';
@@ -17,9 +22,51 @@ import { SettingsView } from './settingsView.js';
 import { MCPView, INTENSITY_LABELS, MCP_INTENSITY_HINTS } from './mcpView.js';
 import { dropdownHTML, wireDropdown, setDropdownOptions, setDropdownDisabled } from '../components/dropdown.js';
 import { toggleSwitchHTML, toggleRowHTML } from '../components/toggle.js';
-import { escapeHtml, escapeAttr } from '../../utils/sanitize.js';
+import { escapeHtml, escapeAttr, unescapeHtml } from '../../utils/sanitize.js';
 import { extractThinking } from '../../utils/thinkingParser.js';
 import { replaceMacros } from '../../utils/macroReplacer.js';
+import { highlightCode } from '../../utils/syntaxHighlight.js';
+
+/**
+ * Custom fenced-code-block/inline-code renderers, registered once at module
+ * load (js/vendor/marked.min.js is loaded as a plain <script> before this
+ * module, so `window.marked` already exists here).
+ *
+ * WHY this is needed at all: formatRoleplayMarkdown() below escapeHtml()'s
+ * the WHOLE message before handing it to marked.parse() - the load-bearing
+ * XSS guard for chat content. marked's OWN default code/codespan renderers
+ * then escape the text again when building their output, since they assume
+ * they're receiving raw unescaped markdown source. The result was visible
+ * double-escaping - a literal "<!DOCTYPE html>" in a code block rendered as
+ * the LITERAL TEXT "&lt;!DOCTYPE html&gt;" instead of the angle brackets.
+ * These renderers unescapeHtml() the token's text back to the original
+ * characters first, then build the output HTML themselves (via
+ * highlightCode(), which re-escapes exactly once as it emits highlight
+ * spans) - so escaping happens exactly once, end to end.
+ */
+if (window.marked) {
+  window.marked.use({
+    renderer: {
+      code({ text, lang }) {
+        const rawCode = unescapeHtml(text);
+        const langLabel = (lang || '').trim().split(/\s+/)[0] || '';
+        const highlighted = highlightCode(rawCode, langLabel);
+        return `
+          <div class="code-block-wrap">
+            <div class="code-block-header">
+              <span class="code-block-lang">${escapeHtml(langLabel || 'text')}</span>
+              <button type="button" class="code-copy-btn" data-code="${escapeAttr(rawCode)}">Copy</button>
+            </div>
+            <pre><code class="language-${escapeAttr(langLabel)}">${highlighted}</code></pre>
+          </div>
+        `;
+      },
+      codespan({ text }) {
+        return `<code>${escapeHtml(unescapeHtml(text))}</code>`;
+      }
+    }
+  });
+}
 
 // Module-level generation state - only one ChatView is ever mounted at a time
 // in this SPA, so a shared abort/generating flag is simpler than threading it
@@ -33,14 +80,55 @@ let isGenerating = false;
 // `queuedMessageHandlers` is (re)bound by ChatView.render() to the currently
 // mounted chat's own send/refresh closures.
 let queuedMessage = null;
-let queuedMessageHandlers = null; // { flush(text): Promise<void>, refreshIndicator(): void }
+let queuedImages = []; // images attached to the queued message, if any - see pendingAttachedImages below
+let queuedMessageHandlers = null; // { flush(text, images): Promise<void>, refreshIndicator(): void }
+
+// Images attached via the composer's "+" button but not sent yet - same
+// module-level/singleton reasoning as `queuedMessage` above, and cleared
+// alongside it in `clearQueuedMessage()` so a draft attachment can never leak
+// into a different session than the one it was picked in.
+let pendingAttachedImages = [];
+
+// Compact Chat recommendation - in-memory-only "already dismissed/offered"
+// tracking, keyed by chatId. Deliberately NOT persisted to IndexedDB: this is
+// a light nudge, not a setting, so it resets on app restart rather than
+// permanently silencing the recommendation for a chat the user is still
+// actively growing.
+const compactDismissedChats = new Set();
+const COMPACT_RECOMMEND_THRESHOLD = 40;
+// The character's opening + earliest scene-setting turns - never folded into
+// the AI summary, so the new chat still opens the same way the original did.
+const COMPACT_KEEP_FIRST = 4;
+// The most recent turns - also never folded into the summary, so the new
+// chat can pick the scene back up immediately instead of the newest message
+// only surviving however well the AI's prose recap happened to capture it.
+const COMPACT_KEEP_LAST = 4;
+
+// Auto session-title generation cadence: a fresh session's default title is
+// generic ("Session 1 - <char>"), so the first real title comes early (as
+// soon as there's enough conversation to summarize) and then gets refreshed
+// periodically as the scene moves on - but not on every single message,
+// which would burn a title-generation call per turn for no real benefit.
+const AUTO_TITLE_FIRST_AT = 3;
+const AUTO_TITLE_INTERVAL = 15;
+
+/** Whether `messageCount` lands on an auto-title generation point - the
+ * first-ever title at AUTO_TITLE_FIRST_AT messages, then every
+ * AUTO_TITLE_INTERVAL messages on a fixed grid after that (not counted
+ * onward from the first trigger - simpler to reason about, and the two
+ * numbers are close enough that the difference is immaterial in practice). */
+function isAutoTitlePoint(messageCount) {
+  return messageCount === AUTO_TITLE_FIRST_AT || messageCount % AUTO_TITLE_INTERVAL === 0;
+}
 
 async function flushQueuedMessageIfAny() {
-  if (!queuedMessage || !queuedMessageHandlers) return;
+  if ((!queuedMessage && !queuedImages.length) || !queuedMessageHandlers) return;
   const next = queuedMessage;
+  const nextImages = queuedImages;
   queuedMessage = null;
+  queuedImages = [];
   queuedMessageHandlers.refreshIndicator();
-  await queuedMessageHandlers.flush(next);
+  await queuedMessageHandlers.flush(next || '', nextImages);
 }
 
 // Wrench icon used on the "Tools Used" chip so an MCP-tool-triggering message
@@ -79,11 +167,12 @@ function setGeneratingState(generating) {
 let isThinkingCollapsedDefault = localStorage.getItem('aetheria_thinking_collapsed') === '1';
 
 /**
- * Estimates token count for thinking text (~3.8 chars per token).
+ * Estimates token count for thinking text - thin wrapper over the shared
+ * estimator (js/utils/tokenEstimate.js), kept as its own named function since
+ * every call site here reads as "thinking tokens" specifically.
  */
 function estimateThinkingTokens(thinkingText = '') {
-  if (!thinkingText || !thinkingText.trim()) return 0;
-  return Math.max(1, Math.ceil(thinkingText.trim().length / 3.8));
+  return estimateTokens(thinkingText);
 }
 
 /**
@@ -103,7 +192,7 @@ function scrollToBottom(containerEl) {
  * direct child of `.message-block-inner`), but NOT during live generation,
  * where the typing indicator / swipe host wraps one-or-more `.message-content`
  * blocks inside an intermediate `#typing-indicator-content`/host div (see
- * `renderLiveBodyHTML`) so inline tool markers can sit between them. Returns
+ * `createLiveBodyHost`) so inline tool markers can sit between them. Returns
  * whichever DIRECT child of `containerEl` should be inserted-before to land
  * right above the content area, in either case.
  */
@@ -167,17 +256,63 @@ function syncThinkingBlock(containerEl, thinkingText, { streaming = false } = {}
 }
 
 /**
+ * Structured "Tools Used" content - one card per call (name, pretty-printed
+ * + syntax-highlighted JSON args, result text) instead of the old single
+ * wall of escaped plain text (`name(args)\n→ result` for every call joined
+ * by blank lines), which read as an undifferentiated dump once there was
+ * more than one call or the args/result were non-trivial. Declined calls get
+ * a visible badge instead of just reading TOOL_DECLINED_NOTICE as if it were
+ * a normal result. Excludes the builtin Embed HTML tool entirely (see
+ * `visibleToolTrace`) - `toolTrace` passed in here should already be
+ * pre-filtered by the caller, this only re-filters defensively.
+ */
+function toolTraceDetailHTML(toolTrace = []) {
+  const visible = visibleToolTrace(toolTrace);
+  if (!visible.length) return '';
+  return visible.map(t => {
+    let argsJson;
+    try {
+      argsJson = JSON.stringify(t.args ?? {}, null, 2);
+    } catch {
+      argsJson = String(t.args);
+    }
+    return `
+      <div class="tool-trace-entry">
+        <div class="tool-trace-entry-head">
+          <span class="tool-trace-entry-name">${escapeHtml(t.name)}</span>
+          ${t.declined ? '<span class="tool-trace-entry-declined">Declined</span>' : ''}
+        </div>
+        <pre class="tool-trace-entry-args"><code>${highlightCode(argsJson, 'json')}</code></pre>
+        ${!t.declined ? `<div class="tool-trace-entry-result">${escapeHtml(t.result || '')}</div>` : ''}
+      </div>
+    `;
+  }).join('');
+}
+
+/**
  * Creates/updates/removes a message's collapsible "Tools Used" block to match
  * `toolTrace` (an array of {name,args,result}) - used when a swipe variation
  * is switched to, so a stale tool-trace from a different variation isn't left
- * displayed alongside the newly-shown content.
+ * displayed alongside the newly-shown content. Visibility/the call-count
+ * badge are both driven by `visibleToolTrace(toolTrace)` (excludes the
+ * builtin Embed HTML tool - see that function) rather than the raw array, so
+ * a round that ONLY called the embed tool doesn't leave behind an oddly
+ * empty "Tools Used (1 call)" box.
+ *
+ * Inserted BEFORE the thinking-block if one exists (falling back to right
+ * before the content area otherwise) so "Tools Used" always sits above
+ * "Thinking" regardless of which of the two syncs runs first - the model
+ * decided to use tools, then reasoned/replied using what came back, so the
+ * tool activity reads as the earlier step.
  */
 function syncToolTraceBlock(containerEl, toolTrace = []) {
   if (!containerEl) return;
   const contentEl = findContentAnchor(containerEl);
+  const thinkingEl = containerEl.querySelector('.thinking-block');
   let block = containerEl.querySelector('.tool-trace-block');
 
-  if (!toolTrace || toolTrace.length === 0) {
+  const visible = visibleToolTrace(toolTrace);
+  if (!visible.length) {
     if (block) block.remove();
     return;
   }
@@ -195,12 +330,13 @@ function syncToolTraceBlock(containerEl, toolTrace = []) {
       <div class="thinking-content"></div>
     `;
     block.querySelector('.thinking-toggle').onclick = () => block.classList.toggle('expanded');
-    if (contentEl) containerEl.insertBefore(block, contentEl);
+    const anchor = thinkingEl || contentEl;
+    if (anchor) containerEl.insertBefore(block, anchor);
     else containerEl.appendChild(block);
   }
 
-  block.querySelector('.thinking-token-badge').textContent = `${toolTrace.length} call${toolTrace.length > 1 ? 's' : ''}`;
-  block.querySelector('.thinking-content').textContent = toolTrace.map(t => `${t.name}(${JSON.stringify(t.args)})\n→ ${t.result}`).join('\n\n');
+  block.querySelector('.thinking-token-badge').textContent = `${visible.length} call${visible.length > 1 ? 's' : ''}`;
+  block.querySelector('.thinking-content').innerHTML = toolTraceDetailHTML(toolTrace);
 }
 
 /**
@@ -218,21 +354,62 @@ function toolTraceNames(toolTrace = []) {
 }
 
 /**
+ * Flattens every `images` array a `toolTrace` entry carries (currently only
+ * the builtin view-image tool ever sets one, see agentRunner.js) into a
+ * single list - what actually gets persisted as the message's own `images`
+ * field, so a fetched image renders in chat via the exact same
+ * messageImagesHTML() thumbnail path a user-uploaded image uses.
+ */
+function collectToolImages(toolTrace = []) {
+  return toolTrace.flatMap(t => (t && Array.isArray(t.images)) ? t.images : []);
+}
+
+/**
+ * Same pattern as `collectToolImages` above, for the builtin "Embed HTML"
+ * tool (js/services/builtinTools.js): flattens every `{html, htmlTitle}` a
+ * `toolTrace` entry carries (see agentRunner.js's dispatch of
+ * BUILTIN_EMBED_HTML_TOOL) into the `{html, title}` array shape persisted as
+ * the message's own `embeds` field, rendered by `messageEmbedsHTML()` below.
+ * A declined call never has `.html` set (agentRunner.js only attaches it on
+ * a successful, allowed execution), so this naturally excludes those too.
+ */
+function collectToolEmbeds(toolTrace = []) {
+  return toolTrace
+    .filter(t => t && typeof t.html === 'string' && t.html)
+    .map(t => ({ html: t.html, title: t.htmlTitle || '' }));
+}
+
+/**
+ * Drops builtin Embed HTML calls from anything that displays a raw tool
+ * NAME/count (the inline marker, the live "Tools Used" spinner box, the
+ * collapsible trace listing) - the embed card itself (messageEmbedsHTML(),
+ * rendered separately and unaffected by this filter) is already visible
+ * proof it ran, so a redundant "builtin__embed_html" label next to it is
+ * just technical noise. A round that called ONLY the embed tool ends up with
+ * no note/badge at all, which is the intended outcome, not a bug.
+ */
+function visibleToolTrace(toolTrace = []) {
+  return (toolTrace || []).filter(t => t && t.name !== BUILTIN_EMBED_HTML_TOOL);
+}
+
+/**
  * HTML for one `.tool-inline-note` marker covering a group of tool call(s)
  * (comma-joined + de-duplicated names, same as the old whole-message note),
- * or '' if that group called no tools. When the group represents more than
- * one individual call - several rounds merged together with no narration
- * text between them (see `renderMessageBodyHTML`), or just several tools
- * called in one round - a "(Nx)" count is appended so calling the same tool
- * repeatedly doesn't silently collapse into a single name with no indication
- * it happened more than once. Applies the same way whether the merged calls
- * are the same tool repeated or different tools, per the user's request.
- * Tool names come from user-configured MCP servers, so they're escaped.
+ * or '' if that group called no (visible - see `visibleToolTrace`) tools.
+ * When the group represents more than one individual call - several rounds
+ * merged together with no narration text between them (see
+ * `renderMessageBodyHTML`), or just several tools called in one round - a
+ * "(Nx)" count is appended so calling the same tool repeatedly doesn't
+ * silently collapse into a single name with no indication it happened more
+ * than once. Applies the same way whether the merged calls are the same tool
+ * repeated or different tools, per the user's request. Tool names come from
+ * user-configured MCP servers, so they're escaped.
  */
 function toolInlineNoteHTML(toolTrace = []) {
-  const names = toolTraceNames(toolTrace);
+  const visible = visibleToolTrace(toolTrace);
+  const names = toolTraceNames(visible);
   if (!names) return '';
-  const suffix = toolTrace.length > 1 ? ` (${toolTrace.length}x)` : '';
+  const suffix = visible.length > 1 ? ` (${visible.length}x)` : '';
   return `<div class="tool-inline-note">${WRENCH_ICON_SVG}<span>${escapeHtml(names + suffix)}</span></div>`;
 }
 
@@ -255,8 +432,8 @@ function hasToolSegments(msg) {
  * empty text - a model very often calls a tool with no lead-in text, and can
  * do that across several consecutive rounds (call tool A, get the result,
  * immediately call tool B still with no narration). Shared by
- * `renderMessageBodyHTML` (persisted messages) and `renderLiveBodyHTML`
- * (mid-generation) so both apply the exact same grouping.
+ * `renderMessageBodyHTML` (persisted messages) and `liveCommittedGroupsHTML`
+ * (mid-generation, via `createLiveBodyHost`) so both apply the exact same grouping.
  */
 function groupToolSegments(segments) {
   const groups = [];
@@ -295,42 +472,300 @@ function groupToolSegments(segments) {
  * segment's text still goes through it, same as `m.content` always has, so
  * macros/escaping/markdown are never skipped.
  */
+/**
+ * Thumbnail strip for a message's attached images - a user's composer upload
+ * on a 'user' message, or something the builtin view-image tool fetched
+ * mid-reply on an 'assistant' message (see ChatStore.addMessage's JSDoc).
+ * Data URLs are app-generated (FileReader output / fetched image bytes), not
+ * model/character text, but still run through `escapeAttr` for consistency
+ * with every other `src=` in this file.
+ */
+function messageImagesHTML(msg) {
+  if (!Array.isArray(msg.images) || !msg.images.length) return '';
+  return `<div class="message-image-row">${msg.images.map(src =>
+    `<img class="message-image-thumb" src="${escapeAttr(src)}" alt="">`
+  ).join('')}</div>`;
+}
+
+/**
+ * Whether the app is CURRENTLY showing the dark palette - mirrors the same
+ * resolution js/ui/theme.js's applyThemeMode() uses: an explicit
+ * `data-theme` attribute wins, 'auto' (the attribute is absent) falls back
+ * to the OS media query. Needed because a sandboxed iframe is a fully
+ * separate document - it does NOT inherit the parent page's CSS custom
+ * properties, so an embed rendered with no explicit styling of its own used
+ * to default to the BROWSER's baseline white-background/black-text look
+ * regardless of the app's theme. See buildEmbedDocument() below.
+ */
+function isDarkThemeActive() {
+  const attr = document.documentElement.getAttribute('data-theme');
+  if (attr === 'dark') return true;
+  if (attr === 'light') return false;
+  return !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+}
+
+/**
+ * Resolves the handful of CSS custom properties an embedded document needs
+ * to LOOK like part of the current chat theme, as literal computed values
+ * (a var(--x) reference is meaningless inside the iframe's own separate
+ * document - it has no access to this page's :root).
+ */
+function getEmbedThemeVars() {
+  const cs = getComputedStyle(document.documentElement);
+  const dark = isDarkThemeActive();
+  const read = (name, fallback) => (cs.getPropertyValue(name) || '').trim() || fallback;
+  return {
+    scheme: dark ? 'dark' : 'light',
+    text: read('--text-main', dark ? '#e2e8f0' : '#1e293b'),
+    accent: read('--accent-primary', '#4f46e5'),
+    font: read('--font-family', 'system-ui, sans-serif')
+  };
+}
+
+// Injected into every embed document, providing capabilities a sandboxed
+// (deliberately no allow-same-origin - see messageEmbedsHTML's security
+// note) iframe has no other way to reach the parent page for:
+//   - auto-reporting its real content height back (the 'message' listener
+//     wired in render() below) - the parent can't just read
+//     contentDocument.body.scrollHeight directly across the sandbox boundary.
+//   - `fillChatInput(text)`, a global function the model's own embed HTML can
+//     call (e.g. from a <button onclick>) to put text into the chat composer
+//     - lets an embed offer clickable options/choices the user can send or
+//     edit, instead of only ever being a passive visual.
+//   - auto-wiring any element carrying a `data-fill-text="..."` attribute to
+//     call fillChatInput() with that exact attribute value on click, with NO
+//     onclick/JS needed from the model at all. This is the RECOMMENDED way
+//     (see EMBED_HTML_DESCRIPTOR in builtinTools.js) specifically because a
+//     model writing `onclick="fillChatInput('...')"` by hand has to
+//     correctly escape any single-quote inside the text - and natural
+//     dialogue is full of contractions ("don't", "I'll", "you're") that
+//     silently truncate/break the whole handler the moment one goes
+//     unescaped (confirmed live: a real generated embed had exactly this
+//     bug on every option containing a contraction). Reading a plain HTML
+//     attribute via getAttribute() instead sidesteps JS-string-literal
+//     escaping entirely - HTML attribute parsing only breaks on the
+//     attribute's own OWN quote character, and this tool always writes
+//     double-quoted attributes, which plain English dialogue essentially
+//     never contains.
+const EMBED_RUNTIME_SCRIPT = `<script>(function(){
+function reportHeight(){
+  try {
+    var h = Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0);
+    parent.postMessage({ type: 'nnzrp-embed-resize', height: h }, '*');
+  } catch (e) {}
+}
+window.fillChatInput = function(text){
+  try {
+    parent.postMessage({ type: 'nnzrp-embed-fill-input', text: String(text == null ? '' : text) }, '*');
+  } catch (e) {}
+};
+document.addEventListener('click', function(ev){
+  var el = ev.target && ev.target.closest ? ev.target.closest('[data-fill-text]') : null;
+  if (el) fillChatInput(el.getAttribute('data-fill-text'));
+});
+window.addEventListener('load', reportHeight);
+if (window.ResizeObserver && document.body) new ResizeObserver(reportHeight).observe(document.body);
+setTimeout(reportHeight, 60);
+setTimeout(reportHeight, 300);
+})();</script>`;
+
+/**
+ * Wraps the model's raw HTML with a small reset stylesheet (transparent
+ * background + theme-matched text/link/selection colors, so unstyled
+ * elements blend into the current chat theme instead of defaulting to a
+ * plain white box) and the runtime script above (resize handshake +
+ * `fillChatInput`).
+ *
+ * An earlier version tried to splice the style/script into wherever the
+ * model's own `<head>`/`</body>` happened to be, found via regex - which
+ * broke silently and unpredictably depending on exactly how the model
+ * formatted its HTML (a `<head>` with unusual attributes, a missing
+ * `</body>`, a full document that omitted `<html>`, etc.), and even when it
+ * DID match, the script landed at the very END of the document - so if the
+ * model's OWN script tried to call `fillChatInput` synchronously (not from a
+ * later click handler) it could run before the runtime script defining it
+ * had executed yet. Reported as "the button sometimes just doesn't work,
+ * weirdly" - exactly the kind of intermittent failure that formatting-
+ * dependent regex splicing produces.
+ *
+ * Now: the style+script are always inserted as close to the very START of
+ * the document as possible, unconditionally, no head/body detection at all -
+ * `<style>`/`<script>` tags are valid ANYWHERE in an HTML document per the
+ * HTML5 parsing algorithm (a browser hoists them into an implied `<head>`
+ * even with no explicit `<head>`/`<html>` wrapper), and script execution
+ * order is what actually matters for `fillChatInput` to be defined before
+ * anything can call it - putting it first guarantees that regardless of how
+ * the rest of the model's document is shaped. The one exception: if the
+ * model's HTML starts with `<!DOCTYPE html>`, that has to stay the LITERAL
+ * first thing in the document or the browser drops into quirks mode (a real
+ * rendering behavior change, not just a technicality) - so in that case the
+ * insertion point is right after the doctype instead of before it.
+ */
+function buildEmbedDocument(rawHtml) {
+  const theme = getEmbedThemeVars();
+  const style = `<style>
+    :root { color-scheme: ${theme.scheme}; }
+    html, body { margin:0; padding:0.65rem; background:transparent; color:${theme.text}; font-family:${theme.font}; font-size:14px; }
+    a { color:${theme.accent}; }
+    ::selection { background:${theme.accent}; color:#fff; }
+  </style>`;
+  const prefix = style + EMBED_RUNTIME_SCRIPT;
+
+  const doctypeMatch = /^\s*<!doctype html[^>]*>/i.exec(rawHtml);
+  if (doctypeMatch) {
+    const end = doctypeMatch[0].length;
+    return rawHtml.slice(0, end) + prefix + rawHtml.slice(end);
+  }
+  return prefix + rawHtml;
+}
+
+/**
+ * Renders a `[{html, title}]` list (see `collectToolEmbeds` above - either
+ * one round's own slice of a live/persisted toolTrace, or the whole
+ * message's flat `msg.embeds` fallback, see the two call sites below) as one
+ * SANDBOXED iframe per entry, sitting directly in the message flow with NO
+ * visible chrome at all (no card border/background, no "AI-generated embed"
+ * label) - any visible technical label read as breaking immersion/feeling
+ * bolted onto the chat instead of part of it. `e.title` (model-generated) is
+ * only used as the iframe's `title` ATTRIBUTE now (screen-reader-only, never
+ * painted on screen), not a visible caption. Called from BOTH
+ * `renderMessageBodyHTML` (per round, right where that round's tool marker
+ * sits - not appended once at the bottom regardless of which round produced
+ * it) and `liveCommittedGroupsHTML` (same per-round placement, live, the
+ * moment a streaming round's tool call resolves rather than waiting for the
+ * whole turn to finish).
+ * This is the security-critical render path for that tool:
+ *   - `sandbox="allow-scripts"` and NOTHING else. Deliberately no
+ *     `allow-same-origin` - omitting it is what gives the iframe a unique,
+ *     opaque origin even though scripts run inside it, so an embedded script
+ *     can't reach this window, can't read/write the app's DOM, can't touch
+ *     IndexedDB/localStorage, and has no path to Node/Electron internals
+ *     (this renderer already runs with `nodeIntegration:false`). No
+ *     `allow-forms`/`allow-popups`/`allow-modals`/`allow-top-navigation`
+ *     either - no form posts, no popup spam, no alert()/confirm()/prompt()
+ *     floods, no navigating the app away.
+ *   - Content is set via the `srcdoc` ATTRIBUTE (not `src="data:..."`), the
+ *     standard way to hand an iframe inline sandboxed markup. The document
+ *     text (see buildEmbedDocument()) is model-generated untrusted content,
+ *     so it goes through `escapeAttr()` same as every other attribute value
+ *     in this file - the browser HTML-decodes the attribute value back into
+ *     the iframe's srcdoc document, so entity-escaping here is exactly the
+ *     correct (and only) encoding step, not a double-escape.
+ *   - Starts at a small placeholder height and grows to fit its own content
+ *     via the postMessage height report (see the 'message' listener in
+ *     render()) instead of a fixed box that's mostly empty for small embeds
+ *     - clamped both directions there so one runaway/huge embed still can't
+ *     blow out the chat layout.
+ */
+function embedCardsHTML(embeds = []) {
+  const list = (embeds || []).filter(e => e && e.html);
+  if (!list.length) return '';
+  // `data-raw-html` carries the RAW, un-processed model-authored HTML (not
+  // the wrapped buildEmbedDocument() output actually running in the iframe) -
+  // purely for the hidden Ctrl+Alt+D debug shortcut (see handleKeydown below)
+  // to read back out. escapeAttr()'d same as every other attribute value in
+  // this file; the browser HTML-decodes it back to the exact original string
+  // when read via `.dataset.rawHtml`.
+  return list.map(e => `
+    <div class="message-embed-card" data-raw-html="${escapeAttr(e.html)}">
+      <iframe class="message-embed-frame" sandbox="allow-scripts" title="${escapeAttr(e.title || 'Embedded content')}" srcdoc="${escapeAttr(buildEmbedDocument(e.html))}"></iframe>
+    </div>
+  `).join('');
+}
+
+// Whole-message fallback (see renderMessageBodyHTML's non-segmented branch
+// below) - only used when there's no per-round toolSegments data to place an
+// embed at its actual call site, e.g. messages persisted before toolSegments
+// existed. `msg.embeds` (ChatStore.addMessage's field) is the same
+// {html,title} shape embedCardsHTML expects.
+function messageEmbedsHTML(msg) {
+  return embedCardsHTML(msg.embeds);
+}
+
 function renderMessageBodyHTML(msg, formatFn, userName, charName) {
   if (hasToolSegments(msg)) {
     const groups = groupToolSegments(msg.toolSegments);
-    return groups.map(g => g.type === 'text'
+    // Embeds render at the exact point the round that produced them sits in
+    // the message - immediately after that round's inline tool marker -
+    // instead of every embed in the whole message being appended once at
+    // the very bottom regardless of which round actually called the tool.
+    return messageImagesHTML(msg) + groups.map(g => g.type === 'text'
       ? `<div class="message-content" data-msgid="${msg.id}">${formatFn(g.text, userName, charName)}</div>`
-      : toolInlineNoteHTML(g.tools)
+      : toolInlineNoteHTML(g.tools) + embedCardsHTML(collectToolEmbeds(g.tools))
     ).join('');
   }
+  // No toolSegments (old data, or a tool-less message) - no per-round
+  // boundary to place an embed at, so it falls back to the old
+  // whole-message-appended-at-the-end placement via messageEmbedsHTML(msg).
   const toolTrace = Array.isArray(msg.toolTrace) ? msg.toolTrace : [];
   const text = formatFn(msg.content, userName, charName);
-  return `<div class="message-content" data-msgid="${msg.id}">${text}</div>${toolInlineNoteHTML(toolTrace)}`;
+  return `${messageImagesHTML(msg)}<div class="message-content" data-msgid="${msg.id}">${text}</div>${toolInlineNoteHTML(toolTrace)}${messageEmbedsHTML(msg)}`;
+}
+
+function liveCommittedGroupsHTML(committedSegments, formatFn) {
+  const groups = groupToolSegments(committedSegments);
+  return groups.map(g => g.type === 'text'
+    ? `<div class="message-content">${formatFn(g.text)}</div>`
+    : toolInlineNoteHTML(g.tools) + embedCardsHTML(collectToolEmbeds(g.tools))
+  ).join('');
+}
+
+function liveCurrentTextHTML(currentText, placeholderHTML, formatFn) {
+  return currentText.trim()
+    ? `<div class="message-content">${formatFn(currentText)}</div>`
+    : `<div class="message-content">${placeholderHTML}</div>`;
 }
 
 /**
  * Live counterpart to `renderMessageBodyHTML`, used while a turn is still
- * streaming so tool markers appear AS SOON AS a round's tool call resolves
- * instead of only once the whole turn is persisted (previously the live
- * typing indicator only ever showed plain joined text - no inline note until
- * `renderMessages()` re-rendered from the committed message). `committedSegments`
- * is the `segments` array `AgentRunner`'s `onRoundComplete` hands back each
- * round boundary (every round that's fully finished, tool call included);
- * `currentText` is the round currently streaming in (no `tools` yet, still in
- * progress) and always gets its own trailing block, falling back to
- * `placeholderHTML` ("...sedang mengetik...") while it's still empty - e.g.
- * right after a tool resolves and the next round hasn't produced any text yet.
+ * streaming so tool markers (and, same as the persisted path above, any
+ * embed a round's tool call produced) appear AS SOON AS that round resolves
+ * instead of only once the whole turn is persisted. Returns an incremental
+ * updater rather than an HTML string, driving the host element
+ * (`triggerAIGeneration`'s typing indicator, `handleSwipeNext`'s swipe
+ * preview) across every throttled content chunk while generating:
+ *
+ * An earlier version just built one HTML string (committed segments +
+ * current streaming text) and assigned it wholesale to the host's
+ * `innerHTML` on EVERY chunk - harmless for plain text, but it also
+ * destroyed and recreated any already-finished round's embed iframe
+ * (`embedCardsHTML`/`.message-embed-frame`) each time, which re-fired that
+ * iframe's `load` event, re-ran its resize handshake, and re-played its
+ * grow-in height transition on every single streamed chunk for the rest of
+ * the turn - a distracting flash/repeat instead of the one-time entrance it
+ * was meant to be.
+ *
+ * This splits the host into two sub-divs instead: `committedHost` (finished
+ * rounds - text, tool markers, embeds; `committedSegments` is the `segments`
+ * array `AgentRunner`'s `onRoundComplete` hands back each round boundary,
+ * every round's toolTrace entries and any `.html`/`.htmlTitle` they carry
+ * already attached) only gets rebuilt when `liveSegments` itself changes (a
+ * new round just completed - `onRoundComplete` always REASSIGNS
+ * `liveSegments` to a new array rather than mutating one in place, so a
+ * plain `!==` reference check in `.update()` is a correct and cheap "did
+ * anything actually change" test) - not on every text chunk. `currentHost`
+ * (the round currently streaming in, no `tools` yet, plain text only, no
+ * iframes - falls back to `placeholderHTML` e.g. "...sedang mengetik..."
+ * while still empty) still updates on every chunk same as before - there's
+ * nothing there to lose animation state.
  */
-function renderLiveBodyHTML(committedSegments, currentText, placeholderHTML, formatFn) {
-  const groups = groupToolSegments(committedSegments);
-  let html = groups.map(g => g.type === 'text'
-    ? `<div class="message-content">${formatFn(g.text)}</div>`
-    : toolInlineNoteHTML(g.tools)
-  ).join('');
-  html += currentText.trim()
-    ? `<div class="message-content">${formatFn(currentText)}</div>`
-    : `<div class="message-content">${placeholderHTML}</div>`;
-  return html;
+function createLiveBodyHost(hostEl, formatFn, placeholderHTML) {
+  const committedHost = document.createElement('div');
+  const currentHost = document.createElement('div');
+  hostEl.innerHTML = '';
+  hostEl.appendChild(committedHost);
+  hostEl.appendChild(currentHost);
+
+  let lastSegments = null;
+  return {
+    update(liveSegments, currentText) {
+      if (liveSegments !== lastSegments) {
+        committedHost.innerHTML = liveCommittedGroupsHTML(liveSegments, formatFn);
+        lastSegments = liveSegments;
+      }
+      currentHost.innerHTML = liveCurrentTextHTML(currentText, placeholderHTML, formatFn);
+    }
+  };
 }
 
 /**
@@ -346,7 +781,12 @@ function renderLiveBodyHTML(committedSegments, currentText, placeholderHTML, for
  */
 function syncMessageBody(containerEl, msg, formatFn, userName, charName) {
   if (!containerEl) return;
-  containerEl.querySelectorAll('.message-content, .tool-inline-note').forEach(el => el.remove());
+  // .message-image-row/.message-embed-card were missing from this cleanup -
+  // renderMessageBodyHTML() always emits fresh copies of both (from the
+  // NEW msg.images/msg.embeds) alongside the fresh .message-content below,
+  // so leaving the OLD variation's copies in place doubled them up instead
+  // of replacing them on every edit/swipe.
+  containerEl.querySelectorAll('.message-content, .tool-inline-note, .message-image-row, .message-embed-card').forEach(el => el.remove());
   const footerEl = containerEl.querySelector('.message-footer');
   const wrap = document.createElement('div');
   wrap.innerHTML = renderMessageBodyHTML(msg, formatFn, userName, charName);
@@ -369,8 +809,13 @@ function syncLiveToolBox(containerEl, calls = []) {
   if (!containerEl) return;
   const contentEl = findContentAnchor(containerEl);
   let block = containerEl.querySelector('.tool-live-block');
+  // Same "don't show the builtin Embed HTML tool's raw name" rule as
+  // visibleToolTrace() - here too the embed card itself (once it lands) is
+  // the visible proof, not a spinner line reading "Using tool:
+  // builtin__embed_html...".
+  const visibleCalls = calls.filter(c => c && c.name !== BUILTIN_EMBED_HTML_TOOL);
 
-  if (!calls.length) {
+  if (!visibleCalls.length) {
     if (block) block.remove();
     return;
   }
@@ -384,7 +829,7 @@ function syncLiveToolBox(containerEl, calls = []) {
 
   block.innerHTML = `
     <div class="tool-live-header">${WRENCH_ICON_SVG}<span>Tools Used</span></div>
-    ${calls.map(c => {
+    ${visibleCalls.map(c => {
       // A call the user refused never ran at all - shown here as a distinct
       // third state (not a spinner, not a success check) so "I said no" is
       // immediately legible in the same place the running calls appear.
@@ -700,10 +1145,30 @@ export class ChatView {
               </div>
 
               <!-- Right Button Aligned with Central Chat Column -->
-              <button class="btn btn-secondary btn-sm" id="btn-open-right-drawer" title="Config & Chat Sessions (Keybind: Ctrl+.)">
-                <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path></svg>
-                <span>Config</span>
-              </button>
+              <div style="display:flex; align-items:center; gap:0.6rem;">
+                <!-- Context-capacity gauge (js/utils/contextWindowSize.js) - a
+                     CSS conic-gradient donut ring, refreshed by refreshContextGauge()
+                     whenever the message list or active proxy changes. -->
+                <div class="context-gauge hidden" id="context-gauge" title="">
+                  <div class="context-gauge-inner" id="context-gauge-label">0%</div>
+                </div>
+                <button class="btn btn-secondary btn-sm" id="btn-open-right-drawer" title="Config & Chat Sessions (Keybind: Ctrl+.)">
+                  <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path></svg>
+                  <span>Config</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Compact Chat recommendation - shown once a session gets long
+               (see refreshCompactBanner() below), dismissible per-session. -->
+          <div class="compact-chat-banner hidden" id="compact-chat-banner">
+            <div class="compact-chat-banner-text">
+              <strong>Percakapan sudah panjang.</strong> Rangkum otomatis ke chat baru agar tetap ringan tanpa kehilangan konteks?
+            </div>
+            <div class="compact-chat-banner-actions">
+              <button type="button" class="btn btn-secondary btn-sm" id="btn-compact-dismiss">Nanti</button>
+              <button type="button" class="btn btn-primary btn-sm" id="btn-compact-now">Compact Chat</button>
             </div>
           </div>
 
@@ -718,17 +1183,30 @@ export class ChatView {
                 <span id="queued-message-text" style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"></span>
                 <button type="button" id="btn-cancel-queued" title="Batalkan" aria-label="Batalkan pesan yang diantrikan" style="background:none; border:none; cursor:pointer; color:var(--text-accent); font-size:1rem; line-height:1; padding:0 0.2rem;">&times;</button>
               </div>
+              <div class="chat-attach-preview hidden" id="chat-attach-preview"></div>
               <textarea class="chat-textarea" id="chat-input" rows="2" placeholder="Type action (*looks around*) or dialogue (&quot;Hello...&quot;)... (Shift+Enter for new line)"></textarea>
               <div class="chat-input-toolbar" style="justify-content:space-between;">
-                ${dropdownHTML({
-                  id: 'chat-model-select',
-                  options: [],
-                  title: 'Active Model',
-                  ariaLabel: 'Active Model',
-                  small: true,
-                  placeholder: 'No Proxy',
-                  wrapperStyle: 'max-width:260px; width:auto; min-width:150px;'
-                })}
+                <div style="display:flex; align-items:center; gap:0.4rem;">
+                  <!-- Only shown when the active model looks vision-capable (js/utils/modelVision.js) -->
+                  <div class="chat-attach-wrap hidden" id="chat-attach-wrap">
+                    <button type="button" class="btn-icon chat-attach-btn" id="btn-chat-attach" title="Attach" aria-label="Attach image">
+                      <svg width="19" height="19" fill="none" stroke="currentColor" stroke-width="2.3" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"></path></svg>
+                    </button>
+                    <div class="chat-attach-menu hidden" id="chat-attach-menu">
+                      <button type="button" class="chat-attach-menu-item" id="btn-chat-attach-upload">Upload Image</button>
+                    </div>
+                    <input type="file" id="chat-image-file" accept="image/*" multiple style="display:none;">
+                  </div>
+                  ${dropdownHTML({
+                    id: 'chat-model-select',
+                    options: [],
+                    title: 'Active Model',
+                    ariaLabel: 'Active Model',
+                    small: true,
+                    placeholder: 'No Proxy',
+                    wrapperStyle: 'max-width:260px; width:auto; min-width:150px;'
+                  })}
+                </div>
                 <button class="btn-send-icon" id="btn-send-message" title="Send Message" aria-label="Send Message">
                   <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"></path></svg>
                 </button>
@@ -783,6 +1261,36 @@ export class ChatView {
                   <button class="btn btn-secondary btn-sm btn-font-opt" data-size="medium" style="flex:1;">Medium</button>
                   <button class="btn btn-secondary btn-sm btn-font-opt" data-size="big" style="flex:1;">Big</button>
                 </div>
+              </div>
+
+              <!-- Context Capacity (js/utils/contextWindowSize.js) - moved here from the
+                   chat header; the header copy is opt-in via the toggle below, off by default. -->
+              <div class="card" style="padding:1rem; display:flex; align-items:center; gap:0.85rem;">
+                <div class="context-gauge hidden" id="drawer-context-gauge" title="">
+                  <div class="context-gauge-inner" id="drawer-context-gauge-label">0%</div>
+                </div>
+                <div style="flex:1; min-width:0;">
+                  <div style="font-weight:700; font-size:0.88rem;">Context Capacity</div>
+                  <div style="font-size:0.78rem; color:var(--text-muted);" id="drawer-context-gauge-detail">Menghitung...</div>
+                </div>
+              </div>
+              <div class="form-group">
+                ${toggleRowHTML({
+                  id: 'drawer-show-context-gauge',
+                  title: 'Tampilkan di Header Chat',
+                  description: 'Tampilkan indikator kapasitas konteks ini juga di header chat, di samping tombol Config.',
+                  ariaLabel: 'Show context gauge in chat header'
+                })}
+              </div>
+
+              <!-- Compact Chat - manual trigger, independent of the >=40-message
+                   recommendation banner (chatView.js's refreshCompactBanner()). -->
+              <div class="card" style="padding:1rem;">
+                <div style="font-weight:700; font-size:0.88rem; margin-bottom:0.3rem;">Compact Chat</div>
+                <p style="font-size:0.78rem; color:var(--text-muted); margin-bottom:0.75rem;">
+                  Rangkum percakapan ini dengan AI ke sesi chat baru agar tetap ringan tanpa kehilangan konteks. 4 pesan pertama dan 4 pesan terakhir tidak akan dirangkum.
+                </p>
+                <button class="btn btn-secondary btn-sm" id="btn-drawer-compact-chat" style="width:100%;">Compact Chat Sekarang</button>
               </div>
 
               <!-- Quick Config Shortcuts -->
@@ -844,6 +1352,14 @@ export class ChatView {
                     <input class="input" type="number" id="drawer-mcp-iteration-limit-value" min="1" max="500" step="1" style="width:90px;">
                   </div>
                 </div>
+                <div style="border-top:1px solid var(--border-light); padding-top:0.9rem;">
+                  ${toggleRowHTML({
+                    id: 'drawer-mcp-embed-html-toggle',
+                    title: 'Embed HTML (Eksperimental)',
+                    description: 'Lets the AI render HTML/JS/CSS directly in chat (charts, small animations, interactive diagrams) inside a sandboxed frame. This means AI-generated script content actually executes in the app - OFF by default for safety. Same Ask/Allow/Decline permission gate as every other tool.',
+                    ariaLabel: 'Enable the builtin embed HTML tool'
+                  })}
+                </div>
               </div>
 
               <div id="drawer-mcp-servers-section">
@@ -903,6 +1419,50 @@ export class ChatView {
     };
 
     // Toggle keybind: Ctrl+. or Cmd+. or Alt+C or Esc
+    // Undocumented debug shortcut (Ctrl+Alt+D, see handleKeydown below) - not
+    // discoverable in any UI, purely for tracking down a specific embed's
+    // fillChatInput/other button not working: shows the RAW model-authored
+    // HTML (data-raw-html, set in embedCardsHTML() - the un-processed source,
+    // not the buildEmbedDocument()-wrapped document actually running in the
+    // iframe) in a copyable, syntax-highlighted modal. Targets whichever
+    // `.message-embed-card` the mouse is currently over (`:hover` can be
+    // queried live via .matches() at any time, not just during a mouse
+    // event, so no separate hover-tracking listeners are needed), falling
+    // back to the LAST (most recent) embed in the chat if the mouse isn't
+    // over one - still useful since that's usually the one just generated.
+    const openEmbedDebugModal = () => {
+      const cards = Array.from(container.querySelectorAll('.message-embed-card'));
+      if (!cards.length) {
+        Toast.info('Tidak ada embed HTML di chat ini.');
+        return;
+      }
+      const target = cards.find(c => c.matches(':hover')) || cards[cards.length - 1];
+      const rawHtml = target.dataset.rawHtml || '';
+
+      Modal.open({
+        title: 'Embed HTML - Raw Source (Debug)',
+        contentHTML: `
+          <div class="code-block-wrap" style="margin:0;">
+            <pre style="margin:0; padding:1rem; max-height:60vh; overflow:auto;"><code>${highlightCode(rawHtml, 'html')}</code></pre>
+          </div>
+        `,
+        buttons: [
+          {
+            label: 'Copy Raw HTML',
+            className: 'btn-primary',
+            onClick: async () => {
+              try {
+                await navigator.clipboard.writeText(rawHtml);
+                Toast.success('Raw HTML disalin ke clipboard.');
+              } catch {
+                Toast.error('Gagal menyalin ke clipboard.');
+              }
+            }
+          }
+        ]
+      });
+    };
+
     const handleKeydown = (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === '.') {
         e.preventDefault();
@@ -910,17 +1470,92 @@ export class ChatView {
       } else if (e.altKey && e.key.toLowerCase() === 'c') {
         e.preventDefault();
         drawerOverlay.classList.toggle('hidden');
+      } else if (e.ctrlKey && e.altKey && e.key.toLowerCase() === 'd') {
+        e.preventDefault();
+        openEmbedDebugModal();
       } else if (e.key === 'Escape' && !drawerOverlay.classList.contains('hidden')) {
         drawerOverlay.classList.add('hidden');
       }
     };
     window.addEventListener('keydown', handleKeydown);
 
+    // Message-based bridge for embed-HTML iframes (js/ui/views/chatView.js's
+    // messageEmbedsHTML/buildEmbedDocument/EMBED_RUNTIME_SCRIPT) - sandboxed
+    // WITHOUT allow-same-origin on purpose (see the security note on
+    // messageEmbedsHTML), so postMessage is the ONLY channel an embed has
+    // back to the app at all. Both message types below are matched against
+    // every currently-mounted `.message-embed-frame` by `event.source` (the
+    // iframe's own window) first, so a stray/unrelated postMessage sender
+    // can't spoof either one:
+    //   - 'nnzrp-embed-resize': the embed reporting its real content height,
+    //     so the iframe can grow to fit instead of sitting in a fixed empty
+    //     box - clamped both directions so one tiny or one huge/runaway
+    //     embed can't collapse to nothing or blow out the chat layout.
+    //   - 'nnzrp-embed-fill-input': the model's embed HTML calling the
+    //     injected `fillChatInput(text)` helper (e.g. from a <button
+    //     onclick>) - lets an embed offer clickable options/choices that put
+    //     text straight into the composer, ready to send or edit, instead of
+    //     only ever being a passive visual. Replaces whatever draft text was
+    //     there (an "option" click is a deliberate choice, not something a
+    //     user expects appended to unrelated text they were mid-typing) and
+    //     focuses the composer so it's obvious something happened. Just a
+    //     plain textarea `.value` assignment - never parsed as HTML/executed,
+    //     so no XSS surface regardless of what the embed sends.
+    const handleEmbedMessage = (e) => {
+      if (!e.data || !e.data.type) return;
+      const frames = container.querySelectorAll('.message-embed-frame');
+      const sourceFrame = Array.from(frames).find(f => f.contentWindow === e.source);
+      if (!sourceFrame) return;
+
+      if (e.data.type === 'nnzrp-embed-resize') {
+        const h = Math.min(Math.max(Number(e.data.height) || 0, 40), 800);
+        sourceFrame.style.height = `${h}px`;
+        // Only while a generation is actively streaming - an embed resizing
+        // while the user is just scrolled up reading older history must NOT
+        // yank the view back down. During streaming this re-follows the
+        // bottom the same way every other streaming update already does
+        // (onContentChunk etc. all call scrollToBottom unconditionally too) -
+        // without it, the view stayed scrolled to wherever it was BEFORE the
+        // embed grew from its placeholder height to its real one, leaving
+        // the growth happening below the visible fold.
+        if (isGenerating) scrollToBottom(container.querySelector('#messages-container'));
+      } else if (e.data.type === 'nnzrp-embed-fill-input') {
+        const inputEl = container.querySelector('#chat-input');
+        if (!inputEl) return;
+        inputEl.value = typeof e.data.text === 'string' ? e.data.text.slice(0, 4000) : '';
+        inputEl.focus();
+      }
+    };
+    window.addEventListener('message', handleEmbedMessage);
+
+    // Copy button for fenced code blocks (marked.use({renderer:{code}}) above)
+    // - ONE delegated listener on the container that outlives every
+    // renderMessages()/syncMessageBody() innerHTML replacement, instead of
+    // rewiring a listener per button on every render. `data-code` is the raw
+    // (already HTML-attribute-decoded by the browser) code text.
+    container.addEventListener('click', async (e) => {
+      const btn = e.target.closest('.code-copy-btn');
+      if (!btn) return;
+      try {
+        await navigator.clipboard.writeText(btn.dataset.code || '');
+        btn.classList.add('copied');
+        const originalLabel = btn.textContent;
+        btn.textContent = 'Copied';
+        setTimeout(() => {
+          btn.classList.remove('copied');
+          btn.textContent = originalLabel;
+        }, 1500);
+      } catch (err) {
+        Toast.error('Gagal menyalin kode.');
+      }
+    });
+
     // Back Button Handler
     const backBtn = container.querySelector('#btn-chat-back');
     if (backBtn && onBack) {
       backBtn.onclick = () => {
         window.removeEventListener('keydown', handleKeydown);
+        window.removeEventListener('message', handleEmbedMessage);
         onBack();
       };
     }
@@ -1020,7 +1655,309 @@ export class ChatView {
           Toast.success(`Ukuran teks diset: ${newSize.toUpperCase()}`);
         };
       });
+
+      // Context gauge header-visibility toggle - default OFF, so the gauge
+      // only lives here in the drawer unless the user explicitly opts into
+      // also showing it in the chat header.
+      const showGaugeToggle = container.querySelector('#drawer-show-context-gauge');
+      if (showGaugeToggle) {
+        showGaugeToggle.checked = genSettings.showContextGaugeInChat === true;
+        showGaugeToggle.onchange = async () => {
+          const latestSettings = await ProxyStore.getGenerationSettings();
+          latestSettings.showContextGaugeInChat = showGaugeToggle.checked;
+          await ProxyStore.saveGenerationSettings(latestSettings);
+          await refreshContextGauge();
+        };
+      }
+
+      const compactBtn = container.querySelector('#btn-drawer-compact-chat');
+      if (compactBtn) compactBtn.onclick = handleCompactChat;
     };
+
+    /* -----------------------------------------------------------------
+     * Image attach button (composer "+" menu) - multimodal input.
+     * Declared here (ahead of its first use inside populateModelSelect
+     * below, which is itself called before the sendInput/sendBtn wiring
+     * further down the file) so every const it closes over already exists
+     * on first call.
+     * --------------------------------------------------------------- */
+    const attachWrap = container.querySelector('#chat-attach-wrap');
+    const attachBtn = container.querySelector('#btn-chat-attach');
+    const attachMenu = container.querySelector('#chat-attach-menu');
+    const attachUploadItem = container.querySelector('#btn-chat-attach-upload');
+    const attachFileInput = container.querySelector('#chat-image-file');
+    const attachPreviewEl = container.querySelector('#chat-attach-preview');
+
+    const refreshAttachPreview = () => {
+      if (!attachPreviewEl) return;
+      if (!pendingAttachedImages.length) {
+        attachPreviewEl.classList.add('hidden');
+        attachPreviewEl.innerHTML = '';
+        return;
+      }
+      attachPreviewEl.classList.remove('hidden');
+      attachPreviewEl.innerHTML = pendingAttachedImages.map((src, i) => `
+        <div class="chat-attach-thumb">
+          <img src="${escapeAttr(src)}" alt="">
+          <button type="button" class="chat-attach-thumb-remove" data-idx="${i}" title="Remove" aria-label="Remove image">&times;</button>
+        </div>
+      `).join('');
+      attachPreviewEl.querySelectorAll('.chat-attach-thumb-remove').forEach(btn => {
+        btn.onclick = () => {
+          pendingAttachedImages.splice(parseInt(btn.dataset.idx, 10), 1);
+          refreshAttachPreview();
+        };
+      });
+    };
+
+    // Menu listeners are added only while open and torn down on close - same
+    // idiom as js/ui/components/dropdown.js - so re-opening this chat page
+    // repeatedly never piles up stray document-level listeners.
+    let closeAttachMenuListeners = null;
+    const closeAttachMenu = () => {
+      if (!attachMenu) return;
+      attachMenu.classList.add('hidden');
+      if (closeAttachMenuListeners) { closeAttachMenuListeners(); closeAttachMenuListeners = null; }
+    };
+    const openAttachMenu = () => {
+      if (!attachMenu || !attachWrap) return;
+      attachMenu.classList.remove('hidden');
+      const onDocMouseDown = (e) => { if (!attachWrap.contains(e.target)) closeAttachMenu(); };
+      const onKeyDown = (e) => { if (e.key === 'Escape') closeAttachMenu(); };
+      document.addEventListener('mousedown', onDocMouseDown, true);
+      document.addEventListener('keydown', onKeyDown, true);
+      closeAttachMenuListeners = () => {
+        document.removeEventListener('mousedown', onDocMouseDown, true);
+        document.removeEventListener('keydown', onKeyDown, true);
+      };
+    };
+
+    if (attachBtn && attachMenu) {
+      attachBtn.onclick = (e) => {
+        e.stopPropagation();
+        if (attachMenu.classList.contains('hidden')) openAttachMenu();
+        else closeAttachMenu();
+      };
+    }
+
+    if (attachUploadItem && attachFileInput) {
+      attachUploadItem.onclick = () => {
+        closeAttachMenu();
+        attachFileInput.click();
+      };
+      attachFileInput.onchange = async () => {
+        const files = Array.from(attachFileInput.files || []);
+        attachFileInput.value = '';
+        for (const file of files) {
+          if (pendingAttachedImages.length >= MAX_IMAGES_PER_MESSAGE) {
+            Toast.error(`Maksimal ${MAX_IMAGES_PER_MESSAGE} gambar per pesan.`);
+            break;
+          }
+          if (!file.type.startsWith('image/')) {
+            Toast.error(`"${file.name}" bukan file gambar.`);
+            continue;
+          }
+          if (file.size > MAX_IMAGE_BYTES) {
+            Toast.error(`"${file.name}" terlalu besar (maks ${Math.floor(MAX_IMAGE_BYTES / 1024 / 1024)}MB).`);
+            continue;
+          }
+          try {
+            pendingAttachedImages.push(await readFileAsDataURL(file));
+          } catch {
+            Toast.error(`Gagal membaca file "${file.name}".`);
+          }
+        }
+        refreshAttachPreview();
+      };
+    }
+
+    // Shows/hides the attach button based on the ACTIVE proxy's currently
+    // selected model - re-run whenever the proxy or its selected model
+    // changes (populateModelSelect covers both cases below).
+    const refreshAttachButtonVisibility = async () => {
+      if (!attachWrap) return;
+      const proxy = await ProxyStore.getDefault();
+      const visionOk = supportsVision(proxy);
+      attachWrap.classList.toggle('hidden', !visionOk);
+      if (!visionOk) closeAttachMenu();
+      if (!visionOk && pendingAttachedImages.length) {
+        // Switched to a non-vision model mid-draft - drop the pending
+        // attachments rather than silently send images it can't see.
+        pendingAttachedImages = [];
+        refreshAttachPreview();
+      }
+    };
+
+    /**
+     * Context capacity gauge - replaces the old hard message-count context
+     * cap (see promptBuilder.js) with visibility instead of silent
+     * truncation: a donut ring showing roughly how full the active model's
+     * context window is, so a long-running chat's growing history is
+     * something the user can SEE and act on (Compact Chat) rather than
+     * something that silently made the character forget old turns.
+     *
+     * Lives primarily in the drawer's Options tab (#drawer-context-gauge,
+     * always shown there when a proxy is active); the chat-header copy
+     * (#context-gauge) is opt-in via the "Tampilkan di Header Chat" toggle in
+     * that same tab, OFF by default (ProxyStore generation settings key
+     * `showContextGaugeInChat`) so the header stays uncluttered unless asked for.
+     */
+    const refreshContextGauge = async () => {
+      const headerGaugeEl = container.querySelector('#context-gauge');
+      const headerLabelEl = container.querySelector('#context-gauge-label');
+      const drawerGaugeEl = container.querySelector('#drawer-context-gauge');
+      const drawerLabelEl = container.querySelector('#drawer-context-gauge-label');
+      const drawerDetailEl = container.querySelector('#drawer-context-gauge-detail');
+      if (!headerGaugeEl && !drawerGaugeEl) return;
+
+      const proxy = await ProxyStore.getDefault();
+      if (!proxy) {
+        headerGaugeEl?.classList.add('hidden');
+        drawerGaugeEl?.classList.add('hidden');
+        if (drawerDetailEl) drawerDetailEl.textContent = 'Belum ada Proxy aktif.';
+        return;
+      }
+
+      const genSettings = await ProxyStore.getGenerationSettings();
+      const msgs = await ChatStore.getMessages(currentChatId);
+      const activePersonaObj = await PersonaStore.getDefault();
+      const globalPrompt = await ProxyStore.getGlobalSystemPrompt();
+
+      // Reuse the exact same payload assembly generation uses (minus tools,
+      // which barely move the needle and would cost an extra MCP round-trip
+      // just for this estimate) so the number reflects what's actually sent,
+      // not a separately-drifting approximation.
+      const payload = PromptBuilder.buildPromptPayload({
+        character: activeChar,
+        persona: activePersonaObj,
+        globalSystemPrompt: globalPrompt,
+        messages: msgs
+      });
+
+      let tokens = 0;
+      for (const m of payload) {
+        tokens += estimateTokens(m.content || '');
+        // Vision content isn't text but still costs real tokens - a flat
+        // per-image estimate keeps the gauge from silently under-reporting a
+        // heavily image-attached conversation (~800 tokens/image roughly
+        // matches published provider ballparks for a moderate-size upload).
+        if (Array.isArray(m.images)) tokens += m.images.length * 800;
+      }
+
+      const windowSize = getContextWindowSize(proxy);
+      const percent = Math.min(100, Math.round((tokens / windowSize) * 100));
+      const color = percent >= 85 ? 'var(--accent-rose)' : percent >= 60 ? 'var(--accent-amber)' : 'var(--accent-emerald)';
+      const gaugeBg = `conic-gradient(${color} ${percent}%, var(--bg-tertiary) 0)`;
+      const tooltip = `${tokens.toLocaleString()} / ${windowSize.toLocaleString()} token konteks terpakai (~${percent}%)`;
+
+      if (headerGaugeEl) {
+        headerGaugeEl.classList.toggle('hidden', genSettings.showContextGaugeInChat !== true);
+        headerGaugeEl.style.background = gaugeBg;
+        headerGaugeEl.title = tooltip;
+      }
+      if (headerLabelEl) headerLabelEl.textContent = `${percent}%`;
+
+      if (drawerGaugeEl) {
+        drawerGaugeEl.classList.remove('hidden');
+        drawerGaugeEl.style.background = gaugeBg;
+        drawerGaugeEl.title = tooltip;
+      }
+      if (drawerLabelEl) drawerLabelEl.textContent = `${percent}%`;
+      if (drawerDetailEl) drawerDetailEl.textContent = `${tokens.toLocaleString()} / ${windowSize.toLocaleString()} token (~${percent}%)`;
+    };
+
+    /**
+     * Shows/hides the Compact Chat recommendation banner based on message
+     * count - a light nudge once a session gets long, not a hard gate (the
+     * hard context cap this replaces is gone, see promptBuilder.js).
+     */
+    const refreshCompactBanner = async () => {
+      const bannerEl = container.querySelector('#compact-chat-banner');
+      if (!bannerEl) return;
+      const msgs = await ChatStore.getMessages(currentChatId);
+      const shouldShow = msgs.length >= COMPACT_RECOMMEND_THRESHOLD && !compactDismissedChats.has(currentChatId);
+      bannerEl.classList.toggle('hidden', !shouldShow);
+    };
+
+    /**
+     * Compact Chat: summarizes the MIDDLE stretch of the conversation via the
+     * active proxy - everything except the first COMPACT_KEEP_FIRST and last
+     * COMPACT_KEEP_LAST messages, see ChatStore.getCompactMiddleRange/
+     * createCompactedChat's JSDoc for why both ends are kept verbatim now
+     * (an earlier version only kept the opening and folded even the newest
+     * message into the summary, which read as "my last message got
+     * deleted") - then creates a brand-new chat session carrying the kept
+     * opening turns, the recap, and the kept recent turns, and switches
+     * straight into it. The original chat is left completely untouched -
+     * this is additive, not destructive, so a bad summary never costs the
+     * user their real history.
+     */
+    const handleCompactChat = async () => {
+      if (isGenerating) {
+        Toast.error('Tunggu proses generate selesai dulu sebelum compact chat.');
+        return;
+      }
+      const msgs = await ChatStore.getMessages(currentChatId);
+      if (msgs.length <= COMPACT_KEEP_FIRST + COMPACT_KEEP_LAST) {
+        Toast.info('Belum cukup pesan untuk di-compact.');
+        return;
+      }
+
+      const proxyObj = await ProxyStore.getDefault();
+      if (!proxyObj) {
+        Toast.error('Belum ada Proxy aktif.');
+        return;
+      }
+
+      const bannerEl = container.querySelector('#compact-chat-banner');
+      bannerEl?.classList.add('hidden');
+      Toast.info('Merangkum percakapan...');
+
+      try {
+        const activePersonaObj = await PersonaStore.getDefault();
+        const userName = activePersonaObj?.name || 'User';
+        const charName = activeChar?.name || 'Character';
+
+        const toSummarize = ChatStore.getCompactMiddleRange(msgs, COMPACT_KEEP_FIRST, COMPACT_KEEP_LAST);
+        const transcript = toSummarize
+          .map(m => `${m.role === 'user' ? userName : charName}: ${m.content}`)
+          .join('\n\n');
+
+        const summaryPayload = [
+          {
+            role: 'system',
+            content: `You are compressing a roleplay conversation between ${userName} and ${charName} so it can continue in a brand new chat without losing context. Write a thorough but concise "story so far" recap in prose (third person, no markdown headers/lists): established facts, the relationship/emotional state between them, unresolved plot threads, and any concrete details either party would need to remember. This is NOT a message ${charName} would say in character - it is an out-of-character summary the engine will read as background before continuing the scene.`
+          },
+          { role: 'user', content: transcript }
+        ];
+
+        const genSettings = await ProxyStore.getGenerationSettings();
+        const { content: summary } = await ProviderManager.sendChatCompletion(proxyObj, summaryPayload, {
+          ...genSettings,
+          temperature: 0.4,
+          maxTokens: genSettings.unlimitedTokens ? genSettings.maxTokens : Math.max(genSettings.maxTokens || 1024, 1536)
+        });
+
+        if (!summary || !summary.trim()) throw new Error('Ringkasan kosong dari AI.');
+
+        const newChat = await ChatStore.createCompactedChat(currentChatId, summary.trim(), COMPACT_KEEP_FIRST, COMPACT_KEEP_LAST);
+        compactDismissedChats.add(currentChatId);
+
+        currentChatId = newChat.id;
+        await updateSessionList();
+        await renderMessages();
+        Toast.success(`Chat baru "${newChat.title}" berhasil dibuat.`);
+      } catch (err) {
+        Toast.error(`Gagal compact chat: ${err.message}`);
+        await refreshCompactBanner();
+      }
+    };
+
+    container.querySelector('#btn-compact-dismiss').onclick = () => {
+      compactDismissedChats.add(currentChatId);
+      container.querySelector('#compact-chat-banner')?.classList.add('hidden');
+    };
+    container.querySelector('#btn-compact-now').onclick = handleCompactChat;
 
     // Compact model switcher next to the send button (Claude-style) - reads
     // the active proxy's `models` list (js/ui/views/proxiesView.js lets you
@@ -1032,6 +1969,8 @@ export class ChatView {
       if (!proxy) {
         setDropdownOptions(container, 'chat-model-select', [], '');
         setDropdownDisabled(container, 'chat-model-select', true);
+        await refreshAttachButtonVisibility();
+        await refreshContextGauge();
         return;
       }
 
@@ -1043,6 +1982,8 @@ export class ChatView {
       // Same rule as before the dropdown swap: a single-model proxy has nothing
       // to switch to, so the control is shown but inert.
       setDropdownDisabled(container, 'chat-model-select', candidates.length <= 1);
+      await refreshAttachButtonVisibility();
+      await refreshContextGauge();
 
       wireDropdown(container, 'chat-model-select', async (value) => {
         const updatedProxy = await ProxyStore.getById(proxy.id);
@@ -1050,6 +1991,8 @@ export class ChatView {
         updatedProxy.selectedModel = value;
         await ProxyStore.save(updatedProxy);
         Toast.info(`Model diset ke: ${value}`);
+        await refreshAttachButtonVisibility();
+        await refreshContextGauge();
         if (onProxyChanged) onProxyChanged();
       });
     };
@@ -1263,6 +2206,18 @@ export class ChatView {
       };
     }
 
+    // Embed HTML (Experimental, drawer copy - mirrors mcpView.js). Independent
+    // of everything else here except the master MCP switch above. Defaults
+    // OFF - see MCPStore.getEmbedHtmlEnabled()'s safe-default comment.
+    const mcpEmbedHtmlToggle = container.querySelector('#drawer-mcp-embed-html-toggle');
+    if (mcpEmbedHtmlToggle) {
+      mcpEmbedHtmlToggle.checked = await MCPStore.getEmbedHtmlEnabled();
+      mcpEmbedHtmlToggle.onchange = async (e) => {
+        await MCPStore.setEmbedHtmlEnabled(e.target.checked);
+        Toast.info(`Embed HTML ${e.target.checked ? 'diaktifkan' : 'dinonaktifkan'}.`);
+      };
+    }
+
     const manageMcpBtn = container.querySelector('#btn-drawer-manage-mcp');
     if (manageMcpBtn) {
       manageMcpBtn.onclick = () => {
@@ -1439,6 +2394,8 @@ export class ChatView {
             </div>
           </div>
         `;
+        await refreshContextGauge();
+        await refreshCompactBanner();
         return;
       }
 
@@ -1458,14 +2415,34 @@ export class ChatView {
         const isLastAssistant = !isUser && idx === lastAssistantIndex;
         const thoughtsText = (m.thoughts || '').trim();
         const toolTrace = Array.isArray(m.toolTrace) ? m.toolTrace : [];
+        const visibleTrace = visibleToolTrace(toolTrace);
 
         return `
-          <div class="message-block ${isUser ? 'user' : 'assistant'}" data-id="${m.id}">
+          <div class="message-block ${isUser ? 'user' : 'assistant'}${m.isSummary ? ' summary-message-block' : ''}" data-id="${m.id}">
             <div class="message-block-inner">
               <div class="message-header">
                 <img src="${escapeAttr(avatar)}" class="message-avatar" onerror="this.src='https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(senderName)}'">
                 <div class="message-sender-name">${escapeHtml(senderName)}</div>
               </div>
+
+              ${m.isSummary ? `
+                <div class="summary-message-badge">
+                  <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"></path></svg>
+                  <span>Ringkasan Otomatis</span>
+                </div>
+              ` : ''}
+
+              ${!isUser && visibleTrace.length > 0 ? `
+                <div class="tool-trace-block" data-msgid="${m.id}">
+                  <button class="thinking-toggle" type="button">
+                    ${WRENCH_ICON_SVG}
+                    <svg class="thinking-chevron" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"></path></svg>
+                    <span>Tools Used</span>
+                    <span class="thinking-token-badge">${visibleTrace.length} call${visibleTrace.length > 1 ? 's' : ''}</span>
+                  </button>
+                  <div class="thinking-content">${toolTraceDetailHTML(toolTrace)}</div>
+                </div>
+              ` : ''}
 
               ${!isUser && thoughtsText ? `
                 <div class="thinking-block ${isThinkingCollapsedDefault ? '' : 'expanded'}" data-msgid="${m.id}">
@@ -1475,18 +2452,6 @@ export class ChatView {
                     <span class="thinking-token-badge">${estimateThinkingTokens(thoughtsText).toLocaleString()} tokens</span>
                   </button>
                   <div class="thinking-content">${escapeHtml(thoughtsText)}</div>
-                </div>
-              ` : ''}
-
-              ${!isUser && toolTrace.length > 0 ? `
-                <div class="tool-trace-block" data-msgid="${m.id}">
-                  <button class="thinking-toggle" type="button">
-                    ${WRENCH_ICON_SVG}
-                    <svg class="thinking-chevron" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"></path></svg>
-                    <span>Tools Used</span>
-                    <span class="thinking-token-badge">${toolTrace.length} call${toolTrace.length > 1 ? 's' : ''}</span>
-                  </button>
-                  <div class="thinking-content">${escapeHtml(toolTrace.map(t => `${t.name}(${JSON.stringify(t.args)})\n→ ${t.result}`).join('\n\n'))}</div>
                 </div>
               ` : ''}
 
@@ -1712,10 +2677,19 @@ export class ChatView {
           }
         };
       });
+
+      await refreshContextGauge();
+      await refreshCompactBanner();
     };
 
-    // Auto-generate a short session title every 10 messages, unless the user
-    // has manually renamed the session (chat.titleEdited).
+    // Auto-generates a short session title at the cadence isAutoTitlePoint()
+    // defines (first at AUTO_TITLE_FIRST_AT messages, then every
+    // AUTO_TITLE_INTERVAL after that), unless the user has manually renamed
+    // the session (chat.titleEdited). Only ever reads the last 10
+    // messages/3000 chars of the conversation, never the whole (potentially
+    // very long) history - a title just needs a recent flavor of the scene,
+    // not the full transcript, and re-sending the whole thing on every
+    // regeneration would burn tokens for no benefit to the title itself.
     const generateAutoTitle = async (chatObj, messagesForTitle) => {
       try {
         const proxyObj = await ProxyStore.getDefault();
@@ -1766,7 +2740,9 @@ export class ChatView {
       const activePersonaObj = await PersonaStore.getDefault();
       const genSettings = await ProxyStore.getGenerationSettings();
       const globalPrompt = await ProxyStore.getGlobalSystemPrompt();
-      const activeTools = await MCPToolRegistry.getActiveTools();
+      // MCP tools + the default builtin view-image tool (only offered for a
+      // vision-capable model, see js/services/builtinTools.js).
+      const activeTools = [...(await MCPToolRegistry.getActiveTools()), ...(await getBuiltinTools(proxyObj))];
       const immersiveRoleplay = await MCPStore.getImmersiveRoleplay();
       const immersiveIntensity = await MCPStore.getImmersiveIntensity();
       // Deliberately NOT derived from immersive intensity - an earlier version
@@ -1781,7 +2757,6 @@ export class ChatView {
         persona: activePersonaObj,
         globalSystemPrompt: globalPrompt,
         messages: currentMessages,
-        contextLimit: genSettings.contextLimit || 20,
         tools: activeTools,
         immersiveRoleplay,
         immersiveIntensity
@@ -1818,7 +2793,7 @@ export class ChatView {
       // save): `liveSegments` is every round that's fully finished (tool call
       // included, straight from AgentRunner's `onRoundComplete` payload),
       // `currentRoundText` is just the round CURRENTLY streaming in, with no
-      // `tools` yet. Rendering these separately (via `renderLiveBodyHTML`) is
+      // `tools` yet. Rendering these separately (via `createLiveBodyHost`) is
       // what lets a tool marker appear the moment its round resolves, instead
       // of only once the whole turn commits and `renderMessages()` re-renders
       // from the persisted `toolSegments`.
@@ -1828,12 +2803,13 @@ export class ChatView {
 
       const typingInnerEl = typingIndicator.querySelector('.message-block-inner');
       const typingContentEl = typingIndicator.querySelector('#typing-indicator-content');
-      typingContentEl.innerHTML = renderLiveBodyHTML(liveSegments, currentRoundText, typingPlaceholderHTML, (t) => this.formatRoleplayMarkdown(t));
+      const typingBodyHost = createLiveBodyHost(typingContentEl, (t) => this.formatRoleplayMarkdown(t), typingPlaceholderHTML);
+      typingBodyHost.update(liveSegments, currentRoundText);
 
       // Coalesce rapid/bursty chunk delivery into at most one DOM update per
       // ~50ms - see createThrottledRenderer's comment.
       const scheduleContentRender = createThrottledRenderer(() => {
-        typingContentEl.innerHTML = renderLiveBodyHTML(liveSegments, currentRoundText, typingPlaceholderHTML, (t) => this.formatRoleplayMarkdown(t));
+        typingBodyHost.update(liveSegments, currentRoundText);
         scrollToBottom(messagesEl);
       });
       const scheduleThinkingRender = createThrottledRenderer(() => {
@@ -1851,6 +2827,7 @@ export class ChatView {
           signal: abortSignal,
           maxIterations: mcpMaxIterations,
           transformFirstResult: (result) => mergePrefillResult(genSettings, result),
+          characterAvatar: activeChar.avatar,
           callbacks: {
             onContentChunk: (delta) => {
               liveContent += delta;
@@ -1925,12 +2902,12 @@ export class ChatView {
         // (joined by AgentRunner) plus every tool call it made along the way,
         // plus the per-round breakdown so the UI can place an inline marker at
         // each round's actual tool-call boundary instead of one note at the end.
-        await ChatStore.addMessage(currentChatId, 'assistant', finalContent, finalThinking, [finalContent], finalToolTrace, finalSegments);
+        await ChatStore.addMessage(currentChatId, 'assistant', finalContent, finalThinking, [finalContent], finalToolTrace, finalSegments, collectToolImages(finalToolTrace), collectToolEmbeds(finalToolTrace));
         await renderMessages();
 
         const updatedMessages = await ChatStore.getMessages(currentChatId);
         const chatObj = await ChatStore.getChatById(currentChatId);
-        if (chatObj && !chatObj.titleEdited && updatedMessages.length % 10 === 0) {
+        if (chatObj && !chatObj.titleEdited && isAutoTitlePoint(updatedMessages.length)) {
           generateAutoTitle(chatObj, updatedMessages);
         }
       } catch (err) {
@@ -1945,7 +2922,7 @@ export class ChatView {
           // falls back to the old single-blob + trailing-note rendering, which is
           // exactly what that fallback path exists for.
           if (liveContent.trim() || liveToolTrace.length) {
-            await ChatStore.addMessage(currentChatId, 'assistant', liveContent, liveThinking, [liveContent], liveToolTrace);
+            await ChatStore.addMessage(currentChatId, 'assistant', liveContent, liveThinking, [liveContent], liveToolTrace, [], collectToolImages(liveToolTrace), collectToolEmbeds(liveToolTrace));
             await renderMessages();
             Toast.info('Generasi dihentikan - jawaban sebagian tersimpan.');
           } else {
@@ -1966,8 +2943,8 @@ export class ChatView {
       }
     };
 
-    const sendMessageText = async (text) => {
-      await ChatStore.addMessage(currentChatId, 'user', text);
+    const sendMessageText = async (text, images = []) => {
+      await ChatStore.addMessage(currentChatId, 'user', text, '', [], [], [], images);
       await renderMessages();
       await triggerAIGeneration();
     };
@@ -1976,15 +2953,22 @@ export class ChatView {
       const indicatorEl = container.querySelector('#queued-message-indicator');
       const textEl = container.querySelector('#queued-message-text');
       if (!indicatorEl || !textEl) return;
-      indicatorEl.classList.toggle('hidden', !queuedMessage);
-      if (queuedMessage) textEl.textContent = queuedMessage;
+      const hasQueued = !!queuedMessage || queuedImages.length > 0;
+      indicatorEl.classList.toggle('hidden', !hasQueued);
+      if (hasQueued) {
+        textEl.textContent = queuedMessage || (queuedImages.length ? `[${queuedImages.length} image${queuedImages.length > 1 ? 's' : ''}]` : '');
+      }
     };
 
     // A queued draft belongs to the session it was typed in - drop it
     // whenever `currentChatId` changes so it can never fire into a
-    // different session than the one the user was looking at.
+    // different session than the one the user was looking at. Also drops any
+    // not-yet-sent attached images for the same reason.
     const clearQueuedMessage = () => {
       queuedMessage = null;
+      queuedImages = [];
+      pendingAttachedImages = [];
+      refreshAttachPreview();
       refreshQueuedIndicator();
     };
 
@@ -1994,23 +2978,29 @@ export class ChatView {
     // flushQueuedMessageIfAny above).
     queuedMessageHandlers = { flush: sendMessageText, refreshIndicator: refreshQueuedIndicator };
     queuedMessage = null; // discard any leftover queue from a previous render/session
+    queuedImages = [];
+    pendingAttachedImages = [];
     refreshQueuedIndicator();
 
     const handleSendMessage = async () => {
       const text = sendInput.value.trim();
-      if (!text) return;
+      const images = pendingAttachedImages;
+      if (!text && !images.length) return;
       sendInput.value = '';
+      pendingAttachedImages = [];
+      refreshAttachPreview();
 
       if (isGenerating) {
         // Don't block drafting while the AI is responding - queue it and
         // send automatically once the in-flight generation ends.
         queuedMessage = text;
+        queuedImages = images;
         refreshQueuedIndicator();
         Toast.info('Pesan diantrikan, akan dikirim setelah respons ini selesai.');
         return;
       }
 
-      await sendMessageText(text);
+      await sendMessageText(text, images);
     };
 
     sendBtn.onclick = () => {
@@ -2028,9 +3018,12 @@ export class ChatView {
     };
 
     container.querySelector('#btn-cancel-queued').onclick = () => {
-      if (!queuedMessage) return;
-      sendInput.value = queuedMessage;
+      if (!queuedMessage && !queuedImages.length) return;
+      sendInput.value = queuedMessage || '';
+      pendingAttachedImages = queuedImages;
       queuedMessage = null;
+      queuedImages = [];
+      refreshAttachPreview();
       refreshQueuedIndicator();
       sendInput.focus();
     };
@@ -2070,6 +3063,14 @@ export class ChatView {
     }
     const msg = await ChatStore.getMessageById(messageId);
     if (!msg) return;
+    if (msg.isSummary) {
+      // An auto-generated recap (ChatStore.createCompactedChat) isn't
+      // something the character "said" - regenerating it would ask the model
+      // for an in-character reply instead of a summary, which reads as
+      // broken. Only ever has one swipe variation by construction anyway.
+      Toast.error('Pesan ringkasan otomatis tidak bisa di-regenerate.');
+      return;
+    }
     const msgs = await ChatStore.getMessages(chatId);
     const msgIndex = msgs.findIndex(m => m.id === messageId);
     if (msgIndex === -1) return;
@@ -2100,7 +3101,9 @@ export class ChatView {
     const activePersonaObj = await PersonaStore.getDefault();
     const genSettings = await ProxyStore.getGenerationSettings();
     const globalPrompt = await ProxyStore.getGlobalSystemPrompt();
-    const activeTools = await MCPToolRegistry.getActiveTools();
+    // See the matching comment in triggerAIGeneration - MCP tools + the
+    // default builtin view-image tool (vision-gated).
+    const activeTools = [...(await MCPToolRegistry.getActiveTools()), ...(await getBuiltinTools(activeProxy))];
     const immersiveRoleplay = await MCPStore.getImmersiveRoleplay();
     const immersiveIntensity = await MCPStore.getImmersiveIntensity();
     // See the matching comment in triggerAIGeneration - independent of
@@ -2115,7 +3118,6 @@ export class ChatView {
       persona: activePersonaObj,
       globalSystemPrompt: globalPrompt,
       messages: historyBefore,
-      contextLimit: genSettings.contextLimit || 20,
       tools: activeTools,
       immersiveRoleplay,
       immersiveIntensity
@@ -2139,7 +3141,9 @@ export class ChatView {
     // markers, not just one. A single fresh `.message-content` is (re)built
     // below to hold the live streaming text; once the new variation is actually
     // persisted, `onDone` -> `refreshMessageBlock` rebuilds the final (possibly
-    // re-segmented) DOM from the stored message.
+    // re-segmented) DOM from the stored message. Also clears any images/embeds
+    // the OLD variation attached - left in place, they doubled up alongside
+    // whatever the NEW variation attaches instead of being replaced by it.
     if (blockInnerEl) {
       const staleThinking = blockInnerEl.querySelector('.thinking-block');
       if (staleThinking) staleThinking.remove();
@@ -2147,12 +3151,12 @@ export class ChatView {
       if (staleTrace) staleTrace.remove();
       const staleLive = blockInnerEl.querySelector('.tool-live-block');
       if (staleLive) staleLive.remove();
-      blockInnerEl.querySelectorAll('.message-content, .tool-inline-note').forEach(el => el.remove());
+      blockInnerEl.querySelectorAll('.message-content, .tool-inline-note, .message-image-row, .message-embed-card').forEach(el => el.remove());
     }
 
     // Wrapper host, not itself `.message-content` - a live variation can
     // involve several `.message-content`/`.tool-inline-note` pairs once tool
-    // calls are involved (see `renderLiveBodyHTML`), same as a persisted
+    // calls are involved (see `createLiveBodyHost`), same as a persisted
     // multi-segment message does.
     const contentHostEl = document.createElement('div');
     if (blockInnerEl) {
@@ -2187,10 +3191,12 @@ export class ChatView {
     // inconsistent status between a fresh reply and a swiped one.
     const swipePlaceholderHTML = `<em style="color:var(--text-dim);">${escapeHtml(activeChar.name)} sedang mengetik...</em>`;
 
+    const swipeBodyHost = contentHostEl ? createLiveBodyHost(contentHostEl, (t) => ChatView.formatRoleplayMarkdown(t), swipePlaceholderHTML) : null;
+
     // Coalesce rapid/bursty chunk delivery into at most one DOM update per
     // ~50ms - see createThrottledRenderer's comment.
     const scheduleContentRender = createThrottledRenderer(() => {
-      if (contentHostEl) contentHostEl.innerHTML = renderLiveBodyHTML(liveSegments, currentRoundText, swipePlaceholderHTML, (t) => ChatView.formatRoleplayMarkdown(t));
+      if (swipeBodyHost) swipeBodyHost.update(liveSegments, currentRoundText);
       scrollToBottom(messagesEl);
     });
     const scheduleThinkingRender = createThrottledRenderer(() => {
@@ -2201,14 +3207,16 @@ export class ChatView {
     try {
       // Non-streaming mode has nothing to progressively render (the whole
       // reply arrives at once at the end), so this always just shows the
-      // placeholder wrapped the same way `renderLiveBodyHTML` would wrap real
+      // placeholder wrapped the same way `createLiveBodyHost` would wrap real
       // content - keeping `.message-content`'s own styling (font-size,
       // line-height) rather than leaving the `<em>` as a bare, unstyled child
       // of `contentHostEl`.
       if (contentHostEl) {
-        contentHostEl.innerHTML = genSettings.streamingEnabled
-          ? renderLiveBodyHTML(liveSegments, currentRoundText, swipePlaceholderHTML, (t) => ChatView.formatRoleplayMarkdown(t))
-          : `<div class="message-content">${swipePlaceholderHTML}</div>`;
+        if (genSettings.streamingEnabled) {
+          swipeBodyHost.update(liveSegments, currentRoundText);
+        } else {
+          contentHostEl.innerHTML = `<div class="message-content">${swipePlaceholderHTML}</div>`;
+        }
       }
 
       const { content: newContent, thinking: newThinking, toolTrace, segments: newSegments } = await AgentRunner.run({
@@ -2220,6 +3228,7 @@ export class ChatView {
         signal: abortSignal,
         maxIterations: mcpMaxIterations,
         transformFirstResult: (result) => mergePrefillResult(genSettings, result),
+        characterAvatar: activeChar.avatar,
         callbacks: {
           onContentChunk: (delta) => {
             liveContent += delta;
@@ -2275,7 +3284,7 @@ export class ChatView {
 
       const updatedSwipes = [...(msg.swipes || [msg.content]), newContent];
       const newIndex = updatedSwipes.length - 1;
-      await ChatStore.updateMessageSwipes(messageId, updatedSwipes, newIndex, newThinking, toolTrace, newSegments);
+      await ChatStore.updateMessageSwipes(messageId, updatedSwipes, newIndex, newThinking, toolTrace, newSegments, collectToolImages(toolTrace), collectToolEmbeds(toolTrace));
       onDone();
     } catch (err) {
       if (err.name === 'AbortError') {
@@ -2287,7 +3296,7 @@ export class ChatView {
           // single-blob + trailing-note rendering.
           const updatedSwipes = [...(msg.swipes || [msg.content]), liveContent];
           const newIndex = updatedSwipes.length - 1;
-          await ChatStore.updateMessageSwipes(messageId, updatedSwipes, newIndex, liveThinking, liveToolTrace);
+          await ChatStore.updateMessageSwipes(messageId, updatedSwipes, newIndex, liveThinking, liveToolTrace, [], collectToolImages(liveToolTrace), collectToolEmbeds(liveToolTrace));
           onDone();
           Toast.info('Generasi dihentikan - jawaban sebagian tersimpan.');
         } else {
@@ -2485,10 +3494,25 @@ export class ChatView {
     // Escape raw HTML first so chat content (user-typed or AI-generated) can
     // never inject tags/scripts through here - only markdown syntax survives.
     let formatted = escapeHtml(textToFormat);
-    // Format actions in italics (*action* -> <em>action</em>)
-    formatted = formatted.replace(/\*(.*?)\*/g, '<em>$1</em>');
-    // Format quotes ("speech" -> <strong>"speech"</strong>)
-    formatted = formatted.replace(/"([^"]+)"/g, '<span style="color:var(--text-main); font-weight:500;">"$1"</span>');
+    // The *action*/"quote" regex styling below must never touch the inside
+    // of a fenced code block (```...```) - it used to run over the WHOLE
+    // escaped message unconditionally, which mangled any code sample
+    // containing a quoted string (e.g. class="box", extremely common in
+    // HTML/JS/JSON/CSS) by injecting a raw <span style="..."> BEFORE
+    // marked.parse() ever saw the fence, corrupting the code block's actual
+    // content. Backticks survive escapeHtml() untouched, so splitting on
+    // fence boundaries here and only formatting the non-code segments keeps
+    // code blocks byte-for-byte as escaped source until marked + the custom
+    // code renderer (registered at module load, above) handle them.
+    const segments = formatted.split(/(```[\s\S]*?```)/g);
+    formatted = segments.map((seg, i) => {
+      if (i % 2 === 1) return seg; // odd indices are fenced code blocks
+      // Format actions in italics (*action* -> <em>action</em>)
+      let s = seg.replace(/\*(.*?)\*/g, '<em>$1</em>');
+      // Format quotes ("speech" -> <span>"speech"</span>)
+      s = s.replace(/"([^"]+)"/g, '<span style="color:var(--text-main); font-weight:500;">"$1"</span>');
+      return s;
+    }).join('');
     // Use marked parser if available. `breaks: true` makes single newlines
     // render as <br> instead of being collapsed away - AI/roleplay replies
     // are usually formatted with single line breaks, not blank-line paragraphs.

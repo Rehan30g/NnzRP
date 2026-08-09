@@ -257,6 +257,23 @@
   font-size: 1.12rem;
 }
 
+/* Caps markdown-rendered images (![alt](url) - the app's own default system
+   prompt explicitly encourages these for photos/maps/screenshots the
+   character shows) - with no constraint here an image rendered at its
+   native resolution could blow out the whole chat column. Same treatment as
+   `.message-image-thumb`/`.message-embed-frame`. */
+.message-content img {
+  display: block;
+  max-width: 100%;
+  max-height: 360px;
+  width: auto;
+  height: auto;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-light);
+  margin: 0.4rem 0;
+  object-fit: contain;
+}
+
 /* Roleplay Text Formatting */
 .message-content em {
   color: var(--chat-em-color);
@@ -280,14 +297,90 @@
   color: var(--code-inline-fg);
 }
 
-.message-content pre {
-  background: var(--code-block-bg);
+/* Fenced code blocks are rendered by a custom marked renderer
+   (js/ui/views/chatView.js, marked.use({renderer:{code,...}})) as
+   .code-block-wrap > .code-block-header + pre > code, NOT plain .message-content
+   pre/code - resets the inline-code look here so the syntax-highlight .hl-*
+   spans (js/utils/syntaxHighlight.js) provide the actual token colors instead
+   of every character rendering in one flat indigo shade. */
+.message-content pre code {
+  background: none;
+  padding: 0;
+  border-radius: 0;
+  font-size: 0.85rem;
   color: var(--code-block-fg);
-  padding: 1rem;
-  border-radius: var(--radius-md);
-  overflow-x: auto;
-  margin: 0.6rem 0;
 }
+
+.code-block-wrap {
+  margin: 0.6rem 0;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--code-block-bg);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.code-block-wrap pre {
+  margin: 0;
+  padding: 1rem;
+  overflow-x: auto;
+  background: none;
+  color: var(--code-block-fg);
+}
+
+.code-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.4rem 0.75rem;
+  background: rgba(255, 255, 255, 0.03);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.code-block-lang {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--code-block-fg);
+  opacity: 0.55;
+  font-family: var(--font-mono);
+}
+
+.code-copy-btn {
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.25rem 0.6rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: transparent;
+  color: var(--code-block-fg);
+  opacity: 0.8;
+  cursor: pointer;
+  transition: opacity var(--transition-fast), background var(--transition-fast);
+}
+
+.code-copy-btn:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.code-copy-btn.copied {
+  opacity: 1;
+  color: var(--accent-emerald);
+  border-color: var(--accent-emerald);
+}
+
+/* Syntax highlight token colors (js/utils/syntaxHighlight.js) - tuned
+   against --code-block-bg, which stays a fixed dark navy in both app themes
+   (see the token comment in variables.css), so these don't need light/dark
+   variants either. */
+.hl-tag { color: var(--hl-tag); }
+.hl-attr { color: var(--hl-attr); }
+.hl-string { color: var(--hl-string); }
+.hl-comment { color: var(--hl-comment); font-style: italic; }
+.hl-keyword { color: var(--hl-keyword); font-weight: 600; }
+.hl-number { color: var(--hl-number); }
+.hl-punct { color: var(--code-block-fg); opacity: 0.7; }
 
 /* Message Actions & Swiping Footer */
 .message-footer {
@@ -394,6 +487,249 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+}
+
+/* ===================================================
+   Image attach ("+") button, popup menu, and draft preview strip
+   =================================================== */
+.chat-attach-wrap {
+  position: relative;
+  display: flex;
+}
+
+.chat-attach-btn {
+  color: var(--text-muted);
+}
+
+.chat-attach-btn:hover {
+  color: var(--accent-primary);
+}
+
+/* Anchored to `.chat-attach-wrap` (position:relative), NOT portalled to
+   <body> like js/ui/components/dropdown.js's menu - it only ever needs to
+   sit right above its own trigger, and position:absolute (unlike :fixed)
+   isn't trapped by `.chat-input-container`'s own transform. */
+.chat-attach-menu {
+  position: absolute;
+  bottom: calc(100% + 0.4rem);
+  left: 0;
+  min-width: 160px;
+  padding: 0.3rem;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-popover);
+  z-index: 20;
+  animation: fadeIn var(--transition-fast);
+}
+
+.chat-attach-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 0.5rem 0.7rem;
+  border: none;
+  background: none;
+  border-radius: var(--radius-sm);
+  font-size: 0.86rem;
+  color: var(--text-main);
+  cursor: pointer;
+}
+
+.chat-attach-menu-item:hover {
+  background: var(--bg-surface-hover);
+}
+
+.chat-attach-preview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.chat-attach-thumb {
+  position: relative;
+  width: 56px;
+  height: 56px;
+  flex-shrink: 0;
+}
+
+.chat-attach-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-light);
+  background: var(--bg-inset);
+}
+
+.chat-attach-thumb-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+}
+
+.chat-attach-thumb-remove:hover {
+  color: var(--accent-rose);
+  border-color: var(--accent-rose-border);
+}
+
+/* Thumbnails on a PERSISTED user message (as opposed to the not-yet-sent
+   draft preview above), rendered by messageImagesHTML() in chatView.js. */
+.message-image-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+}
+
+.message-image-thumb {
+  max-width: 220px;
+  max-height: 220px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-light);
+  object-fit: cover;
+}
+
+/* Sandboxed HTML/CSS/JS embeds the builtin "Embed HTML" tool
+   (js/services/builtinTools.js) produced mid-reply, rendered by
+   messageEmbedsHTML() in chatView.js. Deliberately NO visible chrome at all
+   here - no card border/background, no visible label above it either
+   anymore (a raw "AI-generated embed"/model-given-title caption above the
+   frame read as a technical artifact breaking immersion - see e.title's
+   comment in chatView.js's embedCardsHTML(), it's now only the iframe's
+   `title` ATTRIBUTE for screen readers, never painted on screen). The iframe
+   sits directly in the message flow with a transparent background so it
+   blends into the surrounding message instead of reading as a bolted-on box. */
+.message-embed-card {
+  margin-top: 0.5rem;
+}
+
+/* Starts small and snaps (NOT animates - an earlier `transition: height`
+   here caused auto-scroll-to-bottom to fall short during streaming, since
+   the scroll position gets computed against scrollHeight the instant the
+   embed's height changes, before a CSS transition has actually finished
+   growing it) to fit the embed's own content (the 'message' listener in
+   chatView.js's render() sets this from the embed document's postMessage
+   height report, clamped 40-800px there) instead of a fixed box that's
+   mostly empty for a small embed. `background:transparent` +
+   `sandbox="allow-scripts"` (no `allow-same-origin`, set inline by
+   messageEmbedsHTML() - that's the actual security boundary, not this file)
+   is what lets the embed's own reset stylesheet (buildEmbedDocument() in
+   chatView.js) make it look like it belongs to the current chat theme
+   instead of the browser's plain white-background default. */
+.message-embed-frame {
+  display: block;
+  width: 100%;
+  height: 40px;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-md);
+}
+
+/* ===================================================
+   Context-capacity gauge (chat header) - a plain CSS conic-gradient donut
+   ring, not SVG: cheap to redraw on every renderMessages() call and matches
+   the app's flat design language. Color/percentage/background are set
+   inline by refreshContextGauge() in chatView.js, not here.
+   =================================================== */
+.context-gauge {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-full);
+  flex-shrink: 0;
+  cursor: default;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background var(--transition-fast);
+}
+
+.context-gauge-inner {
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-full);
+  background: var(--bg-surface);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.52rem;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+/* ===================================================
+   Compact Chat recommendation banner
+   =================================================== */
+.compact-chat-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  max-width: 880px;
+  margin: 0 auto 1rem;
+  padding: 0.75rem 1rem;
+  background: var(--accent-secondary-soft);
+  border: 1px solid var(--accent-secondary-border);
+  border-radius: var(--radius-md);
+}
+
+.compact-chat-banner-text {
+  font-size: 0.85rem;
+  color: var(--text-main);
+}
+
+.compact-chat-banner-text strong {
+  color: var(--accent-secondary);
+}
+
+.compact-chat-banner-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+/* Auto-generated conversation recap message (ChatStore.createCompactedChat) -
+   deliberately quiet/neutral, NOT styled like a normal character chat bubble,
+   so it reads as an app-inserted note rather than something the character
+   "said". */
+.summary-message-block .message-header {
+  opacity: 0.7;
+}
+
+.summary-message-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 0.4rem;
+}
+
+.summary-message-block .message-content {
+  background: var(--bg-inset);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  padding: 0.85rem 1rem;
+  font-style: italic;
+  color: var(--text-muted);
 }
 
 .token-indicator {
@@ -540,8 +876,16 @@
   color: var(--text-dim);
 }
 
+/* Structured content (toolTraceDetailHTML() in chatView.js) instead of the
+   plain italic pre-wrap text .thinking-content defaults to - one
+   .tool-trace-entry per call handles its own spacing/dividers below, so the
+   shared wrapper's own padding is zeroed out here rather than doubled up. */
 .tool-trace-block .thinking-content {
   font-size: 0.78rem;
+  font-style: normal;
+  white-space: normal;
+  padding: 0;
+  max-height: 320px;
 }
 
 .tool-trace-block.expanded .thinking-chevron {
@@ -550,6 +894,67 @@
 
 .tool-trace-block.expanded .thinking-content {
   display: block;
+}
+
+.tool-trace-entry {
+  padding: 0.6rem 0.85rem;
+  border-top: 1px solid var(--border-light);
+}
+
+.tool-trace-entry:first-child {
+  border-top: none;
+}
+
+.tool-trace-entry-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+}
+
+.tool-trace-entry-name {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 0.76rem;
+  color: var(--text-main);
+  overflow-wrap: anywhere;
+}
+
+.tool-trace-entry-declined {
+  font-size: 0.64rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--accent-rose);
+  background: var(--accent-rose-soft);
+  border: 1px solid var(--accent-rose-border);
+  border-radius: var(--radius-sm);
+  padding: 0.1rem 0.4rem;
+  flex-shrink: 0;
+}
+
+.tool-trace-entry-args {
+  margin: 0 0 0.4rem;
+  padding: 0.5rem 0.6rem;
+  background: var(--code-block-bg);
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+  max-height: 140px;
+  overflow-y: auto;
+}
+
+.tool-trace-entry-args code {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--code-block-fg);
+  white-space: pre;
+}
+
+.tool-trace-entry-result {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 /* Small always-visible "which MCP tool(s) were called at this exact point in

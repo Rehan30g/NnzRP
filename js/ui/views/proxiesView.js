@@ -201,6 +201,26 @@ export class ProxiesView {
           <input class="input" id="proxy-models" value="${escapeAttr((data.models || []).join(', '))}" placeholder="e.g. anthropic/claude-3.5-sonnet, openai/gpt-4o">
         </div>
 
+        <div class="form-group">
+          <label class="form-label">Image Input (Vision)</label>
+          ${dropdownHTML({
+            id: 'proxy-vision-override',
+            value: data.visionOverride === true ? 'on' : data.visionOverride === false ? 'off' : 'auto',
+            options: [
+              { value: 'auto', label: 'Auto-detect', hint: 'Guess from the model ID - can be wrong for newer/unlisted models' },
+              { value: 'on', label: 'Always show attach button' },
+              { value: 'off', label: 'Never show attach button' }
+            ]
+          })}
+          <p class="form-hint">Controls whether the chat composer's image-attach button and the default view-image tool are offered for this proxy's selected model.</p>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Context Window Override (tokens)</label>
+          <input class="input" type="number" id="proxy-context-window-override" value="${data.contextWindowOverride || ''}" min="0" step="1024" placeholder="Auto-detect from model ID">
+          <p class="form-hint">Leave blank to guess the context window size from the model ID for the chat header's capacity gauge. Set this if the guess looks wrong.</p>
+        </div>
+
         <div class="card card-muted" id="proxy-openrouter-section" style="padding:1rem; margin-bottom:1rem; ${data.provider === 'openrouter' ? '' : 'display:none;'}">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
             <span style="font-size:0.85rem; font-weight:600;">OpenRouter Underlying Providers</span>
@@ -303,6 +323,11 @@ export class ProxiesView {
               apiKey: document.getElementById('proxy-key').value.trim(),
               reasoningEffort: document.getElementById('proxy-reasoning-effort').value,
               reasoningMaxTokens: parseInt(document.getElementById('proxy-reasoning-tokens').value) || 2048,
+              visionOverride: (() => {
+                const choice = document.getElementById('proxy-vision-override')?.value;
+                return choice === 'on' ? true : choice === 'off' ? false : null;
+              })(),
+              contextWindowOverride: parseInt(document.getElementById('proxy-context-window-override').value) || null,
               isDefault: document.getElementById('proxy-default').checked,
               openrouterProviders: Array.from(selectedOpenrouterProviders),
               openrouterAllowFallbacks: document.getElementById('proxy-openrouter-allow-fallbacks').checked
@@ -317,6 +342,7 @@ export class ProxiesView {
     });
 
     wireDropdown(overlay, 'proxy-reasoning-effort');
+    wireDropdown(overlay, 'proxy-vision-override');
 
     // OpenRouter provider-browsing section is only relevant/visible for provider === 'openrouter'.
     wireDropdown(overlay, 'proxy-provider', (value) => {

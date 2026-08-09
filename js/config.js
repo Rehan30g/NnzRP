@@ -11,15 +11,16 @@ export const APP_CONFIG = {
   DEFAULT_GENERATION_SETTINGS: {
     temperature: 0.85,
     topP: 0.95,
-    maxTokens: 1024,
+    maxTokens: 2048,
+    unlimitedTokens: false,
     repetitionPenalty: 1.15,
-    contextLimit: 20,
     streamingEnabled: false,
     prefillEnabled: false,
     prefillText: '',
     reasoningEffort: 'off',
     reasoningMaxTokens: 2048,
-    mcpMaxToolIterations: 6
+    mcpMaxToolIterations: 6,
+    showContextGaugeInChat: false
   },
   DEFAULT_GLOBAL_SYSTEM_PROMPT: `# ROLEPLAY ENGINE — SYSTEM INSTRUCTIONS
 

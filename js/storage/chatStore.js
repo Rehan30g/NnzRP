@@ -76,12 +76,133 @@ export class ChatStore {
         swipes: source.swipes,
         toolTrace: source.toolTrace || [],
         toolSegments: source.toolSegments || [],
+        images: source.images || [],
+        embeds: source.embeds || [],
+        swipeMeta: source.swipeMeta || [],
         createdAt: source.createdAt
       };
       await db.put('messages', copy);
     }
 
     return newChat;
+  }
+
+  /**
+   * "Compact Chat" - the AI-summarization counterpart to forkChat(). Instead
+   * of copying the whole history verbatim (which is exactly what got a
+   * session too long to begin with), this keeps the first `keepFirst`
+   * messages (the character's opening + earliest scene-setting) AND the last
+   * `keepLast` messages (whatever the user/character were just doing, so the
+   * new chat can continue the scene naturally right away) as-is, and
+   * replaces only the MIDDLE stretch with ONE AI-generated recap message.
+   *
+   * An earlier version only kept the first `keepFirst` and folded literally
+   * everything else - including the newest message - into the summary. That
+   * read as "my last message just got deleted": nothing was actually lost
+   * from the database (the ORIGINAL chat is always left untouched), but the
+   * new chat the user actually continues in had no verbatim trace of what
+   * had just happened, only however well (or poorly) the AI's prose summary
+   * happened to capture it. Keeping the most recent turns verbatim too fixes
+   * that directly instead of relying on summary quality for continuity.
+   *
+   * The summary text itself is produced by the caller (chatView.js, via
+   * ProviderManager, over exactly the middle stretch this method also
+   * computes - see `getCompactMiddleRange` below, which chatView.js calls
+   * first to build the transcript) - this method only owns the
+   * data-shuffling: create the new chat, copy the kept messages on both
+   * ends, insert the recap between them.
+   * @param {string} originalChatId
+   * @param {string} summaryContent - AI-generated recap text (already trimmed).
+   * @param {number} [keepFirst=4]
+   * @param {number} [keepLast=4]
+   * @returns {Promise<object>} the newly created chat record.
+   */
+  static async createCompactedChat(originalChatId, summaryContent, keepFirst = 4, keepLast = 4) {
+    const originalChat = await db.get('chats', originalChatId);
+    if (!originalChat) {
+      throw new Error('Chat asal tidak ditemukan.');
+    }
+
+    const messages = await this.getMessages(originalChatId);
+    const keptFirst = messages.slice(0, keepFirst);
+    // Math.max guards against the first/last windows overlapping when the
+    // chat is barely longer than keepFirst+keepLast - never re-include a
+    // message keptFirst already has.
+    const keptLast = keepLast > 0 ? messages.slice(Math.max(keepFirst, messages.length - keepLast)) : [];
+
+    const now = Date.now();
+    const newChat = {
+      id: `chat-${now}`,
+      characterId: originalChat.characterId,
+      personaId: originalChat.personaId,
+      title: `${originalChat.title} (Ringkasan)`,
+      compactedFrom: originalChatId,
+      compactedAt: now,
+      createdAt: now,
+      updatedAt: now
+    };
+    await db.put('chats', newChat);
+
+    // Copies one message into the new chat with a NEW sequential timestamp
+    // (rather than keeping its OWN older original createdAt) so
+    // getMessages()'s sort-by-createdAt places every copy in the exact
+    // relative order passed in here, regardless of how old the originals
+    // were - `seq` is just an incrementing counter shared across both
+    // keptFirst and keptLast batches below.
+    let seq = 0;
+    const copyMessage = async (source) => {
+      seq += 1;
+      await db.put('messages', {
+        id: `msg-${now}-${seq}-${Math.random().toString(36).substr(2, 4)}`,
+        chatId: newChat.id,
+        role: source.role,
+        content: source.content,
+        thoughts: source.thoughts,
+        swipeIndex: source.swipeIndex,
+        swipes: source.swipes,
+        toolTrace: source.toolTrace || [],
+        toolSegments: source.toolSegments || [],
+        images: source.images || [],
+        embeds: source.embeds || [],
+        swipeMeta: source.swipeMeta || [],
+        createdAt: now + seq
+      });
+    };
+
+    // Order: opening messages, then the recap bridging the gap, then the
+    // most recent messages - so the new chat reads as a coherent timeline
+    // instead of the recap floating disconnected from what it's bridging.
+    for (const source of keptFirst) await copyMessage(source);
+    await db.put('messages', {
+      id: `msg-${now}-summary-${Math.random().toString(36).substr(2, 4)}`,
+      chatId: newChat.id,
+      role: 'assistant',
+      content: summaryContent,
+      thoughts: '',
+      swipeIndex: 0,
+      swipes: [summaryContent],
+      toolTrace: [],
+      toolSegments: [],
+      images: [],
+      isSummary: true,
+      createdAt: now + (++seq)
+    });
+    for (const source of keptLast) await copyMessage(source);
+
+    return newChat;
+  }
+
+  /**
+   * The middle stretch `createCompactedChat` above will summarize (i.e.
+   * everything NOT in its keptFirst/keptLast windows) - exposed separately
+   * so chatView.js can build the exact same range into a transcript for the
+   * AI summarization call before actually calling createCompactedChat(),
+   * without either side having to duplicate (and risk drifting out of sync
+   * with) the slicing math.
+   */
+  static getCompactMiddleRange(messages, keepFirst = 4, keepLast = 4) {
+    const end = keepLast > 0 ? Math.max(keepFirst, messages.length - keepLast) : messages.length;
+    return messages.slice(keepFirst, end);
   }
 
   static async deleteChat(chatId) {
@@ -112,8 +233,21 @@ export class ChatStore {
    *   as before, since other code (prompt history, editing, forking, search)
    *   depends on those. Same single-current-variation limitation as `thoughts`/
    *   `toolTrace` - not retained per past swipe, see CLAUDE.md.
+   * @param {Array<string>} [images] - optional base64 `data:` URLs attached to
+   *   this message. On a USER message these come from the composer's
+   *   image-upload button; on an ASSISTANT message these come from the
+   *   builtin view-image tool (js/services/builtinTools.js) actually
+   *   fetching something mid-reply, surfaced from AgentRunner's toolTrace so
+   *   the user can see what the character just "looked at", not just have it
+   *   fed silently to the model.
+   * @param {Array<{html:string, title:string}>} [embeds] - optional HTML/CSS/JS
+   *   snippets the builtin "Embed HTML" tool (js/services/builtinTools.js)
+   *   produced mid-reply, surfaced from AgentRunner's toolTrace the same way
+   *   `images` is (see chatView.js's `collectToolEmbeds`). Rendered in a
+   *   sandboxed iframe by chatView.js's `messageEmbedsHTML()`. Same
+   *   single-current-variation limitation as `thoughts`/`toolTrace`/`images`.
    */
-  static async addMessage(chatId, role, content, thoughts = '', swipes = [], toolTrace = [], toolSegments = []) {
+  static async addMessage(chatId, role, content, thoughts = '', swipes = [], toolTrace = [], toolSegments = [], images = [], embeds = []) {
     const now = Date.now();
     const message = {
       id: `msg-${now}-${Math.random().toString(36).substr(2, 4)}`,
@@ -125,6 +259,14 @@ export class ChatStore {
       swipes: swipes.length ? swipes : [content],
       toolTrace: toolTrace || [],
       toolSegments: toolSegments || [],
+      images: images || [],
+      embeds: embeds || [],
+      // One entry per swipe variation (index-aligned with `swipes`), so
+      // switching BACK to an existing variation later can restore its own
+      // thinking/tools/images/embeds instead of showing blank ones - see
+      // updateMessageSwipes() below, which is where entries after this
+      // first one get added.
+      swipeMeta: [{ thoughts: thoughts || '', toolTrace: toolTrace || [], toolSegments: toolSegments || [], images: images || [], embeds: embeds || [] }],
       createdAt: now
     };
     await db.put('messages', message);
@@ -136,24 +278,71 @@ export class ChatStore {
     return message;
   }
 
-  static async updateMessageSwipes(messageId, swipes, activeIndex, thoughts = '', toolTrace = [], toolSegments = []) {
+  /**
+   * Updates which swipe variation is active. Two distinct calling
+   * conventions, both used by chatView.js's handleSwipePrev/handleSwipeNext:
+   *   - Just SWITCHING between variations that already exist (no new
+   *     generation happened) - called with only (messageId, swipes,
+   *     activeIndex), leaving thoughts/toolTrace/toolSegments/images/embeds
+   *     as `undefined`. In this case they're restored from
+   *     `swipeMeta[activeIndex]` (whatever that variation had recorded when
+   *     IT was generated) instead of being blanked out.
+   *   - REGENERATING a brand new variation - called with that variation's
+   *     actual thoughts/toolTrace/etc (even if some are empty strings/arrays,
+   *     they're still explicitly passed, not left `undefined`). These get
+   *     applied AND recorded into `swipeMeta[activeIndex]` so a later switch
+   *     back to this exact variation can restore them too.
+   *
+   * Fixes a real bug: earlier, switching between EXISTING swipes (prev/next
+   * with no new generation) always overwrote thoughts/toolTrace/toolSegments/
+   * images/embeds with this function's empty defaults, since the switch-only
+   * call site never passed them - so a variation's own thinking block, tool
+   * trace, or any embed it had produced visibly vanished the moment you
+   * swiped away and back. (The thoughts/toolTrace half of this was already a
+   * documented limitation; extending images/embeds onto the same flat-field
+   * pattern just made it far more noticeable - a whole interactive embed
+   * disappearing reads very differently than lost thinking text.)
+   */
+  static async updateMessageSwipes(messageId, swipes, activeIndex, thoughts, toolTrace, toolSegments, images, embeds) {
     const message = await db.get('messages', messageId);
     if (!message) return;
     const content = swipes[activeIndex] || message.content;
+    const swipeMeta = Array.isArray(message.swipeMeta) ? [...message.swipeMeta] : [];
+
+    const hasNewMeta = thoughts !== undefined || toolTrace !== undefined || toolSegments !== undefined || images !== undefined || embeds !== undefined;
+    if (hasNewMeta) {
+      swipeMeta[activeIndex] = {
+        thoughts: thoughts || '',
+        toolTrace: toolTrace || [],
+        toolSegments: toolSegments || [],
+        images: images || [],
+        embeds: embeds || []
+      };
+    }
+    // No recorded metadata for this index (switching to a variation that
+    // predates swipeMeta existing) falls back to empty - same as the old
+    // behavior, not worse; it "self-heals" the moment that variation is ever
+    // regenerated again, since hasNewMeta then records it going forward.
+    const meta = swipeMeta[activeIndex] || { thoughts: '', toolTrace: [], toolSegments: [], images: [], embeds: [] };
+
     message.swipes = swipes;
     message.swipeIndex = activeIndex;
     message.content = content;
-    message.thoughts = thoughts;
-    message.toolTrace = toolTrace || [];
-    message.toolSegments = toolSegments || [];
+    message.swipeMeta = swipeMeta;
+    message.thoughts = meta.thoughts;
+    message.toolTrace = meta.toolTrace;
+    message.toolSegments = meta.toolSegments;
+    message.images = meta.images;
+    message.embeds = meta.embeds;
     await db.put('messages', message);
   }
 
   static async updateMessageContent(messageId, content) {
     const message = await db.get('messages', messageId);
     if (!message) return;
+    const idx = message.swipeIndex || 0;
     const swipes = [...(message.swipes || [message.content])];
-    swipes[message.swipeIndex || 0] = content;
+    swipes[idx] = content;
     message.content = content;
     message.swipes = swipes;
     // toolSegments records WHERE inside the old text each tool was called -
@@ -162,6 +351,13 @@ export class ChatStore {
     // `toolTrace` (and its single below-message note) is untouched and still
     // valid since it doesn't depend on knowing the internal split.
     message.toolSegments = [];
+    // Also clear it in this swipe's OWN recorded metadata (see
+    // updateMessageSwipes' swipeMeta) - otherwise switching away to a
+    // different variation and back would silently RESTORE the stale
+    // pre-edit toolSegments from swipeMeta, undoing this reset.
+    const swipeMeta = Array.isArray(message.swipeMeta) ? [...message.swipeMeta] : [];
+    if (swipeMeta[idx]) swipeMeta[idx] = { ...swipeMeta[idx], toolSegments: [] };
+    message.swipeMeta = swipeMeta;
     await db.put('messages', message);
   }
 
