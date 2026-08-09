@@ -46,6 +46,12 @@ export class AgentRunner {
    *   optional post-processing applied only to the very first round's result (before checking for
    *   tool calls) - used by chatView to re-merge response-prefill seed text, which only ever
    *   applies to the first raw model continuation, not to later tool-result-driven rounds.
+   * @param {string} [opts.characterAvatar] - the active character's own avatar (a URL or a
+   *   `data:` URL if it was uploaded locally), forwarded as execution context to the builtin
+   *   view-image/embed-html tools (js/services/builtinTools.js) so the model can reference "the
+   *   character's own photo" via the `{{char_avatar}}` placeholder instead of needing to know/
+   *   retype the real value - which for an uploaded avatar can be a very long base64 string a
+   *   model would likely mangle or waste a huge number of tokens reproducing.
    * @returns {Promise<{content: string, thinking: string, toolTrace: Array, segments: Array}>} the WHOLE turn:
    *   every round's narration joined with a blank line (not just the final round's text, which
    *   used to silently drop the "let me look that up" lead-in a model writes before calling a
@@ -56,7 +62,7 @@ export class AgentRunner {
    *   a caller place an inline "tool used here" marker at the exact point between two rounds'
    *   text instead of only being able to show one note below the whole joined message.
    */
-  static async run({ proxy, initialPayload, settings, tools = [], streaming = false, signal, callbacks = {}, maxIterations, transformFirstResult }) {
+  static async run({ proxy, initialPayload, settings, tools = [], streaming = false, signal, callbacks = {}, maxIterations, transformFirstResult, characterAvatar }) {
     const limit = maxIterations || settings.mcpMaxToolIterations || 6;
     let payload = initialPayload;
     const toolTrace = [];
@@ -137,8 +143,12 @@ export class AgentRunner {
         }
 
         let content;
-        // Only set for the builtin view-image tool's successful runs - see
-        // the payload-injection comment below for why this rides in as a
+        // Set for ANY tool call that comes back with viewable images - the
+        // builtin view-image tool's fetch, OR (see MCPToolRegistry.executeTool/
+        // parseResult) an MCP server tool that returns MCP `image` content
+        // blocks itself, e.g. a browser-automation server's screenshot
+        // capability. Handled identically either way from here on - see the
+        // payload-injection comment below for why this rides in as a
         // separate message instead of living inside the tool-result entry.
         let fetchedImages = null;
         // Only set for the builtin embed-html tool's successful runs - unlike
@@ -159,17 +169,21 @@ export class AgentRunner {
             // The builtin image-fetch and embed-html tools
             // (js/services/builtinTools.js) have no MCP server behind them,
             // so they're dispatched here instead of going through
-            // MCPToolRegistry.executeTool.
+            // MCPToolRegistry.executeTool. Both get `characterAvatar` as
+            // execution context so the model can reference "the character's
+            // own photo" via the `{{char_avatar}}` placeholder.
             if (call.name === BUILTIN_VIEW_IMAGE_TOOL) {
-              const result = await executeBuiltinImageTool(call.args);
+              const result = await executeBuiltinImageTool(call.args, { characterAvatar });
               content = result.text;
               fetchedImages = result.images;
             } else if (call.name === BUILTIN_EMBED_HTML_TOOL) {
-              const result = await executeBuiltinEmbedHtmlTool(call.args);
+              const result = await executeBuiltinEmbedHtmlTool(call.args, { characterAvatar });
               content = result.text;
               embeddedHtml = { html: result.html, title: result.title };
             } else {
-              content = await MCPToolRegistry.executeTool(call.name, call.args);
+              const mcpResult = await MCPToolRegistry.executeTool(call.name, call.args);
+              content = mcpResult.text;
+              fetchedImages = mcpResult.images && mcpResult.images.length ? mcpResult.images : null;
             }
           } catch (err) {
             content = `Error: ${err.message}`;

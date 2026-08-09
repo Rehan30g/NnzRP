@@ -257,6 +257,23 @@
   font-size: 1.12rem;
 }
 
+/* Caps markdown-rendered images (![alt](url) - the app's own default system
+   prompt explicitly encourages these for photos/maps/screenshots the
+   character shows) - with no constraint here an image rendered at its
+   native resolution could blow out the whole chat column. Same treatment as
+   `.message-image-thumb`/`.message-embed-frame`. */
+.message-content img {
+  display: block;
+  max-width: 100%;
+  max-height: 360px;
+  width: auto;
+  height: auto;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-light);
+  margin: 0.4rem 0;
+  object-fit: contain;
+}
+
 /* Roleplay Text Formatting */
 .message-content em {
   color: var(--chat-em-color);
@@ -589,16 +606,14 @@
 
 /* Sandboxed HTML/CSS/JS embeds the builtin "Embed HTML" tool
    (js/services/builtinTools.js) produced mid-reply, rendered by
-   messageEmbedsHTML() in chatView.js. Small/neutral card treatment - same
-   family as `.tool-trace-block` - since this is quiet persisted content, not
-   something that needs to grab attention the way `.tool-live-block` does. */
+   messageEmbedsHTML() in chatView.js. Deliberately NO card border/background
+   here - an earlier boxed-card treatment read as visually disconnected from
+   the surrounding message ("terhalang kotak") instead of feeling like part
+   of the chat. The only chrome left is the quiet label below, same treatment
+   `.tool-inline-note` already uses elsewhere - the iframe itself sits
+   directly in the message flow with a transparent background. */
 .message-embed-card {
-  border: 1px solid var(--border-light);
-  border-radius: var(--radius-md);
-  background: var(--bg-muted);
-  padding: 0.6rem;
   margin-top: 0.5rem;
-  overflow: hidden;
 }
 
 .message-embed-label {
@@ -610,7 +625,7 @@
   text-transform: uppercase;
   letter-spacing: 0.03em;
   color: var(--text-dim);
-  margin-bottom: 0.5rem;
+  margin-bottom: 0.35rem;
 }
 
 .message-embed-label svg {
@@ -620,16 +635,24 @@
   opacity: 0.85;
 }
 
-/* Fixed size so one large/tall embed can't blow out the chat layout - the
-   embedded content can still scroll internally if it's taller than this.
-   `sandbox="allow-scripts"` (no `allow-same-origin`) is set inline by
-   messageEmbedsHTML(), not here - that's the actual security boundary. */
+/* Starts small and grows to fit the embed's own content (the 'message'
+   listener in chatView.js's render() sets this from the embed document's
+   postMessage height report, clamped 40-800px there) instead of a fixed box
+   that's mostly empty for a small embed - transitioning the height keeps
+   that growth from feeling like a jump cut. `background:transparent` +
+   `sandbox="allow-scripts"` (no `allow-same-origin`, set inline by
+   messageEmbedsHTML() - that's the actual security boundary, not this file)
+   is what lets the embed's own reset stylesheet (buildEmbedDocument() in
+   chatView.js) make it look like it belongs to the current chat theme
+   instead of the browser's plain white-background default. */
 .message-embed-frame {
   display: block;
   width: 100%;
-  height: 320px;
+  height: 40px;
   border: none;
-  background: var(--bg-surface);
+  background: transparent;
+  border-radius: var(--radius-md);
+  transition: height 0.15s ease-out;
 }
 
 /* ===================================================
@@ -868,8 +891,16 @@
   color: var(--text-dim);
 }
 
+/* Structured content (toolTraceDetailHTML() in chatView.js) instead of the
+   plain italic pre-wrap text .thinking-content defaults to - one
+   .tool-trace-entry per call handles its own spacing/dividers below, so the
+   shared wrapper's own padding is zeroed out here rather than doubled up. */
 .tool-trace-block .thinking-content {
   font-size: 0.78rem;
+  font-style: normal;
+  white-space: normal;
+  padding: 0;
+  max-height: 320px;
 }
 
 .tool-trace-block.expanded .thinking-chevron {
@@ -878,6 +909,67 @@
 
 .tool-trace-block.expanded .thinking-content {
   display: block;
+}
+
+.tool-trace-entry {
+  padding: 0.6rem 0.85rem;
+  border-top: 1px solid var(--border-light);
+}
+
+.tool-trace-entry:first-child {
+  border-top: none;
+}
+
+.tool-trace-entry-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+}
+
+.tool-trace-entry-name {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 0.76rem;
+  color: var(--text-main);
+  overflow-wrap: anywhere;
+}
+
+.tool-trace-entry-declined {
+  font-size: 0.64rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--accent-rose);
+  background: var(--accent-rose-soft);
+  border: 1px solid var(--accent-rose-border);
+  border-radius: var(--radius-sm);
+  padding: 0.1rem 0.4rem;
+  flex-shrink: 0;
+}
+
+.tool-trace-entry-args {
+  margin: 0 0 0.4rem;
+  padding: 0.5rem 0.6rem;
+  background: var(--code-block-bg);
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+  max-height: 140px;
+  overflow-y: auto;
+}
+
+.tool-trace-entry-args code {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--code-block-fg);
+  white-space: pre;
+}
+
+.tool-trace-entry-result {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 /* Small always-visible "which MCP tool(s) were called at this exact point in

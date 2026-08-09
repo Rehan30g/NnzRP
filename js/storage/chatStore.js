@@ -89,25 +89,44 @@ export class ChatStore {
    * "Compact Chat" - the AI-summarization counterpart to forkChat(). Instead
    * of copying the whole history verbatim (which is exactly what got a
    * session too long to begin with), this keeps the first `keepFirst`
-   * messages as-is (the character's opening + earliest scene-setting, which
-   * chatView.js deliberately never lets the compact recommendation touch)
-   * and replaces everything else with ONE AI-generated recap message. The
-   * summary text itself is produced by the caller (chatView.js, via
-   * ProviderManager) - this method only owns the data-shuffling: create the
-   * new chat, copy the kept messages, append the recap.
+   * messages (the character's opening + earliest scene-setting) AND the last
+   * `keepLast` messages (whatever the user/character were just doing, so the
+   * new chat can continue the scene naturally right away) as-is, and
+   * replaces only the MIDDLE stretch with ONE AI-generated recap message.
+   *
+   * An earlier version only kept the first `keepFirst` and folded literally
+   * everything else - including the newest message - into the summary. That
+   * read as "my last message just got deleted": nothing was actually lost
+   * from the database (the ORIGINAL chat is always left untouched), but the
+   * new chat the user actually continues in had no verbatim trace of what
+   * had just happened, only however well (or poorly) the AI's prose summary
+   * happened to capture it. Keeping the most recent turns verbatim too fixes
+   * that directly instead of relying on summary quality for continuity.
+   *
+   * The summary text itself is produced by the caller (chatView.js, via
+   * ProviderManager, over exactly the middle stretch this method also
+   * computes - see `getCompactMiddleRange` below, which chatView.js calls
+   * first to build the transcript) - this method only owns the
+   * data-shuffling: create the new chat, copy the kept messages on both
+   * ends, insert the recap between them.
    * @param {string} originalChatId
    * @param {string} summaryContent - AI-generated recap text (already trimmed).
    * @param {number} [keepFirst=4]
+   * @param {number} [keepLast=4]
    * @returns {Promise<object>} the newly created chat record.
    */
-  static async createCompactedChat(originalChatId, summaryContent, keepFirst = 4) {
+  static async createCompactedChat(originalChatId, summaryContent, keepFirst = 4, keepLast = 4) {
     const originalChat = await db.get('chats', originalChatId);
     if (!originalChat) {
       throw new Error('Chat asal tidak ditemukan.');
     }
 
     const messages = await this.getMessages(originalChatId);
-    const kept = messages.slice(0, keepFirst);
+    const keptFirst = messages.slice(0, keepFirst);
+    // Math.max guards against the first/last windows overlapping when the
+    // chat is barely longer than keepFirst+keepLast - never re-include a
+    // message keptFirst already has.
+    const keptLast = keepLast > 0 ? messages.slice(Math.max(keepFirst, messages.length - keepLast)) : [];
 
     const now = Date.now();
     const newChat = {
@@ -122,15 +141,35 @@ export class ChatStore {
     };
     await db.put('chats', newChat);
 
-    // The recap goes FIRST (top of the new chat), kept messages follow below
-    // it - stored as role:'assistant' so PromptBuilder folds it into context
-    // with zero new plumbing (a stored message's role is only ever 'user' or
-    // 'assistant' today), flagged `isSummary` so chatView.js renders it as a
-    // quiet recap card instead of a normal character bubble. Every copied
-    // message below gets a NEW sequential timestamp (now+1, now+2, ...)
-    // instead of keeping its OWN older original createdAt, so
-    // getMessages()'s sort-by-createdAt actually places them after the
-    // recap regardless of how old the originals were.
+    // Copies one message into the new chat with a NEW sequential timestamp
+    // (rather than keeping its OWN older original createdAt) so
+    // getMessages()'s sort-by-createdAt places every copy in the exact
+    // relative order passed in here, regardless of how old the originals
+    // were - `seq` is just an incrementing counter shared across both
+    // keptFirst and keptLast batches below.
+    let seq = 0;
+    const copyMessage = async (source) => {
+      seq += 1;
+      await db.put('messages', {
+        id: `msg-${now}-${seq}-${Math.random().toString(36).substr(2, 4)}`,
+        chatId: newChat.id,
+        role: source.role,
+        content: source.content,
+        thoughts: source.thoughts,
+        swipeIndex: source.swipeIndex,
+        swipes: source.swipes,
+        toolTrace: source.toolTrace || [],
+        toolSegments: source.toolSegments || [],
+        images: source.images || [],
+        embeds: source.embeds || [],
+        createdAt: now + seq
+      });
+    };
+
+    // Order: opening messages, then the recap bridging the gap, then the
+    // most recent messages - so the new chat reads as a coherent timeline
+    // instead of the recap floating disconnected from what it's bridging.
+    for (const source of keptFirst) await copyMessage(source);
     await db.put('messages', {
       id: `msg-${now}-summary-${Math.random().toString(36).substr(2, 4)}`,
       chatId: newChat.id,
@@ -143,27 +182,24 @@ export class ChatStore {
       toolSegments: [],
       images: [],
       isSummary: true,
-      createdAt: now
+      createdAt: now + (++seq)
     });
-
-    for (let i = 0; i < kept.length; i++) {
-      const source = kept[i];
-      await db.put('messages', {
-        id: `msg-${now}-${i}-${Math.random().toString(36).substr(2, 4)}`,
-        chatId: newChat.id,
-        role: source.role,
-        content: source.content,
-        thoughts: source.thoughts,
-        swipeIndex: source.swipeIndex,
-        swipes: source.swipes,
-        toolTrace: source.toolTrace || [],
-        toolSegments: source.toolSegments || [],
-        images: source.images || [],
-        createdAt: now + i + 1
-      });
-    }
+    for (const source of keptLast) await copyMessage(source);
 
     return newChat;
+  }
+
+  /**
+   * The middle stretch `createCompactedChat` above will summarize (i.e.
+   * everything NOT in its keptFirst/keptLast windows) - exposed separately
+   * so chatView.js can build the exact same range into a transcript for the
+   * AI summarization call before actually calling createCompactedChat(),
+   * without either side having to duplicate (and risk drifting out of sync
+   * with) the slicing math.
+   */
+  static getCompactMiddleRange(messages, keepFirst = 4, keepLast = 4) {
+    const end = keepLast > 0 ? Math.max(keepFirst, messages.length - keepLast) : messages.length;
+    return messages.slice(keepFirst, end);
   }
 
   static async deleteChat(chatId) {

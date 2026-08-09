@@ -7,7 +7,7 @@ import { PromptBuilder } from '../../services/promptBuilder.js';
 import { ProviderManager } from '../../services/providerManager.js';
 import { MCPToolRegistry } from '../../services/mcpToolRegistry.js';
 import { AgentRunner } from '../../services/agentRunner.js';
-import { getBuiltinTools } from '../../services/builtinTools.js';
+import { getBuiltinTools, BUILTIN_EMBED_HTML_TOOL } from '../../services/builtinTools.js';
 import { supportsVision } from '../../utils/modelVision.js';
 import { readFileAsDataURL, MAX_IMAGE_BYTES, MAX_IMAGES_PER_MESSAGE } from '../../utils/imageUtils.js';
 import { estimateTokens } from '../../utils/tokenEstimate.js';
@@ -99,6 +99,27 @@ const COMPACT_RECOMMEND_THRESHOLD = 40;
 // The character's opening + earliest scene-setting turns - never folded into
 // the AI summary, so the new chat still opens the same way the original did.
 const COMPACT_KEEP_FIRST = 4;
+// The most recent turns - also never folded into the summary, so the new
+// chat can pick the scene back up immediately instead of the newest message
+// only surviving however well the AI's prose recap happened to capture it.
+const COMPACT_KEEP_LAST = 4;
+
+// Auto session-title generation cadence: a fresh session's default title is
+// generic ("Session 1 - <char>"), so the first real title comes early (as
+// soon as there's enough conversation to summarize) and then gets refreshed
+// periodically as the scene moves on - but not on every single message,
+// which would burn a title-generation call per turn for no real benefit.
+const AUTO_TITLE_FIRST_AT = 3;
+const AUTO_TITLE_INTERVAL = 15;
+
+/** Whether `messageCount` lands on an auto-title generation point - the
+ * first-ever title at AUTO_TITLE_FIRST_AT messages, then every
+ * AUTO_TITLE_INTERVAL messages on a fixed grid after that (not counted
+ * onward from the first trigger - simpler to reason about, and the two
+ * numbers are close enough that the difference is immaterial in practice). */
+function isAutoTitlePoint(messageCount) {
+  return messageCount === AUTO_TITLE_FIRST_AT || messageCount % AUTO_TITLE_INTERVAL === 0;
+}
 
 async function flushQueuedMessageIfAny() {
   if ((!queuedMessage && !queuedImages.length) || !queuedMessageHandlers) return;
@@ -171,7 +192,7 @@ function scrollToBottom(containerEl) {
  * direct child of `.message-block-inner`), but NOT during live generation,
  * where the typing indicator / swipe host wraps one-or-more `.message-content`
  * blocks inside an intermediate `#typing-indicator-content`/host div (see
- * `renderLiveBodyHTML`) so inline tool markers can sit between them. Returns
+ * `createLiveBodyHost`) so inline tool markers can sit between them. Returns
  * whichever DIRECT child of `containerEl` should be inserted-before to land
  * right above the content area, in either case.
  */
@@ -235,17 +256,63 @@ function syncThinkingBlock(containerEl, thinkingText, { streaming = false } = {}
 }
 
 /**
+ * Structured "Tools Used" content - one card per call (name, pretty-printed
+ * + syntax-highlighted JSON args, result text) instead of the old single
+ * wall of escaped plain text (`name(args)\n→ result` for every call joined
+ * by blank lines), which read as an undifferentiated dump once there was
+ * more than one call or the args/result were non-trivial. Declined calls get
+ * a visible badge instead of just reading TOOL_DECLINED_NOTICE as if it were
+ * a normal result. Excludes the builtin Embed HTML tool entirely (see
+ * `visibleToolTrace`) - `toolTrace` passed in here should already be
+ * pre-filtered by the caller, this only re-filters defensively.
+ */
+function toolTraceDetailHTML(toolTrace = []) {
+  const visible = visibleToolTrace(toolTrace);
+  if (!visible.length) return '';
+  return visible.map(t => {
+    let argsJson;
+    try {
+      argsJson = JSON.stringify(t.args ?? {}, null, 2);
+    } catch {
+      argsJson = String(t.args);
+    }
+    return `
+      <div class="tool-trace-entry">
+        <div class="tool-trace-entry-head">
+          <span class="tool-trace-entry-name">${escapeHtml(t.name)}</span>
+          ${t.declined ? '<span class="tool-trace-entry-declined">Declined</span>' : ''}
+        </div>
+        <pre class="tool-trace-entry-args"><code>${highlightCode(argsJson, 'json')}</code></pre>
+        ${!t.declined ? `<div class="tool-trace-entry-result">${escapeHtml(t.result || '')}</div>` : ''}
+      </div>
+    `;
+  }).join('');
+}
+
+/**
  * Creates/updates/removes a message's collapsible "Tools Used" block to match
  * `toolTrace` (an array of {name,args,result}) - used when a swipe variation
  * is switched to, so a stale tool-trace from a different variation isn't left
- * displayed alongside the newly-shown content.
+ * displayed alongside the newly-shown content. Visibility/the call-count
+ * badge are both driven by `visibleToolTrace(toolTrace)` (excludes the
+ * builtin Embed HTML tool - see that function) rather than the raw array, so
+ * a round that ONLY called the embed tool doesn't leave behind an oddly
+ * empty "Tools Used (1 call)" box.
+ *
+ * Inserted BEFORE the thinking-block if one exists (falling back to right
+ * before the content area otherwise) so "Tools Used" always sits above
+ * "Thinking" regardless of which of the two syncs runs first - the model
+ * decided to use tools, then reasoned/replied using what came back, so the
+ * tool activity reads as the earlier step.
  */
 function syncToolTraceBlock(containerEl, toolTrace = []) {
   if (!containerEl) return;
   const contentEl = findContentAnchor(containerEl);
+  const thinkingEl = containerEl.querySelector('.thinking-block');
   let block = containerEl.querySelector('.tool-trace-block');
 
-  if (!toolTrace || toolTrace.length === 0) {
+  const visible = visibleToolTrace(toolTrace);
+  if (!visible.length) {
     if (block) block.remove();
     return;
   }
@@ -263,12 +330,13 @@ function syncToolTraceBlock(containerEl, toolTrace = []) {
       <div class="thinking-content"></div>
     `;
     block.querySelector('.thinking-toggle').onclick = () => block.classList.toggle('expanded');
-    if (contentEl) containerEl.insertBefore(block, contentEl);
+    const anchor = thinkingEl || contentEl;
+    if (anchor) containerEl.insertBefore(block, anchor);
     else containerEl.appendChild(block);
   }
 
-  block.querySelector('.thinking-token-badge').textContent = `${toolTrace.length} call${toolTrace.length > 1 ? 's' : ''}`;
-  block.querySelector('.thinking-content').textContent = toolTrace.map(t => `${t.name}(${JSON.stringify(t.args)})\n→ ${t.result}`).join('\n\n');
+  block.querySelector('.thinking-token-badge').textContent = `${visible.length} call${visible.length > 1 ? 's' : ''}`;
+  block.querySelector('.thinking-content').innerHTML = toolTraceDetailHTML(toolTrace);
 }
 
 /**
@@ -312,21 +380,36 @@ function collectToolEmbeds(toolTrace = []) {
 }
 
 /**
+ * Drops builtin Embed HTML calls from anything that displays a raw tool
+ * NAME/count (the inline marker, the live "Tools Used" spinner box, the
+ * collapsible trace listing) - the embed card itself (messageEmbedsHTML(),
+ * rendered separately and unaffected by this filter) is already visible
+ * proof it ran, so a redundant "builtin__embed_html" label next to it is
+ * just technical noise. A round that called ONLY the embed tool ends up with
+ * no note/badge at all, which is the intended outcome, not a bug.
+ */
+function visibleToolTrace(toolTrace = []) {
+  return (toolTrace || []).filter(t => t && t.name !== BUILTIN_EMBED_HTML_TOOL);
+}
+
+/**
  * HTML for one `.tool-inline-note` marker covering a group of tool call(s)
  * (comma-joined + de-duplicated names, same as the old whole-message note),
- * or '' if that group called no tools. When the group represents more than
- * one individual call - several rounds merged together with no narration
- * text between them (see `renderMessageBodyHTML`), or just several tools
- * called in one round - a "(Nx)" count is appended so calling the same tool
- * repeatedly doesn't silently collapse into a single name with no indication
- * it happened more than once. Applies the same way whether the merged calls
- * are the same tool repeated or different tools, per the user's request.
- * Tool names come from user-configured MCP servers, so they're escaped.
+ * or '' if that group called no (visible - see `visibleToolTrace`) tools.
+ * When the group represents more than one individual call - several rounds
+ * merged together with no narration text between them (see
+ * `renderMessageBodyHTML`), or just several tools called in one round - a
+ * "(Nx)" count is appended so calling the same tool repeatedly doesn't
+ * silently collapse into a single name with no indication it happened more
+ * than once. Applies the same way whether the merged calls are the same tool
+ * repeated or different tools, per the user's request. Tool names come from
+ * user-configured MCP servers, so they're escaped.
  */
 function toolInlineNoteHTML(toolTrace = []) {
-  const names = toolTraceNames(toolTrace);
+  const visible = visibleToolTrace(toolTrace);
+  const names = toolTraceNames(visible);
   if (!names) return '';
-  const suffix = toolTrace.length > 1 ? ` (${toolTrace.length}x)` : '';
+  const suffix = visible.length > 1 ? ` (${visible.length}x)` : '';
   return `<div class="tool-inline-note">${WRENCH_ICON_SVG}<span>${escapeHtml(names + suffix)}</span></div>`;
 }
 
@@ -349,8 +432,8 @@ function hasToolSegments(msg) {
  * empty text - a model very often calls a tool with no lead-in text, and can
  * do that across several consecutive rounds (call tool A, get the result,
  * immediately call tool B still with no narration). Shared by
- * `renderMessageBodyHTML` (persisted messages) and `renderLiveBodyHTML`
- * (mid-generation) so both apply the exact same grouping.
+ * `renderMessageBodyHTML` (persisted messages) and `liveCommittedGroupsHTML`
+ * (mid-generation, via `createLiveBodyHost`) so both apply the exact same grouping.
  */
 function groupToolSegments(segments) {
   const groups = [];
@@ -405,10 +488,110 @@ function messageImagesHTML(msg) {
 }
 
 /**
- * Renders `msg.embeds` (see `collectToolEmbeds` above) - HTML/CSS/JS the
- * builtin "Embed HTML" tool produced mid-reply - as one bordered card per
- * entry, each holding a SANDBOXED iframe. This is the security-critical
- * render path for that tool:
+ * Whether the app is CURRENTLY showing the dark palette - mirrors the same
+ * resolution js/ui/theme.js's applyThemeMode() uses: an explicit
+ * `data-theme` attribute wins, 'auto' (the attribute is absent) falls back
+ * to the OS media query. Needed because a sandboxed iframe is a fully
+ * separate document - it does NOT inherit the parent page's CSS custom
+ * properties, so an embed rendered with no explicit styling of its own used
+ * to default to the BROWSER's baseline white-background/black-text look
+ * regardless of the app's theme. See buildEmbedDocument() below.
+ */
+function isDarkThemeActive() {
+  const attr = document.documentElement.getAttribute('data-theme');
+  if (attr === 'dark') return true;
+  if (attr === 'light') return false;
+  return !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+}
+
+/**
+ * Resolves the handful of CSS custom properties an embedded document needs
+ * to LOOK like part of the current chat theme, as literal computed values
+ * (a var(--x) reference is meaningless inside the iframe's own separate
+ * document - it has no access to this page's :root).
+ */
+function getEmbedThemeVars() {
+  const cs = getComputedStyle(document.documentElement);
+  const dark = isDarkThemeActive();
+  const read = (name, fallback) => (cs.getPropertyValue(name) || '').trim() || fallback;
+  return {
+    scheme: dark ? 'dark' : 'light',
+    text: read('--text-main', dark ? '#e2e8f0' : '#1e293b'),
+    accent: read('--accent-primary', '#4f46e5'),
+    font: read('--font-family', 'system-ui, sans-serif')
+  };
+}
+
+// Injected into every embed document so it auto-reports its real content
+// height back to the parent window (see the 'message' listener wired in
+// render() below) - the iframe otherwise has no way to size itself to its
+// own content, since cross-origin sandboxing (deliberately no
+// allow-same-origin - see messageEmbedsHTML's security note) means the
+// parent can't just read contentDocument.body.scrollHeight directly.
+const EMBED_RESIZE_SCRIPT = `<script>(function(){
+function reportHeight(){
+  try {
+    var h = Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0);
+    parent.postMessage({ type: 'nnzrp-embed-resize', height: h }, '*');
+  } catch (e) {}
+}
+window.addEventListener('load', reportHeight);
+if (window.ResizeObserver && document.body) new ResizeObserver(reportHeight).observe(document.body);
+setTimeout(reportHeight, 60);
+setTimeout(reportHeight, 300);
+})();</script>`;
+
+/**
+ * Wraps the model's raw HTML with a small reset stylesheet (transparent
+ * background + theme-matched text/link/selection colors, so unstyled
+ * elements blend into the current chat theme instead of defaulting to a
+ * plain white box) and the resize script above. Handles both shapes the
+ * model might send - a bare fragment (most common: a chart/canvas snippet)
+ * gets wrapped in a full minimal document; something that's already a full
+ * `<!DOCTYPE html>`/`<html>` document gets the style spliced into its
+ * <head> (or a <head> synthesized right after <html> if it has none) and
+ * the script appended before </body> - falling back to plain string
+ * concatenation if no recognizable head/body boundary exists, since the
+ * browser's HTML parser is tolerant of a stray trailing <style>/<script>.
+ */
+function buildEmbedDocument(rawHtml) {
+  const theme = getEmbedThemeVars();
+  const style = `<style>
+    :root { color-scheme: ${theme.scheme}; }
+    html, body { margin:0; padding:0.65rem; background:transparent; color:${theme.text}; font-family:${theme.font}; font-size:14px; }
+    a { color:${theme.accent}; }
+    ::selection { background:${theme.accent}; color:#fff; }
+  </style>`;
+
+  const isFullDocument = /^\s*<!doctype html|^\s*<html[\s>]/i.test(rawHtml);
+  if (!isFullDocument) {
+    return `<!DOCTYPE html><html><head><meta charset="utf-8">${style}</head><body>${rawHtml}${EMBED_RESIZE_SCRIPT}</body></html>`;
+  }
+
+  let doc = rawHtml;
+  doc = /<head[\s>]/i.test(doc)
+    ? doc.replace(/<head([^>]*)>/i, `<head$1>${style}`)
+    : doc.replace(/<html([^>]*)>/i, `<html$1><head>${style}</head>`);
+  doc = /<\/body>/i.test(doc)
+    ? doc.replace(/<\/body>/i, `${EMBED_RESIZE_SCRIPT}</body>`)
+    : doc + EMBED_RESIZE_SCRIPT;
+  return doc;
+}
+
+/**
+ * Renders a `[{html, title}]` list (see `collectToolEmbeds` above - either
+ * one round's own slice of a live/persisted toolTrace, or the whole
+ * message's flat `msg.embeds` fallback, see the two call sites below) as one
+ * SANDBOXED iframe per entry, sitting directly in the message flow (no card
+ * border/background - a boxed "in a box inside the chat" look read as
+ * visually disconnected from the surrounding message, so the only chrome
+ * left is the small quiet label above it, same treatment `.tool-inline-note`
+ * already uses elsewhere). Called from BOTH `renderMessageBodyHTML` (per
+ * round, right where that round's tool marker sits - not appended once at
+ * the bottom regardless of which round produced it) and `liveCommittedGroupsHTML`
+ * (same per-round placement, live, the moment a streaming round's tool call
+ * resolves rather than waiting for the whole turn to finish).
+ * This is the security-critical render path for that tool:
  *   - `sandbox="allow-scripts"` and NOTHING else. Deliberately no
  *     `allow-same-origin` - omitting it is what gives the iframe a unique,
  *     opaque origin even though scripts run inside it, so an embedded script
@@ -419,66 +602,124 @@ function messageImagesHTML(msg) {
  *     either - no form posts, no popup spam, no alert()/confirm()/prompt()
  *     floods, no navigating the app away.
  *   - Content is set via the `srcdoc` ATTRIBUTE (not `src="data:..."`), the
- *     standard way to hand an iframe inline sandboxed markup. `e.html` is
- *     model-generated untrusted text, so it goes through `escapeAttr()` same
- *     as every other attribute value in this file - the browser HTML-decodes
- *     the attribute value back into the iframe's srcdoc document, so
- *     entity-escaping here is exactly the correct (and only) encoding step,
- *     not a double-escape.
- *   - Fixed size (`.message-embed-frame` in css/chat.css) so one large/tall
- *     embed can't blow out the surrounding chat layout; the embed can still
- *     scroll internally if its own content is taller.
+ *     standard way to hand an iframe inline sandboxed markup. The document
+ *     text (see buildEmbedDocument()) is model-generated untrusted content,
+ *     so it goes through `escapeAttr()` same as every other attribute value
+ *     in this file - the browser HTML-decodes the attribute value back into
+ *     the iframe's srcdoc document, so entity-escaping here is exactly the
+ *     correct (and only) encoding step, not a double-escape.
+ *   - Starts at a small placeholder height and grows to fit its own content
+ *     via the postMessage height report (see the 'message' listener in
+ *     render()) instead of a fixed box that's mostly empty for small embeds
+ *     - clamped both directions there so one runaway/huge embed still can't
+ *     blow out the chat layout.
  * `e.title` (also model-generated, also escaped) is an optional label shown
- * above the frame; falls back to a generic "AI-generated embed" caption so
- * the card always reads as distinct from normal chat content, the same way
- * `.tool-trace-block`/`.tool-live-block` are visually set apart elsewhere.
+ * above the frame; falls back to a generic "AI-generated embed" caption.
  */
-function messageEmbedsHTML(msg) {
-  if (!Array.isArray(msg.embeds) || !msg.embeds.length) return '';
-  return msg.embeds.map(e => `
+function embedCardsHTML(embeds = []) {
+  const list = (embeds || []).filter(e => e && e.html);
+  if (!list.length) return '';
+  return list.map(e => `
     <div class="message-embed-card">
       <div class="message-embed-label">${WRENCH_ICON_SVG}<span>${e.title ? escapeHtml(e.title) : 'AI-generated embed'}</span></div>
-      <iframe class="message-embed-frame" sandbox="allow-scripts" srcdoc="${escapeAttr(e.html)}"></iframe>
+      <iframe class="message-embed-frame" sandbox="allow-scripts" srcdoc="${escapeAttr(buildEmbedDocument(e.html))}"></iframe>
     </div>
   `).join('');
+}
+
+// Whole-message fallback (see renderMessageBodyHTML's non-segmented branch
+// below) - only used when there's no per-round toolSegments data to place an
+// embed at its actual call site, e.g. messages persisted before toolSegments
+// existed. `msg.embeds` (ChatStore.addMessage's field) is the same
+// {html,title} shape embedCardsHTML expects.
+function messageEmbedsHTML(msg) {
+  return embedCardsHTML(msg.embeds);
 }
 
 function renderMessageBodyHTML(msg, formatFn, userName, charName) {
   if (hasToolSegments(msg)) {
     const groups = groupToolSegments(msg.toolSegments);
+    // Embeds render at the exact point the round that produced them sits in
+    // the message - immediately after that round's inline tool marker -
+    // instead of every embed in the whole message being appended once at
+    // the very bottom regardless of which round actually called the tool.
     return messageImagesHTML(msg) + groups.map(g => g.type === 'text'
       ? `<div class="message-content" data-msgid="${msg.id}">${formatFn(g.text, userName, charName)}</div>`
-      : toolInlineNoteHTML(g.tools)
-    ).join('') + messageEmbedsHTML(msg);
+      : toolInlineNoteHTML(g.tools) + embedCardsHTML(collectToolEmbeds(g.tools))
+    ).join('');
   }
+  // No toolSegments (old data, or a tool-less message) - no per-round
+  // boundary to place an embed at, so it falls back to the old
+  // whole-message-appended-at-the-end placement via messageEmbedsHTML(msg).
   const toolTrace = Array.isArray(msg.toolTrace) ? msg.toolTrace : [];
   const text = formatFn(msg.content, userName, charName);
   return `${messageImagesHTML(msg)}<div class="message-content" data-msgid="${msg.id}">${text}</div>${toolInlineNoteHTML(toolTrace)}${messageEmbedsHTML(msg)}`;
 }
 
-/**
- * Live counterpart to `renderMessageBodyHTML`, used while a turn is still
- * streaming so tool markers appear AS SOON AS a round's tool call resolves
- * instead of only once the whole turn is persisted (previously the live
- * typing indicator only ever showed plain joined text - no inline note until
- * `renderMessages()` re-rendered from the committed message). `committedSegments`
- * is the `segments` array `AgentRunner`'s `onRoundComplete` hands back each
- * round boundary (every round that's fully finished, tool call included);
- * `currentText` is the round currently streaming in (no `tools` yet, still in
- * progress) and always gets its own trailing block, falling back to
- * `placeholderHTML` ("...sedang mengetik...") while it's still empty - e.g.
- * right after a tool resolves and the next round hasn't produced any text yet.
- */
-function renderLiveBodyHTML(committedSegments, currentText, placeholderHTML, formatFn) {
+function liveCommittedGroupsHTML(committedSegments, formatFn) {
   const groups = groupToolSegments(committedSegments);
-  let html = groups.map(g => g.type === 'text'
+  return groups.map(g => g.type === 'text'
     ? `<div class="message-content">${formatFn(g.text)}</div>`
-    : toolInlineNoteHTML(g.tools)
+    : toolInlineNoteHTML(g.tools) + embedCardsHTML(collectToolEmbeds(g.tools))
   ).join('');
-  html += currentText.trim()
+}
+
+function liveCurrentTextHTML(currentText, placeholderHTML, formatFn) {
+  return currentText.trim()
     ? `<div class="message-content">${formatFn(currentText)}</div>`
     : `<div class="message-content">${placeholderHTML}</div>`;
-  return html;
+}
+
+/**
+ * Live counterpart to `renderMessageBodyHTML`, used while a turn is still
+ * streaming so tool markers (and, same as the persisted path above, any
+ * embed a round's tool call produced) appear AS SOON AS that round resolves
+ * instead of only once the whole turn is persisted. Returns an incremental
+ * updater rather than an HTML string, driving the host element
+ * (`triggerAIGeneration`'s typing indicator, `handleSwipeNext`'s swipe
+ * preview) across every throttled content chunk while generating:
+ *
+ * An earlier version just built one HTML string (committed segments +
+ * current streaming text) and assigned it wholesale to the host's
+ * `innerHTML` on EVERY chunk - harmless for plain text, but it also
+ * destroyed and recreated any already-finished round's embed iframe
+ * (`embedCardsHTML`/`.message-embed-frame`) each time, which re-fired that
+ * iframe's `load` event, re-ran its resize handshake, and re-played its
+ * grow-in height transition on every single streamed chunk for the rest of
+ * the turn - a distracting flash/repeat instead of the one-time entrance it
+ * was meant to be.
+ *
+ * This splits the host into two sub-divs instead: `committedHost` (finished
+ * rounds - text, tool markers, embeds; `committedSegments` is the `segments`
+ * array `AgentRunner`'s `onRoundComplete` hands back each round boundary,
+ * every round's toolTrace entries and any `.html`/`.htmlTitle` they carry
+ * already attached) only gets rebuilt when `liveSegments` itself changes (a
+ * new round just completed - `onRoundComplete` always REASSIGNS
+ * `liveSegments` to a new array rather than mutating one in place, so a
+ * plain `!==` reference check in `.update()` is a correct and cheap "did
+ * anything actually change" test) - not on every text chunk. `currentHost`
+ * (the round currently streaming in, no `tools` yet, plain text only, no
+ * iframes - falls back to `placeholderHTML` e.g. "...sedang mengetik..."
+ * while still empty) still updates on every chunk same as before - there's
+ * nothing there to lose animation state.
+ */
+function createLiveBodyHost(hostEl, formatFn, placeholderHTML) {
+  const committedHost = document.createElement('div');
+  const currentHost = document.createElement('div');
+  hostEl.innerHTML = '';
+  hostEl.appendChild(committedHost);
+  hostEl.appendChild(currentHost);
+
+  let lastSegments = null;
+  return {
+    update(liveSegments, currentText) {
+      if (liveSegments !== lastSegments) {
+        committedHost.innerHTML = liveCommittedGroupsHTML(liveSegments, formatFn);
+        lastSegments = liveSegments;
+      }
+      currentHost.innerHTML = liveCurrentTextHTML(currentText, placeholderHTML, formatFn);
+    }
+  };
 }
 
 /**
@@ -494,7 +735,12 @@ function renderLiveBodyHTML(committedSegments, currentText, placeholderHTML, for
  */
 function syncMessageBody(containerEl, msg, formatFn, userName, charName) {
   if (!containerEl) return;
-  containerEl.querySelectorAll('.message-content, .tool-inline-note').forEach(el => el.remove());
+  // .message-image-row/.message-embed-card were missing from this cleanup -
+  // renderMessageBodyHTML() always emits fresh copies of both (from the
+  // NEW msg.images/msg.embeds) alongside the fresh .message-content below,
+  // so leaving the OLD variation's copies in place doubled them up instead
+  // of replacing them on every edit/swipe.
+  containerEl.querySelectorAll('.message-content, .tool-inline-note, .message-image-row, .message-embed-card').forEach(el => el.remove());
   const footerEl = containerEl.querySelector('.message-footer');
   const wrap = document.createElement('div');
   wrap.innerHTML = renderMessageBodyHTML(msg, formatFn, userName, charName);
@@ -517,8 +763,13 @@ function syncLiveToolBox(containerEl, calls = []) {
   if (!containerEl) return;
   const contentEl = findContentAnchor(containerEl);
   let block = containerEl.querySelector('.tool-live-block');
+  // Same "don't show the builtin Embed HTML tool's raw name" rule as
+  // visibleToolTrace() - here too the embed card itself (once it lands) is
+  // the visible proof, not a spinner line reading "Using tool:
+  // builtin__embed_html...".
+  const visibleCalls = calls.filter(c => c && c.name !== BUILTIN_EMBED_HTML_TOOL);
 
-  if (!calls.length) {
+  if (!visibleCalls.length) {
     if (block) block.remove();
     return;
   }
@@ -532,7 +783,7 @@ function syncLiveToolBox(containerEl, calls = []) {
 
   block.innerHTML = `
     <div class="tool-live-header">${WRENCH_ICON_SVG}<span>Tools Used</span></div>
-    ${calls.map(c => {
+    ${visibleCalls.map(c => {
       // A call the user refused never ran at all - shown here as a distinct
       // third state (not a spinner, not a success check) so "I said no" is
       // immediately legible in the same place the running calls appear.
@@ -991,7 +1242,7 @@ export class ChatView {
               <div class="card" style="padding:1rem;">
                 <div style="font-weight:700; font-size:0.88rem; margin-bottom:0.3rem;">Compact Chat</div>
                 <p style="font-size:0.78rem; color:var(--text-muted); margin-bottom:0.75rem;">
-                  Rangkum percakapan ini dengan AI ke sesi chat baru agar tetap ringan tanpa kehilangan konteks. 4 pesan pertama tidak akan dirangkum.
+                  Rangkum percakapan ini dengan AI ke sesi chat baru agar tetap ringan tanpa kehilangan konteks. 4 pesan pertama dan 4 pesan terakhir tidak akan dirangkum.
                 </p>
                 <button class="btn btn-secondary btn-sm" id="btn-drawer-compact-chat" style="width:100%;">Compact Chat Sekarang</button>
               </div>
@@ -1135,6 +1386,28 @@ export class ChatView {
     };
     window.addEventListener('keydown', handleKeydown);
 
+    // Auto-resize handler for embed-HTML iframes (js/ui/views/chatView.js's
+    // messageEmbedsHTML/buildEmbedDocument/EMBED_RESIZE_SCRIPT) - the iframe
+    // is sandboxed WITHOUT allow-same-origin on purpose (see the security
+    // note on messageEmbedsHTML), so the parent has no direct read access to
+    // its contentDocument; the embed document instead posts its own content
+    // height and this matches the message by `event.source` (the iframe's
+    // window) against every currently-mounted `.message-embed-frame`.
+    // Clamped both directions so one tiny or one huge/runaway embed can't
+    // collapse to nothing or blow out the chat layout.
+    const handleEmbedResize = (e) => {
+      if (!e.data || e.data.type !== 'nnzrp-embed-resize') return;
+      const frames = container.querySelectorAll('.message-embed-frame');
+      for (const frame of frames) {
+        if (frame.contentWindow === e.source) {
+          const h = Math.min(Math.max(Number(e.data.height) || 0, 40), 800);
+          frame.style.height = `${h}px`;
+          break;
+        }
+      }
+    };
+    window.addEventListener('message', handleEmbedResize);
+
     // Copy button for fenced code blocks (marked.use({renderer:{code}}) above)
     // - ONE delegated listener on the container that outlives every
     // renderMessages()/syncMessageBody() innerHTML replacement, instead of
@@ -1162,6 +1435,7 @@ export class ChatView {
     if (backBtn && onBack) {
       backBtn.onclick = () => {
         window.removeEventListener('keydown', handleKeydown);
+        window.removeEventListener('message', handleEmbedResize);
         onBack();
       };
     }
@@ -1486,12 +1760,17 @@ export class ChatView {
     };
 
     /**
-     * Compact Chat: summarizes everything after the first COMPACT_KEEP_FIRST
-     * messages via the active proxy, then creates a brand-new chat session
-     * (ChatStore.createCompactedChat) carrying the kept opening turns plus
-     * that one recap message, and switches straight into it. The original
-     * chat is left completely untouched - this is additive, not destructive,
-     * so a bad summary never costs the user their real history.
+     * Compact Chat: summarizes the MIDDLE stretch of the conversation via the
+     * active proxy - everything except the first COMPACT_KEEP_FIRST and last
+     * COMPACT_KEEP_LAST messages, see ChatStore.getCompactMiddleRange/
+     * createCompactedChat's JSDoc for why both ends are kept verbatim now
+     * (an earlier version only kept the opening and folded even the newest
+     * message into the summary, which read as "my last message got
+     * deleted") - then creates a brand-new chat session carrying the kept
+     * opening turns, the recap, and the kept recent turns, and switches
+     * straight into it. The original chat is left completely untouched -
+     * this is additive, not destructive, so a bad summary never costs the
+     * user their real history.
      */
     const handleCompactChat = async () => {
       if (isGenerating) {
@@ -1499,7 +1778,7 @@ export class ChatView {
         return;
       }
       const msgs = await ChatStore.getMessages(currentChatId);
-      if (msgs.length <= COMPACT_KEEP_FIRST) {
+      if (msgs.length <= COMPACT_KEEP_FIRST + COMPACT_KEEP_LAST) {
         Toast.info('Belum cukup pesan untuk di-compact.');
         return;
       }
@@ -1519,7 +1798,7 @@ export class ChatView {
         const userName = activePersonaObj?.name || 'User';
         const charName = activeChar?.name || 'Character';
 
-        const toSummarize = msgs.slice(COMPACT_KEEP_FIRST);
+        const toSummarize = ChatStore.getCompactMiddleRange(msgs, COMPACT_KEEP_FIRST, COMPACT_KEEP_LAST);
         const transcript = toSummarize
           .map(m => `${m.role === 'user' ? userName : charName}: ${m.content}`)
           .join('\n\n');
@@ -1541,7 +1820,7 @@ export class ChatView {
 
         if (!summary || !summary.trim()) throw new Error('Ringkasan kosong dari AI.');
 
-        const newChat = await ChatStore.createCompactedChat(currentChatId, summary.trim(), COMPACT_KEEP_FIRST);
+        const newChat = await ChatStore.createCompactedChat(currentChatId, summary.trim(), COMPACT_KEEP_FIRST, COMPACT_KEEP_LAST);
         compactDismissedChats.add(currentChatId);
 
         currentChatId = newChat.id;
@@ -2016,6 +2295,7 @@ export class ChatView {
         const isLastAssistant = !isUser && idx === lastAssistantIndex;
         const thoughtsText = (m.thoughts || '').trim();
         const toolTrace = Array.isArray(m.toolTrace) ? m.toolTrace : [];
+        const visibleTrace = visibleToolTrace(toolTrace);
 
         return `
           <div class="message-block ${isUser ? 'user' : 'assistant'}${m.isSummary ? ' summary-message-block' : ''}" data-id="${m.id}">
@@ -2032,6 +2312,18 @@ export class ChatView {
                 </div>
               ` : ''}
 
+              ${!isUser && visibleTrace.length > 0 ? `
+                <div class="tool-trace-block" data-msgid="${m.id}">
+                  <button class="thinking-toggle" type="button">
+                    ${WRENCH_ICON_SVG}
+                    <svg class="thinking-chevron" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"></path></svg>
+                    <span>Tools Used</span>
+                    <span class="thinking-token-badge">${visibleTrace.length} call${visibleTrace.length > 1 ? 's' : ''}</span>
+                  </button>
+                  <div class="thinking-content">${toolTraceDetailHTML(toolTrace)}</div>
+                </div>
+              ` : ''}
+
               ${!isUser && thoughtsText ? `
                 <div class="thinking-block ${isThinkingCollapsedDefault ? '' : 'expanded'}" data-msgid="${m.id}">
                   <button class="thinking-toggle" type="button">
@@ -2040,18 +2332,6 @@ export class ChatView {
                     <span class="thinking-token-badge">${estimateThinkingTokens(thoughtsText).toLocaleString()} tokens</span>
                   </button>
                   <div class="thinking-content">${escapeHtml(thoughtsText)}</div>
-                </div>
-              ` : ''}
-
-              ${!isUser && toolTrace.length > 0 ? `
-                <div class="tool-trace-block" data-msgid="${m.id}">
-                  <button class="thinking-toggle" type="button">
-                    ${WRENCH_ICON_SVG}
-                    <svg class="thinking-chevron" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"></path></svg>
-                    <span>Tools Used</span>
-                    <span class="thinking-token-badge">${toolTrace.length} call${toolTrace.length > 1 ? 's' : ''}</span>
-                  </button>
-                  <div class="thinking-content">${escapeHtml(toolTrace.map(t => `${t.name}(${JSON.stringify(t.args)})\n→ ${t.result}`).join('\n\n'))}</div>
                 </div>
               ` : ''}
 
@@ -2282,8 +2562,14 @@ export class ChatView {
       await refreshCompactBanner();
     };
 
-    // Auto-generate a short session title every 10 messages, unless the user
-    // has manually renamed the session (chat.titleEdited).
+    // Auto-generates a short session title at the cadence isAutoTitlePoint()
+    // defines (first at AUTO_TITLE_FIRST_AT messages, then every
+    // AUTO_TITLE_INTERVAL after that), unless the user has manually renamed
+    // the session (chat.titleEdited). Only ever reads the last 10
+    // messages/3000 chars of the conversation, never the whole (potentially
+    // very long) history - a title just needs a recent flavor of the scene,
+    // not the full transcript, and re-sending the whole thing on every
+    // regeneration would burn tokens for no benefit to the title itself.
     const generateAutoTitle = async (chatObj, messagesForTitle) => {
       try {
         const proxyObj = await ProxyStore.getDefault();
@@ -2387,7 +2673,7 @@ export class ChatView {
       // save): `liveSegments` is every round that's fully finished (tool call
       // included, straight from AgentRunner's `onRoundComplete` payload),
       // `currentRoundText` is just the round CURRENTLY streaming in, with no
-      // `tools` yet. Rendering these separately (via `renderLiveBodyHTML`) is
+      // `tools` yet. Rendering these separately (via `createLiveBodyHost`) is
       // what lets a tool marker appear the moment its round resolves, instead
       // of only once the whole turn commits and `renderMessages()` re-renders
       // from the persisted `toolSegments`.
@@ -2397,12 +2683,13 @@ export class ChatView {
 
       const typingInnerEl = typingIndicator.querySelector('.message-block-inner');
       const typingContentEl = typingIndicator.querySelector('#typing-indicator-content');
-      typingContentEl.innerHTML = renderLiveBodyHTML(liveSegments, currentRoundText, typingPlaceholderHTML, (t) => this.formatRoleplayMarkdown(t));
+      const typingBodyHost = createLiveBodyHost(typingContentEl, (t) => this.formatRoleplayMarkdown(t), typingPlaceholderHTML);
+      typingBodyHost.update(liveSegments, currentRoundText);
 
       // Coalesce rapid/bursty chunk delivery into at most one DOM update per
       // ~50ms - see createThrottledRenderer's comment.
       const scheduleContentRender = createThrottledRenderer(() => {
-        typingContentEl.innerHTML = renderLiveBodyHTML(liveSegments, currentRoundText, typingPlaceholderHTML, (t) => this.formatRoleplayMarkdown(t));
+        typingBodyHost.update(liveSegments, currentRoundText);
         scrollToBottom(messagesEl);
       });
       const scheduleThinkingRender = createThrottledRenderer(() => {
@@ -2420,6 +2707,7 @@ export class ChatView {
           signal: abortSignal,
           maxIterations: mcpMaxIterations,
           transformFirstResult: (result) => mergePrefillResult(genSettings, result),
+          characterAvatar: activeChar.avatar,
           callbacks: {
             onContentChunk: (delta) => {
               liveContent += delta;
@@ -2499,7 +2787,7 @@ export class ChatView {
 
         const updatedMessages = await ChatStore.getMessages(currentChatId);
         const chatObj = await ChatStore.getChatById(currentChatId);
-        if (chatObj && !chatObj.titleEdited && updatedMessages.length % 10 === 0) {
+        if (chatObj && !chatObj.titleEdited && isAutoTitlePoint(updatedMessages.length)) {
           generateAutoTitle(chatObj, updatedMessages);
         }
       } catch (err) {
@@ -2733,7 +3021,9 @@ export class ChatView {
     // markers, not just one. A single fresh `.message-content` is (re)built
     // below to hold the live streaming text; once the new variation is actually
     // persisted, `onDone` -> `refreshMessageBlock` rebuilds the final (possibly
-    // re-segmented) DOM from the stored message.
+    // re-segmented) DOM from the stored message. Also clears any images/embeds
+    // the OLD variation attached - left in place, they doubled up alongside
+    // whatever the NEW variation attaches instead of being replaced by it.
     if (blockInnerEl) {
       const staleThinking = blockInnerEl.querySelector('.thinking-block');
       if (staleThinking) staleThinking.remove();
@@ -2741,12 +3031,12 @@ export class ChatView {
       if (staleTrace) staleTrace.remove();
       const staleLive = blockInnerEl.querySelector('.tool-live-block');
       if (staleLive) staleLive.remove();
-      blockInnerEl.querySelectorAll('.message-content, .tool-inline-note').forEach(el => el.remove());
+      blockInnerEl.querySelectorAll('.message-content, .tool-inline-note, .message-image-row, .message-embed-card').forEach(el => el.remove());
     }
 
     // Wrapper host, not itself `.message-content` - a live variation can
     // involve several `.message-content`/`.tool-inline-note` pairs once tool
-    // calls are involved (see `renderLiveBodyHTML`), same as a persisted
+    // calls are involved (see `createLiveBodyHost`), same as a persisted
     // multi-segment message does.
     const contentHostEl = document.createElement('div');
     if (blockInnerEl) {
@@ -2781,10 +3071,12 @@ export class ChatView {
     // inconsistent status between a fresh reply and a swiped one.
     const swipePlaceholderHTML = `<em style="color:var(--text-dim);">${escapeHtml(activeChar.name)} sedang mengetik...</em>`;
 
+    const swipeBodyHost = contentHostEl ? createLiveBodyHost(contentHostEl, (t) => ChatView.formatRoleplayMarkdown(t), swipePlaceholderHTML) : null;
+
     // Coalesce rapid/bursty chunk delivery into at most one DOM update per
     // ~50ms - see createThrottledRenderer's comment.
     const scheduleContentRender = createThrottledRenderer(() => {
-      if (contentHostEl) contentHostEl.innerHTML = renderLiveBodyHTML(liveSegments, currentRoundText, swipePlaceholderHTML, (t) => ChatView.formatRoleplayMarkdown(t));
+      if (swipeBodyHost) swipeBodyHost.update(liveSegments, currentRoundText);
       scrollToBottom(messagesEl);
     });
     const scheduleThinkingRender = createThrottledRenderer(() => {
@@ -2795,14 +3087,16 @@ export class ChatView {
     try {
       // Non-streaming mode has nothing to progressively render (the whole
       // reply arrives at once at the end), so this always just shows the
-      // placeholder wrapped the same way `renderLiveBodyHTML` would wrap real
+      // placeholder wrapped the same way `createLiveBodyHost` would wrap real
       // content - keeping `.message-content`'s own styling (font-size,
       // line-height) rather than leaving the `<em>` as a bare, unstyled child
       // of `contentHostEl`.
       if (contentHostEl) {
-        contentHostEl.innerHTML = genSettings.streamingEnabled
-          ? renderLiveBodyHTML(liveSegments, currentRoundText, swipePlaceholderHTML, (t) => ChatView.formatRoleplayMarkdown(t))
-          : `<div class="message-content">${swipePlaceholderHTML}</div>`;
+        if (genSettings.streamingEnabled) {
+          swipeBodyHost.update(liveSegments, currentRoundText);
+        } else {
+          contentHostEl.innerHTML = `<div class="message-content">${swipePlaceholderHTML}</div>`;
+        }
       }
 
       const { content: newContent, thinking: newThinking, toolTrace, segments: newSegments } = await AgentRunner.run({
@@ -2814,6 +3108,7 @@ export class ChatView {
         signal: abortSignal,
         maxIterations: mcpMaxIterations,
         transformFirstResult: (result) => mergePrefillResult(genSettings, result),
+        characterAvatar: activeChar.avatar,
         callbacks: {
           onContentChunk: (delta) => {
             liveContent += delta;

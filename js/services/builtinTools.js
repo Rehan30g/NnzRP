@@ -26,17 +26,29 @@ export const BUILTIN_EMBED_HTML_TOOL = 'builtin__embed_html';
 // meaningful sandbox boundary itself (the iframe sandbox attribute is what
 // actually matters for safety, see executeBuiltinEmbedHtmlTool below), just a
 // sanity limit so one call can't balloon a chat message/IndexedDB record with
-// an unbounded string.
+// an unbounded string. Checked BEFORE `{{char_avatar}}` substitution, so it
+// caps the model's own authored markup, not the substituted avatar's size
+// (an uploaded avatar can legitimately be a large base64 string).
 const MAX_EMBED_HTML_LENGTH = 20000;
 const MAX_EMBED_TITLE_LENGTH = 120;
 
+// Placeholder both builtin tools recognize for "the active character's own
+// avatar" - resolved from execution context (AgentRunner.run()'s
+// `characterAvatar` option, ultimately chatView.js's `activeChar.avatar`),
+// never something the model has to know or type out itself. Necessary
+// because an uploaded avatar is stored as a base64 `data:` URL that can run
+// to hundreds of KB - asking a model to reproduce that verbatim as a tool
+// argument would be enormously token-wasteful and likely to get corrupted/
+// truncated, on top of it not actually knowing the value in the first place.
+const CHAR_AVATAR_PLACEHOLDER = '{{char_avatar}}';
+
 const VIEW_IMAGE_DESCRIPTOR = {
   qualifiedName: BUILTIN_VIEW_IMAGE_TOOL,
-  description: 'Fetch an image from a direct URL so you can actually see its visual content (not just read the URL text). Use this whenever a scene references a photo, screenshot, meme, document, or other image link and its contents matter.',
+  description: `Fetch an image from a direct URL so you can actually see its visual content (not just read the URL text). Use this whenever a scene references a photo, screenshot, meme, document, or other image link and its contents matter. Works with any http(s) URL, including localhost/local-network addresses (e.g. http://localhost:3000/photo.png) - not just public internet URLs. To view the CHARACTER'S OWN avatar/photo (the one set for this character), pass the exact literal string "${CHAR_AVATAR_PLACEHOLDER}" as the url instead of trying to guess or type out the real address.`,
   inputSchema: {
     type: 'object',
     properties: {
-      url: { type: 'string', description: 'Direct HTTP(S) URL to an image file (jpg, png, gif, webp).' }
+      url: { type: 'string', description: `Direct HTTP(S) URL to an image file (jpg, png, gif, webp) - localhost/local-network URLs are fine. Use the literal "${CHAR_AVATAR_PLACEHOLDER}" to view the character's own avatar instead of a real URL.` }
     },
     required: ['url']
   },
@@ -45,11 +57,11 @@ const VIEW_IMAGE_DESCRIPTOR = {
 
 const EMBED_HTML_DESCRIPTOR = {
   qualifiedName: BUILTIN_EMBED_HTML_TOOL,
-  description: 'Render a small self-contained HTML/CSS/JS snippet directly in the chat, shown to the user inside a sandboxed frame. Use this for visual content that genuinely benefits from real HTML/CSS/JS - a chart, a small canvas animation, an interactive diagram - NOT as a substitute for normal in-character prose narration; most replies should still just be written text. Write fully self-contained markup only: inline <style>/<script> tags, no external <script src> or network requests (the sandbox blocks them anyway).',
+  description: `Render a small self-contained HTML/CSS/JS snippet directly in the chat, shown to the user inside a sandboxed frame. Use this for visual content that genuinely benefits from real HTML/CSS/JS - a chart, a small canvas animation, an interactive diagram - NOT as a substitute for normal in-character prose narration; most replies should still just be written text. Write fully self-contained markup only: inline <style>/<script> tags, no external <script src> or network requests (the sandbox blocks them anyway). To show the CHARACTER'S OWN avatar/photo inside the embed, use the literal string "${CHAR_AVATAR_PLACEHOLDER}" as an <img> src (e.g. <img src="${CHAR_AVATAR_PLACEHOLDER}">) - it gets substituted with the real image automatically, never type out a real URL/data string yourself for it. THEME: the embed already receives the app's current text color and a transparent background matching whatever theme (light or dark) the user currently has active on their device/app, so avoid hardcoding a solid white or black page background that would clash with it. If you need your OWN explicit light/dark handling beyond that (e.g. a chart with colored fills), use the CSS "prefers-color-scheme" media query so it still matches the user's actual device/app theme instead of assuming one.`,
   inputSchema: {
     type: 'object',
     properties: {
-      html: { type: 'string', description: 'Self-contained HTML document/fragment to render (inline <style>/<script> only, no external resources).' },
+      html: { type: 'string', description: `Self-contained HTML document/fragment to render (inline <style>/<script> only, no external resources). Use "${CHAR_AVATAR_PLACEHOLDER}" as an <img> src to show the character's own avatar. Respect the current light/dark theme - see the tool description.` },
       title: { type: 'string', description: 'Optional short label shown above the embed.' }
     },
     required: ['html']
@@ -85,10 +97,28 @@ export async function getBuiltinTools(proxy) {
  * image under the size cap - AgentRunner already wraps tool execution in
  * try/catch and traces the error text back to the model, same as any other
  * tool failure.
+ *
+ * `context.characterAvatar` (see AgentRunner.run()'s matching option): when
+ * `args.url` is exactly the `{{char_avatar}}` placeholder, this resolves
+ * straight to the character's own avatar instead of treating it as a URL to
+ * fetch. If that avatar is already a `data:` URL (an uploaded avatar), it's
+ * returned directly with NO network request at all - we already have the
+ * image bytes locally, fetching would be pointless and `data:` isn't an
+ * http(s) URL anyway. If it's a real http(s) URL (e.g. a dicebear link), it
+ * falls through to the normal fetch path below like any other URL would.
  */
-export async function executeBuiltinImageTool(args) {
-  const url = typeof args?.url === 'string' ? args.url.trim() : '';
+export async function executeBuiltinImageTool(args, context = {}) {
+  let url = typeof args?.url === 'string' ? args.url.trim() : '';
   if (!url) throw new Error('Missing required "url" argument.');
+
+  if (url === CHAR_AVATAR_PLACEHOLDER) {
+    const avatar = context.characterAvatar;
+    if (!avatar) throw new Error('This character has no avatar set.');
+    if (avatar.startsWith('data:')) {
+      return { text: 'Character avatar retrieved.', images: [avatar] };
+    }
+    url = avatar; // a real URL - fall through to the normal fetch path below
+  }
 
   let parsed;
   try {
@@ -98,7 +128,9 @@ export async function executeBuiltinImageTool(args) {
   }
   // http(s) only - this fetch runs with the app's own renderer privileges, so
   // a file:/data:/other scheme here would be a local-file-read vector, not an
-  // "look at an image on the web" feature.
+  // "look at an image on the web" feature. http(s) covers localhost/local-
+  // network addresses fine (they're still the http: scheme) - nothing here
+  // singles those out.
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     throw new Error('Only http(s) image URLs are supported.');
   }
@@ -128,13 +160,25 @@ export async function executeBuiltinImageTool(args) {
  * empty/missing input, same convention as `executeBuiltinImageTool` - a
  * throw here is caught by AgentRunner and traced back to the model as an
  * error result.
+ *
+ * `context.characterAvatar`: every occurrence of the `{{char_avatar}}`
+ * placeholder in the HTML is substituted with the real avatar value (a URL
+ * or a `data:` URL) AFTER the length cap below, not before - so the cap
+ * bounds the model's own authored markup, not an uploaded avatar's
+ * (potentially much larger) base64 size. No extra escaping needed here: the
+ * substituted characters become part of the same raw HTML string that later
+ * gets `escapeAttr()`'d exactly once, as a whole, when chatView.js builds the
+ * iframe's `srcdoc` attribute.
  */
-export async function executeBuiltinEmbedHtmlTool(args) {
+export async function executeBuiltinEmbedHtmlTool(args, context = {}) {
   const html = typeof args?.html === 'string' ? args.html : '';
   if (!html.trim()) throw new Error('Missing required "html" argument.');
 
   const truncated = html.length > MAX_EMBED_HTML_LENGTH;
-  const safeHtml = truncated ? html.slice(0, MAX_EMBED_HTML_LENGTH) : html;
+  let safeHtml = truncated ? html.slice(0, MAX_EMBED_HTML_LENGTH) : html;
+  if (context.characterAvatar && safeHtml.includes(CHAR_AVATAR_PLACEHOLDER)) {
+    safeHtml = safeHtml.split(CHAR_AVATAR_PLACEHOLDER).join(context.characterAvatar);
+  }
   const title = typeof args?.title === 'string' ? args.title.trim().slice(0, MAX_EMBED_TITLE_LENGTH) : '';
 
   return {
