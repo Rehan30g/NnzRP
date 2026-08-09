@@ -606,40 +606,26 @@
 
 /* Sandboxed HTML/CSS/JS embeds the builtin "Embed HTML" tool
    (js/services/builtinTools.js) produced mid-reply, rendered by
-   messageEmbedsHTML() in chatView.js. Deliberately NO card border/background
-   here - an earlier boxed-card treatment read as visually disconnected from
-   the surrounding message ("terhalang kotak") instead of feeling like part
-   of the chat. The only chrome left is the quiet label below, same treatment
-   `.tool-inline-note` already uses elsewhere - the iframe itself sits
-   directly in the message flow with a transparent background. */
+   messageEmbedsHTML() in chatView.js. Deliberately NO visible chrome at all
+   here - no card border/background, no visible label above it either
+   anymore (a raw "AI-generated embed"/model-given-title caption above the
+   frame read as a technical artifact breaking immersion - see e.title's
+   comment in chatView.js's embedCardsHTML(), it's now only the iframe's
+   `title` ATTRIBUTE for screen readers, never painted on screen). The iframe
+   sits directly in the message flow with a transparent background so it
+   blends into the surrounding message instead of reading as a bolted-on box. */
 .message-embed-card {
   margin-top: 0.5rem;
 }
 
-.message-embed-label {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-  font-size: 0.72rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  color: var(--text-dim);
-  margin-bottom: 0.35rem;
-}
-
-.message-embed-label svg {
-  width: 11px;
-  height: 11px;
-  flex-shrink: 0;
-  opacity: 0.85;
-}
-
-/* Starts small and grows to fit the embed's own content (the 'message'
-   listener in chatView.js's render() sets this from the embed document's
-   postMessage height report, clamped 40-800px there) instead of a fixed box
-   that's mostly empty for a small embed - transitioning the height keeps
-   that growth from feeling like a jump cut. `background:transparent` +
+/* Starts small and snaps (NOT animates - an earlier `transition: height`
+   here caused auto-scroll-to-bottom to fall short during streaming, since
+   the scroll position gets computed against scrollHeight the instant the
+   embed's height changes, before a CSS transition has actually finished
+   growing it) to fit the embed's own content (the 'message' listener in
+   chatView.js's render() sets this from the embed document's postMessage
+   height report, clamped 40-800px there) instead of a fixed box that's
+   mostly empty for a small embed. `background:transparent` +
    `sandbox="allow-scripts"` (no `allow-same-origin`, set inline by
    messageEmbedsHTML() - that's the actual security boundary, not this file)
    is what lets the embed's own reset stylesheet (buildEmbedDocument() in
@@ -652,7 +638,6 @@
   border: none;
   background: transparent;
   border-radius: var(--radius-md);
-  transition: height 0.15s ease-out;
 }
 
 /* ===================================================

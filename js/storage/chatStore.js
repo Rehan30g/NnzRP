@@ -77,6 +77,8 @@ export class ChatStore {
         toolTrace: source.toolTrace || [],
         toolSegments: source.toolSegments || [],
         images: source.images || [],
+        embeds: source.embeds || [],
+        swipeMeta: source.swipeMeta || [],
         createdAt: source.createdAt
       };
       await db.put('messages', copy);
@@ -162,6 +164,7 @@ export class ChatStore {
         toolSegments: source.toolSegments || [],
         images: source.images || [],
         embeds: source.embeds || [],
+        swipeMeta: source.swipeMeta || [],
         createdAt: now + seq
       });
     };
@@ -258,6 +261,12 @@ export class ChatStore {
       toolSegments: toolSegments || [],
       images: images || [],
       embeds: embeds || [],
+      // One entry per swipe variation (index-aligned with `swipes`), so
+      // switching BACK to an existing variation later can restore its own
+      // thinking/tools/images/embeds instead of showing blank ones - see
+      // updateMessageSwipes() below, which is where entries after this
+      // first one get added.
+      swipeMeta: [{ thoughts: thoughts || '', toolTrace: toolTrace || [], toolSegments: toolSegments || [], images: images || [], embeds: embeds || [] }],
       createdAt: now
     };
     await db.put('messages', message);
@@ -269,29 +278,71 @@ export class ChatStore {
     return message;
   }
 
-  static async updateMessageSwipes(messageId, swipes, activeIndex, thoughts = '', toolTrace = [], toolSegments = [], images = [], embeds = []) {
+  /**
+   * Updates which swipe variation is active. Two distinct calling
+   * conventions, both used by chatView.js's handleSwipePrev/handleSwipeNext:
+   *   - Just SWITCHING between variations that already exist (no new
+   *     generation happened) - called with only (messageId, swipes,
+   *     activeIndex), leaving thoughts/toolTrace/toolSegments/images/embeds
+   *     as `undefined`. In this case they're restored from
+   *     `swipeMeta[activeIndex]` (whatever that variation had recorded when
+   *     IT was generated) instead of being blanked out.
+   *   - REGENERATING a brand new variation - called with that variation's
+   *     actual thoughts/toolTrace/etc (even if some are empty strings/arrays,
+   *     they're still explicitly passed, not left `undefined`). These get
+   *     applied AND recorded into `swipeMeta[activeIndex]` so a later switch
+   *     back to this exact variation can restore them too.
+   *
+   * Fixes a real bug: earlier, switching between EXISTING swipes (prev/next
+   * with no new generation) always overwrote thoughts/toolTrace/toolSegments/
+   * images/embeds with this function's empty defaults, since the switch-only
+   * call site never passed them - so a variation's own thinking block, tool
+   * trace, or any embed it had produced visibly vanished the moment you
+   * swiped away and back. (The thoughts/toolTrace half of this was already a
+   * documented limitation; extending images/embeds onto the same flat-field
+   * pattern just made it far more noticeable - a whole interactive embed
+   * disappearing reads very differently than lost thinking text.)
+   */
+  static async updateMessageSwipes(messageId, swipes, activeIndex, thoughts, toolTrace, toolSegments, images, embeds) {
     const message = await db.get('messages', messageId);
     if (!message) return;
     const content = swipes[activeIndex] || message.content;
+    const swipeMeta = Array.isArray(message.swipeMeta) ? [...message.swipeMeta] : [];
+
+    const hasNewMeta = thoughts !== undefined || toolTrace !== undefined || toolSegments !== undefined || images !== undefined || embeds !== undefined;
+    if (hasNewMeta) {
+      swipeMeta[activeIndex] = {
+        thoughts: thoughts || '',
+        toolTrace: toolTrace || [],
+        toolSegments: toolSegments || [],
+        images: images || [],
+        embeds: embeds || []
+      };
+    }
+    // No recorded metadata for this index (switching to a variation that
+    // predates swipeMeta existing) falls back to empty - same as the old
+    // behavior, not worse; it "self-heals" the moment that variation is ever
+    // regenerated again, since hasNewMeta then records it going forward.
+    const meta = swipeMeta[activeIndex] || { thoughts: '', toolTrace: [], toolSegments: [], images: [], embeds: [] };
+
     message.swipes = swipes;
     message.swipeIndex = activeIndex;
     message.content = content;
-    message.thoughts = thoughts;
-    message.toolTrace = toolTrace || [];
-    message.toolSegments = toolSegments || [];
-    // Same single-current-variation limitation as thoughts/toolTrace above -
-    // a fresh swipe's tool-fetched images/embeds replace whatever the
-    // previous variation had, not stored per-swipe.
-    message.images = images || [];
-    message.embeds = embeds || [];
+    message.swipeMeta = swipeMeta;
+    message.thoughts = meta.thoughts;
+    message.toolTrace = meta.toolTrace;
+    message.toolSegments = meta.toolSegments;
+    message.images = meta.images;
+    message.embeds = meta.embeds;
     await db.put('messages', message);
   }
 
   static async updateMessageContent(messageId, content) {
     const message = await db.get('messages', messageId);
     if (!message) return;
+    const idx = message.swipeIndex || 0;
     const swipes = [...(message.swipes || [message.content])];
-    swipes[message.swipeIndex || 0] = content;
+    swipes[idx] = content;
     message.content = content;
     message.swipes = swipes;
     // toolSegments records WHERE inside the old text each tool was called -
@@ -300,6 +351,13 @@ export class ChatStore {
     // `toolTrace` (and its single below-message note) is untouched and still
     // valid since it doesn't depend on knowing the internal split.
     message.toolSegments = [];
+    // Also clear it in this swipe's OWN recorded metadata (see
+    // updateMessageSwipes' swipeMeta) - otherwise switching away to a
+    // different variation and back would silently RESTORE the stale
+    // pre-edit toolSegments from swipeMeta, undoing this reset.
+    const swipeMeta = Array.isArray(message.swipeMeta) ? [...message.swipeMeta] : [];
+    if (swipeMeta[idx]) swipeMeta[idx] = { ...swipeMeta[idx], toolSegments: [] };
+    message.swipeMeta = swipeMeta;
     await db.put('messages', message);
   }
 

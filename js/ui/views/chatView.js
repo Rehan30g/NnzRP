@@ -522,19 +522,47 @@ function getEmbedThemeVars() {
   };
 }
 
-// Injected into every embed document so it auto-reports its real content
-// height back to the parent window (see the 'message' listener wired in
-// render() below) - the iframe otherwise has no way to size itself to its
-// own content, since cross-origin sandboxing (deliberately no
-// allow-same-origin - see messageEmbedsHTML's security note) means the
-// parent can't just read contentDocument.body.scrollHeight directly.
-const EMBED_RESIZE_SCRIPT = `<script>(function(){
+// Injected into every embed document, providing capabilities a sandboxed
+// (deliberately no allow-same-origin - see messageEmbedsHTML's security
+// note) iframe has no other way to reach the parent page for:
+//   - auto-reporting its real content height back (the 'message' listener
+//     wired in render() below) - the parent can't just read
+//     contentDocument.body.scrollHeight directly across the sandbox boundary.
+//   - `fillChatInput(text)`, a global function the model's own embed HTML can
+//     call (e.g. from a <button onclick>) to put text into the chat composer
+//     - lets an embed offer clickable options/choices the user can send or
+//     edit, instead of only ever being a passive visual.
+//   - auto-wiring any element carrying a `data-fill-text="..."` attribute to
+//     call fillChatInput() with that exact attribute value on click, with NO
+//     onclick/JS needed from the model at all. This is the RECOMMENDED way
+//     (see EMBED_HTML_DESCRIPTOR in builtinTools.js) specifically because a
+//     model writing `onclick="fillChatInput('...')"` by hand has to
+//     correctly escape any single-quote inside the text - and natural
+//     dialogue is full of contractions ("don't", "I'll", "you're") that
+//     silently truncate/break the whole handler the moment one goes
+//     unescaped (confirmed live: a real generated embed had exactly this
+//     bug on every option containing a contraction). Reading a plain HTML
+//     attribute via getAttribute() instead sidesteps JS-string-literal
+//     escaping entirely - HTML attribute parsing only breaks on the
+//     attribute's own OWN quote character, and this tool always writes
+//     double-quoted attributes, which plain English dialogue essentially
+//     never contains.
+const EMBED_RUNTIME_SCRIPT = `<script>(function(){
 function reportHeight(){
   try {
     var h = Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0);
     parent.postMessage({ type: 'nnzrp-embed-resize', height: h }, '*');
   } catch (e) {}
 }
+window.fillChatInput = function(text){
+  try {
+    parent.postMessage({ type: 'nnzrp-embed-fill-input', text: String(text == null ? '' : text) }, '*');
+  } catch (e) {}
+};
+document.addEventListener('click', function(ev){
+  var el = ev.target && ev.target.closest ? ev.target.closest('[data-fill-text]') : null;
+  if (el) fillChatInput(el.getAttribute('data-fill-text'));
+});
 window.addEventListener('load', reportHeight);
 if (window.ResizeObserver && document.body) new ResizeObserver(reportHeight).observe(document.body);
 setTimeout(reportHeight, 60);
@@ -545,14 +573,33 @@ setTimeout(reportHeight, 300);
  * Wraps the model's raw HTML with a small reset stylesheet (transparent
  * background + theme-matched text/link/selection colors, so unstyled
  * elements blend into the current chat theme instead of defaulting to a
- * plain white box) and the resize script above. Handles both shapes the
- * model might send - a bare fragment (most common: a chart/canvas snippet)
- * gets wrapped in a full minimal document; something that's already a full
- * `<!DOCTYPE html>`/`<html>` document gets the style spliced into its
- * <head> (or a <head> synthesized right after <html> if it has none) and
- * the script appended before </body> - falling back to plain string
- * concatenation if no recognizable head/body boundary exists, since the
- * browser's HTML parser is tolerant of a stray trailing <style>/<script>.
+ * plain white box) and the runtime script above (resize handshake +
+ * `fillChatInput`).
+ *
+ * An earlier version tried to splice the style/script into wherever the
+ * model's own `<head>`/`</body>` happened to be, found via regex - which
+ * broke silently and unpredictably depending on exactly how the model
+ * formatted its HTML (a `<head>` with unusual attributes, a missing
+ * `</body>`, a full document that omitted `<html>`, etc.), and even when it
+ * DID match, the script landed at the very END of the document - so if the
+ * model's OWN script tried to call `fillChatInput` synchronously (not from a
+ * later click handler) it could run before the runtime script defining it
+ * had executed yet. Reported as "the button sometimes just doesn't work,
+ * weirdly" - exactly the kind of intermittent failure that formatting-
+ * dependent regex splicing produces.
+ *
+ * Now: the style+script are always inserted as close to the very START of
+ * the document as possible, unconditionally, no head/body detection at all -
+ * `<style>`/`<script>` tags are valid ANYWHERE in an HTML document per the
+ * HTML5 parsing algorithm (a browser hoists them into an implied `<head>`
+ * even with no explicit `<head>`/`<html>` wrapper), and script execution
+ * order is what actually matters for `fillChatInput` to be defined before
+ * anything can call it - putting it first guarantees that regardless of how
+ * the rest of the model's document is shaped. The one exception: if the
+ * model's HTML starts with `<!DOCTYPE html>`, that has to stay the LITERAL
+ * first thing in the document or the browser drops into quirks mode (a real
+ * rendering behavior change, not just a technicality) - so in that case the
+ * insertion point is right after the doctype instead of before it.
  */
 function buildEmbedDocument(rawHtml) {
   const theme = getEmbedThemeVars();
@@ -562,35 +609,31 @@ function buildEmbedDocument(rawHtml) {
     a { color:${theme.accent}; }
     ::selection { background:${theme.accent}; color:#fff; }
   </style>`;
+  const prefix = style + EMBED_RUNTIME_SCRIPT;
 
-  const isFullDocument = /^\s*<!doctype html|^\s*<html[\s>]/i.test(rawHtml);
-  if (!isFullDocument) {
-    return `<!DOCTYPE html><html><head><meta charset="utf-8">${style}</head><body>${rawHtml}${EMBED_RESIZE_SCRIPT}</body></html>`;
+  const doctypeMatch = /^\s*<!doctype html[^>]*>/i.exec(rawHtml);
+  if (doctypeMatch) {
+    const end = doctypeMatch[0].length;
+    return rawHtml.slice(0, end) + prefix + rawHtml.slice(end);
   }
-
-  let doc = rawHtml;
-  doc = /<head[\s>]/i.test(doc)
-    ? doc.replace(/<head([^>]*)>/i, `<head$1>${style}`)
-    : doc.replace(/<html([^>]*)>/i, `<html$1><head>${style}</head>`);
-  doc = /<\/body>/i.test(doc)
-    ? doc.replace(/<\/body>/i, `${EMBED_RESIZE_SCRIPT}</body>`)
-    : doc + EMBED_RESIZE_SCRIPT;
-  return doc;
+  return prefix + rawHtml;
 }
 
 /**
  * Renders a `[{html, title}]` list (see `collectToolEmbeds` above - either
  * one round's own slice of a live/persisted toolTrace, or the whole
  * message's flat `msg.embeds` fallback, see the two call sites below) as one
- * SANDBOXED iframe per entry, sitting directly in the message flow (no card
- * border/background - a boxed "in a box inside the chat" look read as
- * visually disconnected from the surrounding message, so the only chrome
- * left is the small quiet label above it, same treatment `.tool-inline-note`
- * already uses elsewhere). Called from BOTH `renderMessageBodyHTML` (per
- * round, right where that round's tool marker sits - not appended once at
- * the bottom regardless of which round produced it) and `liveCommittedGroupsHTML`
- * (same per-round placement, live, the moment a streaming round's tool call
- * resolves rather than waiting for the whole turn to finish).
+ * SANDBOXED iframe per entry, sitting directly in the message flow with NO
+ * visible chrome at all (no card border/background, no "AI-generated embed"
+ * label) - any visible technical label read as breaking immersion/feeling
+ * bolted onto the chat instead of part of it. `e.title` (model-generated) is
+ * only used as the iframe's `title` ATTRIBUTE now (screen-reader-only, never
+ * painted on screen), not a visible caption. Called from BOTH
+ * `renderMessageBodyHTML` (per round, right where that round's tool marker
+ * sits - not appended once at the bottom regardless of which round produced
+ * it) and `liveCommittedGroupsHTML` (same per-round placement, live, the
+ * moment a streaming round's tool call resolves rather than waiting for the
+ * whole turn to finish).
  * This is the security-critical render path for that tool:
  *   - `sandbox="allow-scripts"` and NOTHING else. Deliberately no
  *     `allow-same-origin` - omitting it is what gives the iframe a unique,
@@ -613,16 +656,19 @@ function buildEmbedDocument(rawHtml) {
  *     render()) instead of a fixed box that's mostly empty for small embeds
  *     - clamped both directions there so one runaway/huge embed still can't
  *     blow out the chat layout.
- * `e.title` (also model-generated, also escaped) is an optional label shown
- * above the frame; falls back to a generic "AI-generated embed" caption.
  */
 function embedCardsHTML(embeds = []) {
   const list = (embeds || []).filter(e => e && e.html);
   if (!list.length) return '';
+  // `data-raw-html` carries the RAW, un-processed model-authored HTML (not
+  // the wrapped buildEmbedDocument() output actually running in the iframe) -
+  // purely for the hidden Ctrl+Alt+D debug shortcut (see handleKeydown below)
+  // to read back out. escapeAttr()'d same as every other attribute value in
+  // this file; the browser HTML-decodes it back to the exact original string
+  // when read via `.dataset.rawHtml`.
   return list.map(e => `
-    <div class="message-embed-card">
-      <div class="message-embed-label">${WRENCH_ICON_SVG}<span>${e.title ? escapeHtml(e.title) : 'AI-generated embed'}</span></div>
-      <iframe class="message-embed-frame" sandbox="allow-scripts" srcdoc="${escapeAttr(buildEmbedDocument(e.html))}"></iframe>
+    <div class="message-embed-card" data-raw-html="${escapeAttr(e.html)}">
+      <iframe class="message-embed-frame" sandbox="allow-scripts" title="${escapeAttr(e.title || 'Embedded content')}" srcdoc="${escapeAttr(buildEmbedDocument(e.html))}"></iframe>
     </div>
   `).join('');
 }
@@ -1373,6 +1419,50 @@ export class ChatView {
     };
 
     // Toggle keybind: Ctrl+. or Cmd+. or Alt+C or Esc
+    // Undocumented debug shortcut (Ctrl+Alt+D, see handleKeydown below) - not
+    // discoverable in any UI, purely for tracking down a specific embed's
+    // fillChatInput/other button not working: shows the RAW model-authored
+    // HTML (data-raw-html, set in embedCardsHTML() - the un-processed source,
+    // not the buildEmbedDocument()-wrapped document actually running in the
+    // iframe) in a copyable, syntax-highlighted modal. Targets whichever
+    // `.message-embed-card` the mouse is currently over (`:hover` can be
+    // queried live via .matches() at any time, not just during a mouse
+    // event, so no separate hover-tracking listeners are needed), falling
+    // back to the LAST (most recent) embed in the chat if the mouse isn't
+    // over one - still useful since that's usually the one just generated.
+    const openEmbedDebugModal = () => {
+      const cards = Array.from(container.querySelectorAll('.message-embed-card'));
+      if (!cards.length) {
+        Toast.info('Tidak ada embed HTML di chat ini.');
+        return;
+      }
+      const target = cards.find(c => c.matches(':hover')) || cards[cards.length - 1];
+      const rawHtml = target.dataset.rawHtml || '';
+
+      Modal.open({
+        title: 'Embed HTML - Raw Source (Debug)',
+        contentHTML: `
+          <div class="code-block-wrap" style="margin:0;">
+            <pre style="margin:0; padding:1rem; max-height:60vh; overflow:auto;"><code>${highlightCode(rawHtml, 'html')}</code></pre>
+          </div>
+        `,
+        buttons: [
+          {
+            label: 'Copy Raw HTML',
+            className: 'btn-primary',
+            onClick: async () => {
+              try {
+                await navigator.clipboard.writeText(rawHtml);
+                Toast.success('Raw HTML disalin ke clipboard.');
+              } catch {
+                Toast.error('Gagal menyalin ke clipboard.');
+              }
+            }
+          }
+        ]
+      });
+    };
+
     const handleKeydown = (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === '.') {
         e.preventDefault();
@@ -1380,33 +1470,63 @@ export class ChatView {
       } else if (e.altKey && e.key.toLowerCase() === 'c') {
         e.preventDefault();
         drawerOverlay.classList.toggle('hidden');
+      } else if (e.ctrlKey && e.altKey && e.key.toLowerCase() === 'd') {
+        e.preventDefault();
+        openEmbedDebugModal();
       } else if (e.key === 'Escape' && !drawerOverlay.classList.contains('hidden')) {
         drawerOverlay.classList.add('hidden');
       }
     };
     window.addEventListener('keydown', handleKeydown);
 
-    // Auto-resize handler for embed-HTML iframes (js/ui/views/chatView.js's
-    // messageEmbedsHTML/buildEmbedDocument/EMBED_RESIZE_SCRIPT) - the iframe
-    // is sandboxed WITHOUT allow-same-origin on purpose (see the security
-    // note on messageEmbedsHTML), so the parent has no direct read access to
-    // its contentDocument; the embed document instead posts its own content
-    // height and this matches the message by `event.source` (the iframe's
-    // window) against every currently-mounted `.message-embed-frame`.
-    // Clamped both directions so one tiny or one huge/runaway embed can't
-    // collapse to nothing or blow out the chat layout.
-    const handleEmbedResize = (e) => {
-      if (!e.data || e.data.type !== 'nnzrp-embed-resize') return;
+    // Message-based bridge for embed-HTML iframes (js/ui/views/chatView.js's
+    // messageEmbedsHTML/buildEmbedDocument/EMBED_RUNTIME_SCRIPT) - sandboxed
+    // WITHOUT allow-same-origin on purpose (see the security note on
+    // messageEmbedsHTML), so postMessage is the ONLY channel an embed has
+    // back to the app at all. Both message types below are matched against
+    // every currently-mounted `.message-embed-frame` by `event.source` (the
+    // iframe's own window) first, so a stray/unrelated postMessage sender
+    // can't spoof either one:
+    //   - 'nnzrp-embed-resize': the embed reporting its real content height,
+    //     so the iframe can grow to fit instead of sitting in a fixed empty
+    //     box - clamped both directions so one tiny or one huge/runaway
+    //     embed can't collapse to nothing or blow out the chat layout.
+    //   - 'nnzrp-embed-fill-input': the model's embed HTML calling the
+    //     injected `fillChatInput(text)` helper (e.g. from a <button
+    //     onclick>) - lets an embed offer clickable options/choices that put
+    //     text straight into the composer, ready to send or edit, instead of
+    //     only ever being a passive visual. Replaces whatever draft text was
+    //     there (an "option" click is a deliberate choice, not something a
+    //     user expects appended to unrelated text they were mid-typing) and
+    //     focuses the composer so it's obvious something happened. Just a
+    //     plain textarea `.value` assignment - never parsed as HTML/executed,
+    //     so no XSS surface regardless of what the embed sends.
+    const handleEmbedMessage = (e) => {
+      if (!e.data || !e.data.type) return;
       const frames = container.querySelectorAll('.message-embed-frame');
-      for (const frame of frames) {
-        if (frame.contentWindow === e.source) {
-          const h = Math.min(Math.max(Number(e.data.height) || 0, 40), 800);
-          frame.style.height = `${h}px`;
-          break;
-        }
+      const sourceFrame = Array.from(frames).find(f => f.contentWindow === e.source);
+      if (!sourceFrame) return;
+
+      if (e.data.type === 'nnzrp-embed-resize') {
+        const h = Math.min(Math.max(Number(e.data.height) || 0, 40), 800);
+        sourceFrame.style.height = `${h}px`;
+        // Only while a generation is actively streaming - an embed resizing
+        // while the user is just scrolled up reading older history must NOT
+        // yank the view back down. During streaming this re-follows the
+        // bottom the same way every other streaming update already does
+        // (onContentChunk etc. all call scrollToBottom unconditionally too) -
+        // without it, the view stayed scrolled to wherever it was BEFORE the
+        // embed grew from its placeholder height to its real one, leaving
+        // the growth happening below the visible fold.
+        if (isGenerating) scrollToBottom(container.querySelector('#messages-container'));
+      } else if (e.data.type === 'nnzrp-embed-fill-input') {
+        const inputEl = container.querySelector('#chat-input');
+        if (!inputEl) return;
+        inputEl.value = typeof e.data.text === 'string' ? e.data.text.slice(0, 4000) : '';
+        inputEl.focus();
       }
     };
-    window.addEventListener('message', handleEmbedResize);
+    window.addEventListener('message', handleEmbedMessage);
 
     // Copy button for fenced code blocks (marked.use({renderer:{code}}) above)
     // - ONE delegated listener on the container that outlives every
@@ -1435,7 +1555,7 @@ export class ChatView {
     if (backBtn && onBack) {
       backBtn.onclick = () => {
         window.removeEventListener('keydown', handleKeydown);
-        window.removeEventListener('message', handleEmbedResize);
+        window.removeEventListener('message', handleEmbedMessage);
         onBack();
       };
     }
