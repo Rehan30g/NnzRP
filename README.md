@@ -49,7 +49,8 @@ That reply took **six tool calls**. He really did read the repo. The scepticism 
 |---|---|
 | **Agentic, not one-shot** | The model chains multiple tool calls per turn, feeding each result back and deciding what to reach for next — bounded by a safety limit of 6 rounds, or your own custom cap if you turn that on. |
 | **One message, however many rounds** | Narration written before a tool call and narration written after it land in a single message, not fragmented into robotic separate turns. |
-| **Inline markers** | A small marker sits at the exact point in the prose where each tool fired, so you can see what happened where without it interrupting the read. |
+| **Inline markers** | A small marker sits at the exact point in the prose where each tool fired, so you can see what happened where without it interrupting the read. Back-to-back calls collapse into one marker with a count. |
+| **Live while it runs** | A tool box appears while a call is in flight, then the marker settles into place once the result lands — you're never staring at a frozen bubble wondering what happened. |
 | **Immersive Roleplay mode** | An opt-in nudge for characters to reach for tools *proactively and in-character* — "browsing" when the scene calls for it — instead of waiting to be told. Three intensity levels (Medium / High / MAX) control how eagerly, from natural openings only up to constant, unprompted tool use. |
 | **Permission-gated** | Every tool defaults to **Ask**. Approve per call, or set Allow / Decline per tool. Global kill switch included. |
 | **HTTP + local stdio** | Connect a hosted JSON-RPC endpoint, or let NnzRP spawn a local MCP server as a child process. |
@@ -59,6 +60,20 @@ That reply took **six tool calls**. He really did read the repo. The scepticism 
 <div align="center">
 <sub><strong>Thinking blocks and tool traces are collapsible</strong> — the reasoning and the full argument/result log are one click away, and folded out of sight the rest of the time.</sub>
 </div>
+
+---
+
+## Tools that work with zero setup
+
+Two tools ship built in. No MCP server, no config file — they go through the exact same permission gate and tool loop as a real MCP tool.
+
+| | |
+|---|---|
+| **See an image** | Hand a character a direct image URL and it actually *looks* at it, rather than reasoning about the link text. Offered automatically when your active model supports vision, and it can pull up the character's own avatar too. |
+| **Embed HTML** | Let a character render a small self-contained HTML/CSS/JS snippet **inline in the chat** — a chart, a canvas animation, an interactive diagram, or clickable dialogue choices that drop their text straight into your input box. Renders inside a locked-down sandboxed iframe with no network access and no same-origin privileges, and inherits your current light/dark theme. |
+
+> [!WARNING]
+> **Embed HTML is off by default and stays that way until you turn it on** (Custom MCP page → *Embed HTML (Eksperimental)*). Unlike every other tool, it means AI-authored script actually running inside the app — sandboxed, but running. Enable it only if that trade is one you want.
 
 ---
 
@@ -84,6 +99,10 @@ That reply took **six tool calls**. He really did read the repo. The scepticism 
 |---|---|
 | **BYOK, no middleman** | Configure as many providers as you like as named profiles, and switch between them mid-conversation. |
 | **Storybook chat** | Centered stream, floating composer, live streaming, swipe-to-regenerate, session forking, inline editing. |
+| **Send images** | Attach pictures straight from the composer when your model can see them — the attach button only appears for vision-capable models. |
+| **Nothing gets silently dropped** | Instead of quietly truncating old messages, a capacity gauge shows how full the model's context window is, and **Compact Chat** summarizes the middle of a long session into a fresh one — keeping the opening and the most recent exchanges word-for-word. |
+| **Generate as long as you want** | Cap the response length, or flip on **Unlimited** and let the model finish. |
+| **Readable code blocks** | Fenced code in a reply gets real syntax highlighting and a one-click copy button — no CDN, no external highlighter. |
 | **AI-personalized greetings** | Regenerate a fresh chat's opening line through a short back-and-forth with the AI — one question at a time, three quick options or type your own — instead of settling for the character's default. |
 | **Never blocks you** | Keep typing while a reply generates — your next message queues and fires automatically. |
 | **Character Card V2** | Import and export cards compatible with Tavern / SillyTavern / Janitor AI. |
@@ -127,8 +146,9 @@ Outputs an NSIS installer, a `.zip`, and a portable `.exe` to `dist/`.
 
 - `custom` and `openrouter` profiles can hold several model IDs, selectable from a dropdown in the chat composer without leaving the conversation.
 - OpenRouter profiles get a **Browse Providers** button to inspect and pin preferred upstream providers by context length, price, uptime, and throughput.
+- Vision support and context-window size are guessed from the model ID. Both have an override field on the profile for when the guess is wrong or your model is too new to be recognized.
 
-**2. Add MCP servers.** On the **Custom MCP** page, connect either an HTTP JSON-RPC endpoint or a local command NnzRP spawns as a child process:
+**2. Add MCP servers** *(optional — the built-in tools work without this).* On the **Custom MCP** page, connect either an HTTP JSON-RPC endpoint or a local command NnzRP spawns as a child process:
 
 ```bash
 npx -y @modelcontextprotocol/server-filesystem /your/path
@@ -191,7 +211,7 @@ Provider calls are direct `fetch()` requests in each provider's native shape —
 
 ## Data & Privacy
 
-Everything — characters, personas, chat history, provider configs, API keys, uploaded avatars — is stored locally in the app's IndexedDB. NnzRP uploads nothing. Outbound traffic goes only to the provider endpoints and MCP servers you set up yourself.
+Everything — characters, personas, chat history, provider configs, API keys, uploaded avatars and images — is stored locally in the app's IndexedDB. NnzRP uploads nothing. Outbound traffic goes only to the provider endpoints, MCP servers, and image URLs you or your characters point it at.
 
 > [!WARNING]
 > **Settings → Data → Export All Data** produces a single JSON backup containing your API keys **in plaintext**. Keep that file somewhere safe.
