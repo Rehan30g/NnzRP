@@ -18,12 +18,12 @@ export class PersonaStore {
 
   static async save(personaData) {
     const now = Date.now();
-    const id = personaData.id || `persona-${now}`;
+    const id = personaData.id || `persona-${now}-${Math.random().toString(36).substr(2, 5)}`;
 
     if (personaData.isDefault) {
       const personas = await db.getAll('personas');
       for (const p of personas) {
-        if (p.isDefault) {
+        if (p.isDefault && p.id !== id) {
           p.isDefault = false;
           await db.put('personas', p);
         }

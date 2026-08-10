@@ -13,7 +13,7 @@ export class CharacterStore {
 
   static async save(characterData) {
     const now = Date.now();
-    const id = characterData.id || `char-${now}`;
+    const id = characterData.id || `char-${now}-${Math.random().toString(36).substr(2, 5)}`;
     const payload = {
       ...characterData,
       id,

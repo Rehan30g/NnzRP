@@ -74,6 +74,11 @@ if (window.marked) {
 let activeAbortController = null;
 let isGenerating = false;
 
+// Torn down at the start of the next render(): the window listeners below are
+// otherwise only removed by the Back button, so leaving chat via a hashchange
+// leaked one pair per visit.
+let disposeChatWindowListeners = null;
+
 // A message typed/submitted while a generation is already in flight - kept
 // here (not disabling the composer) so the user can keep drafting instead of
 // waiting; auto-sent once the in-flight generation ends (success or abort).
@@ -134,6 +139,16 @@ async function flushQueuedMessageIfAny() {
 // Wrench icon used on the "Tools Used" chip so an MCP-tool-triggering message
 // is visually distinguishable from a plain thinking block at a glance.
 const WRENCH_ICON_SVG = '<svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z"></path></svg>';
+
+/**
+ * Seed for the dicebear avatar fallback used in the inline onerror handlers.
+ * encodeURIComponent deliberately does NOT escape `'`, which would otherwise
+ * terminate the single-quoted JS string literal inside onerror="..." and let
+ * an imported character/persona name execute arbitrary script.
+ */
+function avatarSeed(name) {
+  return encodeURIComponent(name || '').replace(/'/g, '%27');
+}
 
 /**
  * Toggles the send button between "send" (arrow-up) and "stop" (square) look
@@ -786,7 +801,7 @@ function syncMessageBody(containerEl, msg, formatFn, userName, charName) {
   // NEW msg.images/msg.embeds) alongside the fresh .message-content below,
   // so leaving the OLD variation's copies in place doubled them up instead
   // of replacing them on every edit/swipe.
-  containerEl.querySelectorAll('.message-content, .tool-inline-note, .message-image-row, .message-embed-card').forEach(el => el.remove());
+  containerEl.querySelectorAll('.message-content, .tool-inline-note, .message-image-row, .message-embed-card, .live-body-host').forEach(el => el.remove());
   const footerEl = containerEl.querySelector('.message-footer');
   const wrap = document.createElement('div');
   wrap.innerHTML = renderMessageBodyHTML(msg, formatFn, userName, charName);
@@ -1136,7 +1151,7 @@ export class ChatView {
                 </button>
 
                 <div class="character-header-info" id="btn-char-info-header" title="Click for Character Details">
-                  <img src="${escapeAttr(activeChar.avatar)}" class="avatar-img" onerror="this.src='https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(activeChar.name)}'">
+                  <img src="${escapeAttr(activeChar.avatar)}" class="avatar-img" onerror="this.src='https://api.dicebear.com/7.x/bottts/svg?seed=${avatarSeed(activeChar.name)}'">
                   <div>
                     <div class="character-header-name">${escapeHtml(activeChar.name)}</div>
                     <div class="character-header-tagline">${escapeHtml(activeChar.tagline) || 'AI Roleplay Partner'}</div>
@@ -1477,6 +1492,7 @@ export class ChatView {
         drawerOverlay.classList.add('hidden');
       }
     };
+    if (disposeChatWindowListeners) disposeChatWindowListeners();
     window.addEventListener('keydown', handleKeydown);
 
     // Message-based bridge for embed-HTML iframes (js/ui/views/chatView.js's
@@ -1527,13 +1543,20 @@ export class ChatView {
       }
     };
     window.addEventListener('message', handleEmbedMessage);
+    disposeChatWindowListeners = () => {
+      window.removeEventListener('keydown', handleKeydown);
+      window.removeEventListener('message', handleEmbedMessage);
+    };
 
     // Copy button for fenced code blocks (marked.use({renderer:{code}}) above)
     // - ONE delegated listener on the container that outlives every
     // renderMessages()/syncMessageBody() innerHTML replacement, instead of
     // rewiring a listener per button on every render. `data-code` is the raw
     // (already HTML-attribute-decoded by the browser) code text.
-    container.addEventListener('click', async (e) => {
+    // Property assignment, not addEventListener: `container` (#view-container)
+    // survives every navigation, so addEventListener stacked one extra handler
+    // per chat-view render and made a single Copy click fire N times.
+    container.onclick = async (e) => {
       const btn = e.target.closest('.code-copy-btn');
       if (!btn) return;
       try {
@@ -1548,7 +1571,7 @@ export class ChatView {
       } catch (err) {
         Toast.error('Gagal menyalin kode.');
       }
-    });
+    };
 
     // Back Button Handler
     const backBtn = container.querySelector('#btn-chat-back');
@@ -1556,6 +1579,11 @@ export class ChatView {
       backBtn.onclick = () => {
         window.removeEventListener('keydown', handleKeydown);
         window.removeEventListener('message', handleEmbedMessage);
+        // The permission prompt lives in a DOM the router is about to throw
+        // away; without resolving it here its promise never settles, the tool
+        // loop hangs forever and `isGenerating` stays stuck true.
+        if (activeAbortController) activeAbortController.abort();
+        removeToolPermissionPrompt();
         onBack();
       };
     }
@@ -1624,7 +1652,10 @@ export class ChatView {
       const currentFontSize = genSettings.fontSize || 'medium';
       const messagesEl = container.querySelector('#messages-container');
       if (messagesEl) {
-        messagesEl.className = 'messages-container font-' + currentFontSize;
+        // classList, not className: a wholesale assignment wipes the
+        // `generating-lock` class setGeneratingState() adds mid-generation.
+        messagesEl.classList.remove('font-small', 'font-medium', 'font-big');
+        messagesEl.classList.add('font-' + currentFontSize);
       }
 
       const fontBtns = container.querySelectorAll('.btn-font-opt');
@@ -1650,7 +1681,8 @@ export class ChatView {
           btn.classList.remove('btn-secondary');
 
           if (messagesEl) {
-            messagesEl.className = 'messages-container font-' + newSize;
+            messagesEl.classList.remove('font-small', 'font-medium', 'font-big');
+            messagesEl.classList.add('font-' + newSize);
           }
           Toast.success(`Ukuran teks diset: ${newSize.toUpperCase()}`);
         };
@@ -2385,7 +2417,7 @@ export class ChatView {
           <div class="message-block assistant">
             <div class="message-block-inner">
               <div class="message-header">
-                <img src="${escapeAttr(activeChar.avatar)}" class="message-avatar" onerror="this.src='https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(activeChar.name)}'">
+                <img src="${escapeAttr(activeChar.avatar)}" class="message-avatar" onerror="this.src='https://api.dicebear.com/7.x/bottts/svg?seed=${avatarSeed(activeChar.name)}'">
                 <div class="message-sender-name">${escapeHtml(activeChar.name)}</div>
               </div>
               <div class="message-content">
@@ -2421,7 +2453,7 @@ export class ChatView {
           <div class="message-block ${isUser ? 'user' : 'assistant'}${m.isSummary ? ' summary-message-block' : ''}" data-id="${m.id}">
             <div class="message-block-inner">
               <div class="message-header">
-                <img src="${escapeAttr(avatar)}" class="message-avatar" onerror="this.src='https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(senderName)}'">
+                <img src="${escapeAttr(avatar)}" class="message-avatar" onerror="this.src='https://api.dicebear.com/7.x/bottts/svg?seed=${avatarSeed(senderName)}'">
                 <div class="message-sender-name">${escapeHtml(senderName)}</div>
               </div>
 
@@ -2608,9 +2640,12 @@ export class ChatView {
 
       // Inline message editing (both user and assistant messages)
       messagesEl.querySelectorAll('.btn-edit-message').forEach(btn => {
-        btn.onclick = () => {
+        btn.onclick = async () => {
           const msgId = btn.dataset.id;
-          const msgObj = msgs.find(m => m.id === msgId);
+          // Re-read from the store, not from the render-time `msgs` snapshot:
+          // swipes only refresh the DOM, so that snapshot holds the PREVIOUS
+          // variation's content and saving it would clobber the active one.
+          const msgObj = await ChatStore.getMessageById(msgId);
           const blockEl = messagesEl.querySelector(`.message-block[data-id="${msgId}"]`);
           const innerEl = blockEl?.querySelector('.message-block-inner');
           if (!msgObj || !innerEl) return;
@@ -2724,15 +2759,24 @@ export class ChatView {
 
     const triggerAIGeneration = async () => {
       if (isGenerating) return;
+      // Claim the slot synchronously - everything between here and
+      // setGeneratingState(true) below is async, so two fast clicks both got
+      // past the guard and ran concurrent generations.
+      isGenerating = true;
 
-      const currentMessages = await ChatStore.getMessages(currentChatId);
-      if (!currentMessages.length) return;
+      // Pin the session this turn belongs to: `currentChatId` is mutable and
+      // the drawer lets the user switch sessions mid-generation, which would
+      // otherwise commit this reply into whatever chat is open when it lands.
+      const targetChatId = currentChatId;
+      const currentMessages = await ChatStore.getMessages(targetChatId);
+      if (!currentMessages.length) { isGenerating = false; return; }
 
       const lastMsg = currentMessages[currentMessages.length - 1];
-      if (lastMsg.role !== 'user') return; // AI only responds if last message is from user
+      if (lastMsg.role !== 'user') { isGenerating = false; return; } // AI only responds if last message is from user
 
       const proxyObj = await ProxyStore.getDefault();
       if (!proxyObj) {
+        isGenerating = false;
         Toast.error('Silakan konfigurasi Multi-Proxy API terlebih dahulu di menu Multi-Proxy Config!');
         return;
       }
@@ -2803,7 +2847,7 @@ export class ChatView {
 
       const typingInnerEl = typingIndicator.querySelector('.message-block-inner');
       const typingContentEl = typingIndicator.querySelector('#typing-indicator-content');
-      const typingBodyHost = createLiveBodyHost(typingContentEl, (t) => this.formatRoleplayMarkdown(t), typingPlaceholderHTML);
+      const typingBodyHost = createLiveBodyHost(typingContentEl, (t) => this.formatRoleplayMarkdown(t, activePersonaObj?.name || 'User', activeChar.name || 'Character'), typingPlaceholderHTML);
       typingBodyHost.update(liveSegments, currentRoundText);
 
       // Coalesce rapid/bursty chunk delivery into at most one DOM update per
@@ -2863,8 +2907,8 @@ export class ChatView {
               syncLiveToolBox(typingInnerEl, liveToolCalls);
               scrollToBottom(messagesEl);
             },
-            onToolResult: (call, result) => {
-              liveToolTrace.push({ name: call.name, args: call.args, result });
+            onToolResult: (call, result, traceEntry) => {
+              liveToolTrace.push(traceEntry ? { ...traceEntry } : { name: call.name, args: call.args, result });
               const entry = liveToolCalls.find(c => c.id === call.id);
               if (entry) entry.done = true;
               syncLiveToolBox(typingInnerEl, liveToolCalls);
@@ -2902,11 +2946,11 @@ export class ChatView {
         // (joined by AgentRunner) plus every tool call it made along the way,
         // plus the per-round breakdown so the UI can place an inline marker at
         // each round's actual tool-call boundary instead of one note at the end.
-        await ChatStore.addMessage(currentChatId, 'assistant', finalContent, finalThinking, [finalContent], finalToolTrace, finalSegments, collectToolImages(finalToolTrace), collectToolEmbeds(finalToolTrace));
+        await ChatStore.addMessage(targetChatId, 'assistant', finalContent, finalThinking, [finalContent], finalToolTrace, finalSegments, collectToolImages(finalToolTrace), collectToolEmbeds(finalToolTrace));
         await renderMessages();
 
-        const updatedMessages = await ChatStore.getMessages(currentChatId);
-        const chatObj = await ChatStore.getChatById(currentChatId);
+        const updatedMessages = await ChatStore.getMessages(targetChatId);
+        const chatObj = await ChatStore.getChatById(targetChatId);
         if (chatObj && !chatObj.titleEdited && isAutoTitlePoint(updatedMessages.length)) {
           generateAutoTitle(chatObj, updatedMessages);
         }
@@ -2922,7 +2966,7 @@ export class ChatView {
           // falls back to the old single-blob + trailing-note rendering, which is
           // exactly what that fallback path exists for.
           if (liveContent.trim() || liveToolTrace.length) {
-            await ChatStore.addMessage(currentChatId, 'assistant', liveContent, liveThinking, [liveContent], liveToolTrace, [], collectToolImages(liveToolTrace), collectToolEmbeds(liveToolTrace));
+            await ChatStore.addMessage(targetChatId, 'assistant', liveContent, liveThinking, [liveContent], liveToolTrace, [], collectToolImages(liveToolTrace), collectToolEmbeds(liveToolTrace));
             await renderMessages();
             Toast.info('Generasi dihentikan - jawaban sebagian tersimpan.');
           } else {
@@ -3061,19 +3105,22 @@ export class ChatView {
       Toast.error('Masih ada proses generate yang berjalan.');
       return;
     }
+    // Claim the slot synchronously - every early return below must release it.
+    isGenerating = true;
     const msg = await ChatStore.getMessageById(messageId);
-    if (!msg) return;
+    if (!msg) { isGenerating = false; return; }
     if (msg.isSummary) {
       // An auto-generated recap (ChatStore.createCompactedChat) isn't
       // something the character "said" - regenerating it would ask the model
       // for an in-character reply instead of a summary, which reads as
       // broken. Only ever has one swipe variation by construction anyway.
+      isGenerating = false;
       Toast.error('Pesan ringkasan otomatis tidak bisa di-regenerate.');
       return;
     }
     const msgs = await ChatStore.getMessages(chatId);
     const msgIndex = msgs.findIndex(m => m.id === messageId);
-    if (msgIndex === -1) return;
+    if (msgIndex === -1) { isGenerating = false; return; }
 
     const swipeCount = msg.swipes ? msg.swipes.length : 1;
     const currentIdx = msg.swipeIndex || 0;
@@ -3081,6 +3128,7 @@ export class ChatView {
     // If there is a next existing swipe variation, just switch to it - always allowed.
     if (currentIdx + 1 < swipeCount) {
       await ChatStore.updateMessageSwipes(messageId, msg.swipes, currentIdx + 1);
+      isGenerating = false;
       onDone();
       return;
     }
@@ -3090,13 +3138,14 @@ export class ChatView {
     const assistantIndexes = msgs.map((m, i) => (m.role === 'assistant' ? i : -1)).filter(i => i >= 0);
     const lastAssistantIndex = assistantIndexes.length ? assistantIndexes[assistantIndexes.length - 1] : -1;
     if (msgIndex !== lastAssistantIndex) {
+      isGenerating = false;
       Toast.error('Pesan lama tidak bisa di-regenerate. Fork sesi ini dulu untuk melanjutkan dari pesan ini.');
       return;
     }
 
     // Generate a brand NEW swipe response!
     const activeProxy = await ProxyStore.getDefault();
-    if (!activeProxy) return Toast.error('Belum ada Proxy aktif.');
+    if (!activeProxy) { isGenerating = false; return Toast.error('Belum ada Proxy aktif.'); }
 
     const activePersonaObj = await PersonaStore.getDefault();
     const genSettings = await ProxyStore.getGenerationSettings();
@@ -3159,6 +3208,9 @@ export class ChatView {
     // calls are involved (see `createLiveBodyHost`), same as a persisted
     // multi-segment message does.
     const contentHostEl = document.createElement('div');
+    // Classed so syncMessageBody() can remove this wrapper too - left behind,
+    // each swipe adds an empty flex child (and one extra 0.75rem gap).
+    contentHostEl.className = 'live-body-host';
     if (blockInnerEl) {
       const footerEl = blockInnerEl.querySelector('.message-footer');
       if (footerEl) blockInnerEl.insertBefore(contentHostEl, footerEl);
@@ -3191,7 +3243,7 @@ export class ChatView {
     // inconsistent status between a fresh reply and a swiped one.
     const swipePlaceholderHTML = `<em style="color:var(--text-dim);">${escapeHtml(activeChar.name)} sedang mengetik...</em>`;
 
-    const swipeBodyHost = contentHostEl ? createLiveBodyHost(contentHostEl, (t) => ChatView.formatRoleplayMarkdown(t), swipePlaceholderHTML) : null;
+    const swipeBodyHost = contentHostEl ? createLiveBodyHost(contentHostEl, (t) => ChatView.formatRoleplayMarkdown(t, userName, charName), swipePlaceholderHTML) : null;
 
     // Coalesce rapid/bursty chunk delivery into at most one DOM update per
     // ~50ms - see createThrottledRenderer's comment.
@@ -3211,12 +3263,13 @@ export class ChatView {
       // content - keeping `.message-content`'s own styling (font-size,
       // line-height) rather than leaving the `<em>` as a bare, unstyled child
       // of `contentHostEl`.
-      if (contentHostEl) {
-        if (genSettings.streamingEnabled) {
-          swipeBodyHost.update(liveSegments, currentRoundText);
-        } else {
-          contentHostEl.innerHTML = `<div class="message-content">${swipePlaceholderHTML}</div>`;
-        }
+      if (contentHostEl && swipeBodyHost) {
+        // Always go through the host: assigning contentHostEl.innerHTML here
+        // detached the host's own committed/current sub-divs, so every later
+        // update() (round boundaries in non-streaming mode) painted nowhere.
+        // liveCurrentTextHTML() already falls back to swipePlaceholderHTML
+        // while there is no text yet, so this renders identically.
+        swipeBodyHost.update(liveSegments, currentRoundText);
       }
 
       const { content: newContent, thinking: newThinking, toolTrace, segments: newSegments } = await AgentRunner.run({
@@ -3258,8 +3311,8 @@ export class ChatView {
             if (blockInnerEl) syncLiveToolBox(blockInnerEl, liveToolCalls);
             scrollToBottom(messagesEl);
           },
-          onToolResult: (call, result) => {
-            liveToolTrace.push({ name: call.name, args: call.args, result });
+          onToolResult: (call, result, traceEntry) => {
+            liveToolTrace.push(traceEntry ? { ...traceEntry } : { name: call.name, args: call.args, result });
             const entry = liveToolCalls.find(c => c.id === call.id);
             if (entry) entry.done = true;
             if (blockInnerEl) syncLiveToolBox(blockInnerEl, liveToolCalls);

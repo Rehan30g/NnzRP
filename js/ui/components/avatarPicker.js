@@ -62,6 +62,7 @@ export function wireAvatarPicker(scopeEl, idPrefix) {
       });
       urlRow.style.display = mode === 'url' ? '' : 'none';
       uploadRow.style.display = mode === 'upload' ? 'flex' : 'none';
+      if (mode === 'upload' && preview) preview.src = textInput.value;
     };
   });
 

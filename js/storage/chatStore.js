@@ -14,7 +14,7 @@ export class ChatStore {
   static async createChat(characterId, personaId, title = 'New Roleplay Session') {
     const now = Date.now();
     const chat = {
-      id: `chat-${now}`,
+      id: `chat-${now}-${Math.random().toString(36).substr(2, 5)}`,
       characterId,
       personaId,
       title,
@@ -53,7 +53,7 @@ export class ChatStore {
 
     const now = Date.now();
     const newChat = {
-      id: `chat-${now}`,
+      id: `chat-${now}-${Math.random().toString(36).substr(2, 5)}`,
       characterId: originalChat.characterId,
       personaId: originalChat.personaId,
       title: `${originalChat.title} (Fork)`,
@@ -132,7 +132,7 @@ export class ChatStore {
 
     const now = Date.now();
     const newChat = {
-      id: `chat-${now}`,
+      id: `chat-${now}-${Math.random().toString(36).substr(2, 5)}`,
       characterId: originalChat.characterId,
       personaId: originalChat.personaId,
       title: `${originalChat.title} (Ringkasan)`,
@@ -306,7 +306,7 @@ export class ChatStore {
   static async updateMessageSwipes(messageId, swipes, activeIndex, thoughts, toolTrace, toolSegments, images, embeds) {
     const message = await db.get('messages', messageId);
     if (!message) return;
-    const content = swipes[activeIndex] || message.content;
+    const content = swipes[activeIndex] !== undefined ? swipes[activeIndex] : message.content;
     const swipeMeta = Array.isArray(message.swipeMeta) ? [...message.swipeMeta] : [];
 
     const hasNewMeta = thoughts !== undefined || toolTrace !== undefined || toolSegments !== undefined || images !== undefined || embeds !== undefined;

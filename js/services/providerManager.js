@@ -144,7 +144,21 @@ function toAnthropicMessages(payload) {
       return { role: 'user', content: blocks.length ? blocks : m.content };
     }
     return { role: m.role, content: m.content };
-  });
+  })
+  // Anthropic requires strictly alternating user/assistant turns. agentRunner
+  // appends an extra `role:'user'` image turn after a tool result when a tool
+  // returned images, which would otherwise leave two consecutive user messages
+  // and get a 400 back. Merge adjacent same-role turns into one instead.
+  .reduce((acc, msg) => {
+    const prev = acc[acc.length - 1];
+    if (!prev || prev.role !== msg.role) {
+      acc.push({ ...msg });
+      return acc;
+    }
+    const toBlocks = (c) => (Array.isArray(c) ? c : [{ type: 'text', text: c || '' }]);
+    prev.content = [...toBlocks(prev.content), ...toBlocks(msg.content)];
+    return acc;
+  }, []);
 }
 
 function buildGeminiToolsParam(tools) {

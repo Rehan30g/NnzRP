@@ -240,7 +240,7 @@ export class SettingsView {
                   ${dropdownHTML({
                     id: 'select-preset-dropdown',
                     options: presetOptions,
-                    value: presets.length ? presets[0].id : '',
+                    value: (presets.find(p => p.content === settings.globalPrompt) || presets[0] || { id: '' }).id,
                     placeholder: 'No presets'
                   })}
                 </div>

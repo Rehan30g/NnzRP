@@ -26,7 +26,7 @@ export class PersonasView {
           <div class="card card-interactive" style="border-color:${p.isDefault ? 'var(--accent-primary)' : 'var(--border-light)'}; position:relative;">
             ${p.isDefault ? `<span class="badge badge-emerald" style="position:absolute; top:12px; right:12px;">Active Default</span>` : ''}
             <div style="display:flex; gap:1rem; align-items:center; margin-bottom:1rem;">
-              <img src="${escapeAttr(p.avatar)}" class="avatar-img" style="width:50px; height:50px;" onerror="this.src='https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(p.name)}'">
+              <img src="${escapeAttr(p.avatar)}" class="avatar-img" style="width:50px; height:50px;" onerror="this.src='https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(p.name).replace(/'/g, '%27')}'">
               <div>
                 <h3 style="font-size:1.1rem;">${escapeHtml(p.name)}</h3>
                 <div style="font-size:0.75rem; color:var(--text-muted);">Player Character</div>
@@ -114,6 +114,7 @@ export class PersonasView {
           label: 'Delete',
           className: 'btn-danger',
           onClick: async () => {
+            if (!confirm(`Are you sure you want to delete "${data.name}"?`)) return;
             await PersonaStore.delete(data.id);
             Toast.info('Persona deleted.');
             Modal.close();

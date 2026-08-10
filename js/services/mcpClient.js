@@ -49,9 +49,15 @@ async function httpRpc(server, method, params, { isNotification = false, timeout
     let json;
     if (contentType.includes('text/event-stream')) {
       const raw = await res.text();
-      const dataLine = raw.split('\n').find(l => l.startsWith('data:'));
-      if (!dataLine) throw new Error('No data event in SSE response.');
-      json = JSON.parse(dataLine.slice(5).trim());
+      // Servers may emit notifications/progress events before the response, so
+      // the FIRST data: line is not necessarily ours - correlate by request id,
+      // falling back to the first event actually shaped like a JSON-RPC reply.
+      const events = raw.split('\n')
+        .filter(l => l.startsWith('data:'))
+        .map(l => { try { return JSON.parse(l.slice(5).trim()); } catch { return null; } })
+        .filter(Boolean);
+      json = events.find(e => e.id === id) || events.find(e => e.result !== undefined || e.error);
+      if (!json) throw new Error('No JSON-RPC response event in SSE response.');
     } else {
       json = await res.json();
     }
@@ -67,7 +73,16 @@ async function commandRpc(server, method, params, { isNotification = false } = {
   if (!window.electronAPI?.mcp) {
     throw new Error('Stdio/command MCP servers require the NnzRP desktop app and are not available in browser mode.');
   }
-  await window.electronAPI.mcp.start({ id: server.id, command: server.command, args: server.args || [], env: server.env || {} });
+  const startInfo = await window.electronAPI.mcp.start({ id: server.id, command: server.command, args: server.args || [], env: server.env || {} });
+  // A FRESH process (the previous one crashed and main.js dropped it) has not
+  // seen the initialize handshake, but `initializedServers` still remembers the
+  // dead one's - redo it before anything else, or spec-compliant servers reject
+  // every request for the rest of the session. The nested initialize call
+  // re-enters here with `alreadyRunning`, so this cannot recurse.
+  if (startInfo && startInfo.started && method !== 'initialize' && method !== 'notifications/initialized') {
+    initializedServers.delete(server.id);
+    await ensureInitialized(server);
+  }
   return window.electronAPI.mcp.request(server.id, method, params || {}, isNotification);
 }
 
@@ -105,8 +120,18 @@ export class MCPClient {
       throw new Error('MCP server is missing its endpoint/command configuration.');
     }
     await ensureInitialized(server);
-    const result = await rpc(server, 'tools/list', {});
-    return Array.isArray(result?.tools) ? result.tools : [];
+    // tools/list is cursor-paginated in the MCP spec; reading only the first
+    // page silently hides every tool past it. Bounded so a server that keeps
+    // handing back a cursor can't spin here forever.
+    const tools = [];
+    let cursor;
+    for (let page = 0; page < 20; page++) {
+      const result = await rpc(server, 'tools/list', cursor ? { cursor } : {});
+      if (Array.isArray(result?.tools)) tools.push(...result.tools);
+      cursor = result?.nextCursor;
+      if (!cursor) break;
+    }
+    return tools;
   }
 
   /** Executes a tool on the target MCP server via JSON-RPC 2.0 `tools/call`. Throws on failure. */

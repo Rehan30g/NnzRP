@@ -111,7 +111,7 @@ export class ThinkingStreamParser {
    */
   end() {
     if (this.buffer) {
-      if (this.onContentChunk) this.onContentChunk(this.buffer);
+      this._emit(this.buffer);
       this.buffer = '';
     }
   }

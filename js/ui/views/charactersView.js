@@ -33,7 +33,7 @@ export class CharactersView {
         ${characters.map(char => `
           <div class="card card-interactive char-card" data-id="${char.id}">
             <div style="display:flex; gap:1rem; align-items:center; margin-bottom:0.8rem;">
-              <img src="${escapeAttr(char.avatar)}" class="avatar-img" style="width:54px; height:54px;" onerror="this.src='https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(char.name)}'">
+              <img src="${escapeAttr(char.avatar)}" class="avatar-img" style="width:54px; height:54px;" onerror="this.src='https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(char.name).replace(/'/g, '%27')}'">
               <div style="flex:1; overflow:hidden;">
                 <h3 style="font-size:1.1rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(char.name)}</h3>
                 <div style="font-size:0.78rem; color:var(--text-accent); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(char.tagline) || 'AI Roleplay Partner'}</div>
@@ -167,7 +167,7 @@ export class CharactersView {
 
         <div class="form-group">
           <label class="form-label">Example Dialogue (&lt;START&gt; format)</label>
-          <textarea class="textarea" id="char-example" placeholder="<START>\n<user>: Hello\n<${charData.name || 'Char'}>: *Smirks* Hey there.">${escapeHtml(charData.example_dialogue)}</textarea>
+          <textarea class="textarea" id="char-example" placeholder="<START>\n<user>: Hello\n<${escapeAttr(charData.name || 'Char')}>: *Smirks* Hey there.">${escapeHtml(charData.example_dialogue)}</textarea>
         </div>
 
         <div class="form-group">
