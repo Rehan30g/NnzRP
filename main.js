@@ -171,6 +171,13 @@ function createWindow() {
  * ---------------------------------------------------------------------- */
 const mcpProcesses = new Map(); // serverId -> { proc, pending: Map<reqId,{resolve,reject,timer}>, buffer, nextId }
 const MCP_REQUEST_TIMEOUT_MS = 15000;
+// `tools/call` is the one method that legitimately runs for minutes (browser
+// navigation, web search, a long shell task). Handshake/discovery calls keep
+// the short timeout so a dead server is still detected quickly.
+const MCP_TOOL_CALL_TIMEOUT_MS = 180000;
+function timeoutForMethod(method) {
+  return method === 'tools/call' ? MCP_TOOL_CALL_TIMEOUT_MS : MCP_REQUEST_TIMEOUT_MS;
+}
 
 function startMcpProcess({ id, command, args, env }) {
   if (mcpProcesses.has(id)) return { started: false, alreadyRunning: true };
@@ -186,6 +193,14 @@ function startMcpProcess({ id, command, args, env }) {
 
   const entry = { proc, pending: new Map(), buffer: '', nextId: 1 };
   mcpProcesses.set(id, entry);
+
+  // A write to a process that died between our map check and the write emits
+  // an async 'error' (EPIPE) on this stream. With no listener Node throws an
+  // uncaught exception and takes the whole Electron main process down; the
+  // pending request is already rejected by the 'exit'/'error' handlers below.
+  proc.stdin.on('error', (err) => {
+    console.warn(`[MCP:${id}] stdin error:`, err.message);
+  });
 
   proc.stdout.on('data', (chunk) => {
     entry.buffer += chunk.toString('utf-8');
@@ -243,7 +258,18 @@ function stopMcpProcess(id) {
     clearTimeout(timer);
     reject(new Error('MCP server stopped.'));
   }
-  entry.proc.kill();
+  // On Windows we spawn through a shell (to resolve npx.cmd shims), so the pid
+  // we hold is cmd.exe - killing it leaves the real node/npx server orphaned.
+  // taskkill /T walks the whole process tree.
+  if (process.platform === 'win32' && entry.proc.pid) {
+    try {
+      spawn('taskkill', ['/pid', String(entry.proc.pid), '/f', '/t']);
+    } catch {
+      entry.proc.kill();
+    }
+  } else {
+    entry.proc.kill();
+  }
   mcpProcesses.delete(id);
 }
 
@@ -263,7 +289,7 @@ function sendMcpRequest(id, method, params, isNotification) {
       const timer = setTimeout(() => {
         entry.pending.delete(payload.id);
         reject(new Error('MCP server request timed out.'));
-      }, MCP_REQUEST_TIMEOUT_MS);
+      }, timeoutForMethod(method));
       entry.pending.set(payload.id, { resolve, reject, timer });
     }
     try {

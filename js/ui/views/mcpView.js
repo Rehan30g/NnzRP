@@ -599,6 +599,7 @@ export class MCPView {
           label: 'Hapus MCP',
           className: 'btn-danger',
           onClick: async () => {
+            if (!confirm(`Hapus profil MCP Server "${data.name}"?`)) return;
             await MCPClient.stopIfRunning(data);
             await MCPStore.delete(data.id);
             MCPToolRegistry.invalidate(data.id);

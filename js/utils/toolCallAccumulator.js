@@ -19,7 +19,12 @@ export class ToolCallAccumulator {
   /** OpenAI-style: `delta.tool_calls[i]` fragments, `function.arguments` is a partial JSON string. */
   addOpenAIDelta(deltaToolCalls = []) {
     for (const tc of deltaToolCalls) {
-      const entry = this._entry(tc.index ?? 0);
+      // Some OpenAI-compatible backends omit `index` on parallel tool calls.
+      // Falling back to a constant 0 merged two distinct calls into one entry
+      // (concatenated names + unparseable concatenated args), so prefer the
+      // call id as the key whenever the index really is missing.
+      const key = (typeof tc.index === 'number') ? tc.index : (tc.id ? `id_${tc.id}` : 0);
+      const entry = this._entry(key);
       if (tc.id) entry.id = tc.id;
       if (tc.function?.name) entry.name += tc.function.name;
       if (typeof tc.function?.arguments === 'string') entry.argsStr += tc.function.arguments;
@@ -57,12 +62,17 @@ export class ToolCallAccumulator {
     for (const entry of this.byIndex.values()) {
       if (!entry.name) continue;
       let args = {};
+      let argsError = null;
       try {
         args = entry.argsStr ? JSON.parse(entry.argsStr) : {};
       } catch {
+        // Substituting {} used to run the tool with NO arguments, which for a
+        // destructive tool is far worse than failing - flag it instead so the
+        // caller refuses to execute and tells the model what happened.
         args = {};
+        argsError = `Tool arguments were truncated or were not valid JSON: ${entry.argsStr}`;
       }
-      calls.push({ id: entry.id || entry.name, name: entry.name, args });
+      calls.push({ id: entry.id || entry.name, name: entry.name, args, argsError });
     }
     return calls;
   }

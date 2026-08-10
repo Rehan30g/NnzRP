@@ -12,6 +12,6 @@ export function replaceMacros(text, userName = 'User', charName = 'Character') {
   const uName = userName || 'User';
   const cName = charName || 'Character';
   return text
-    .replace(/\{\{user\}\}/gi, uName)
-    .replace(/\{\{char\}\}/gi, cName);
+    .replace(/\{\{user\}\}/gi, () => uName)
+    .replace(/\{\{char\}\}/gi, () => cName);
 }

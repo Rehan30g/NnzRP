@@ -18,12 +18,12 @@ export class ProxyStore {
 
   static async save(proxyData) {
     const now = Date.now();
-    const id = proxyData.id || `proxy-${now}`;
+    const id = proxyData.id || `proxy-${now}-${Math.random().toString(36).substr(2, 5)}`;
 
     if (proxyData.isDefault) {
       const proxies = await db.getAll('proxies');
       for (const p of proxies) {
-        if (p.isDefault) {
+        if (p.isDefault && p.id !== id) {
           p.isDefault = false;
           await db.put('proxies', p);
         }

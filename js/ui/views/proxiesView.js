@@ -292,6 +292,7 @@ export class ProxiesView {
           label: 'Delete Proxy',
           className: 'btn-danger',
           onClick: async () => {
+            if (!confirm(`Are you sure you want to delete proxy profile "${data.name}"?`)) return;
             await ProxyStore.delete(data.id);
             Toast.info('Proxy deleted.');
             Modal.close();

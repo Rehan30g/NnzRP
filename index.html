@@ -48,11 +48,13 @@
         if (mode === 'light' || mode === 'dark') {
           document.documentElement.setAttribute('data-theme', mode);
         }
-        document.documentElement.setAttribute('data-theme-mode', mode || 'auto');
+        document.documentElement.setAttribute('data-theme-mode', (mode === 'light' || mode === 'dark') ? mode : 'auto');
 
         var accent = JSON.parse(localStorage.getItem('nnzrp_theme_accent') || '{}');
         var hex = /^#[0-9a-fA-F]{6}$/;
-        if (hex.test(accent.primary) && accent.primary.toLowerCase() !== '#4f46e5') {
+        var isDefaultAccent = hex.test(accent.primary) && accent.primary.toLowerCase() === '#4f46e5'
+          && (!accent.secondary || (hex.test(accent.secondary) && accent.secondary.toLowerCase() === '#7c3aed'));
+        if (hex.test(accent.primary) && !isDefaultAccent) {
           var s = document.documentElement.style;
           s.setProperty('--accent-primary', accent.primary);
           s.setProperty('--accent-primary-hover', 'color-mix(in srgb, ' + accent.primary + ' 78%, var(--text-main))');

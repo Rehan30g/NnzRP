@@ -32,6 +32,7 @@ export class MCPToolRegistry {
 
     const servers = await MCPStore.getEnabledServers();
     const result = [];
+    const usedNames = new Set(); // guards against sanitizeKey() collisions - see below
 
     for (const server of servers) {
       let entry = toolCache.get(server.id);
@@ -48,7 +49,18 @@ export class MCPToolRegistry {
 
       const serverKey = sanitizeKey(server.name);
       for (const tool of entry.tools) {
-        const qualifiedName = `${serverKey}__${sanitizeKey(tool.name)}`;
+        let qualifiedName = `${serverKey}__${sanitizeKey(tool.name)}`;
+        // sanitizeKey() is lossy ("My Server"/"my-server" -> "my_server",
+        // "get-file"/"get_file" -> "get_file"), so two different tools can land
+        // on one qualified name. Unhandled, the later one silently hijacks the
+        // earlier one's permission lookup AND its execution target, and the
+        // provider gets two function declarations with the same name.
+        if (usedNames.has(qualifiedName)) {
+          let n = 2;
+          while (usedNames.has(`${qualifiedName}_${n}`)) n++;
+          qualifiedName = `${qualifiedName}_${n}`;
+        }
+        usedNames.add(qualifiedName);
         toolIndex.set(qualifiedName, { serverId: server.id, toolName: tool.name });
         result.push({
           qualifiedName,

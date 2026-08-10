@@ -28,6 +28,7 @@ class App {
   constructor() {
     this.currentView = null;
     this.activeCharacterId = null;
+    this._titleRequestId = 0;
   }
 
   async init() {
@@ -96,7 +97,9 @@ class App {
     if (!raw) return { view: 'characters', params: {} };
     const [view, ...rest] = raw.split('/');
     if (view === 'chat' && rest[0]) {
-      return { view: 'chat', params: { characterId: decodeURIComponent(rest[0]) } };
+      let characterId = rest[0];
+      try { characterId = decodeURIComponent(rest[0]); } catch { /* malformed hash - use raw value */ }
+      return { view: 'chat', params: { characterId } };
     }
     // The standalone Multi-Proxy Config page was folded into Settings as its
     // "Proxies" tab (the sidebar no longer links to it). The old #proxies route
@@ -116,7 +119,7 @@ class App {
   updateHash(viewName, params) {
     const target = viewName === 'chat' && params.characterId
       ? `#chat/${encodeURIComponent(params.characterId)}`
-      : `#${viewName}`;
+      : (viewName === 'settings' && params.tab ? `#settings/${params.tab}` : `#${viewName}`);
     if (window.location.hash !== target) {
       window.location.hash = target;
     }
@@ -134,6 +137,7 @@ class App {
    */
   async applyWindowTitle(viewName, params = {}) {
     let context = VIEW_TITLES[viewName] || '';
+    const requestId = ++this._titleRequestId;
 
     if (viewName === 'chat') {
       const charId = params.characterId || this.activeCharacterId;
@@ -144,6 +148,8 @@ class App {
         /* fall back to the generic "Roleplay Chat" label */
       }
     }
+
+    if (requestId !== this._titleRequestId) return; // superseded by a newer navigation
 
     const title = context ? `NnzRP - ${context}` : 'NnzRP';
     document.title = title;

@@ -117,6 +117,10 @@ export class AgentRunner {
       // aggregate so `segments` can attach exactly the tool(s) THIS round
       // called, not everything called so far.
       const roundTrace = [];
+      // Image turns are buffered and flushed AFTER the whole round's tool
+      // results - every provider requires the results answering one assistant
+      // tool-call turn to be contiguous.
+      const pendingImageTurns = [];
       for (const call of toolCalls) {
         // The user pressed stop while an earlier call in this round was
         // running (or while its permission prompt was open) - bail out now
@@ -134,7 +138,12 @@ export class AgentRunner {
         let decision = 'allow';
         if (typeof callbacks.onPermissionRequest === 'function') {
           try {
-            decision = await callbacks.onPermissionRequest(call);
+            const answer = await callbacks.onPermissionRequest(call);
+            // Fail CLOSED on anything that is not the exact string 'allow':
+            // 'ask', undefined (a callback that forgot to return), null, true,
+            // 'ALLOW' etc. must never end up executing the tool. Mirrors
+            // MCPStore.normalizePermission()'s whitelist approach.
+            decision = answer === 'allow' ? 'allow' : 'decline';
           } catch (err) {
             // A prompt that errored/was torn down is treated as a refusal -
             // failing closed is the only safe direction here.
@@ -163,6 +172,10 @@ export class AgentRunner {
           // than the call silently vanishing.
           content = TOOL_DECLINED_NOTICE;
           callbacks.onToolDeclined?.(call);
+        } else if (call.argsError) {
+          // Never execute a call whose arguments failed to parse - see
+          // ToolCallAccumulator.finalize().
+          content = `Error: ${call.argsError}`;
         } else {
           callbacks.onToolExecuting?.(call);
           try {
@@ -207,24 +220,29 @@ export class AgentRunner {
         }
         toolTrace.push(entry);
         roundTrace.push(entry);
-        callbacks.onToolResult?.(call, content);
+        // Pass the full trace entry too: it carries `images`/`html`/`declined`,
+        // which the UI needs for its abort-partial save (otherwise a fetched
+        // image or embed is lost when the user presses Stop).
+        callbacks.onToolResult?.(call, content, entry);
         payload = [...payload, { role: 'tool', toolCallId: call.id, toolName: call.name, content }];
         if (fetchedImages && fetchedImages.length) {
           // OpenAI tool-role messages must be plain text (no image content
           // blocks allowed there) and Gemini's functionResponse part has no
           // image slot either, so instead of special-casing every provider's
           // tool-result wire format, the fetched image rides in as a normal
-          // app-injected user turn right after the tool result. This reuses
-          // the exact same `images` field/handling real user-uploaded
-          // attachments use in providerManager.js's translators, so it needs
-          // no provider-specific code of its own.
-          payload = [...payload, {
+          // app-injected user turn. It is QUEUED, not appended here: putting it
+          // between two tool results of the same round breaks the "all tool
+          // results immediately follow the assistant tool-call turn" rule on
+          // OpenAI, Anthropic and Gemini alike.
+          pendingImageTurns.push({
             role: 'user',
             content: '[System note: the image requested above was fetched successfully and is attached for you to view.]',
             images: fetchedImages
-          }];
+          });
         }
       }
+
+      for (const turn of pendingImageTurns) payload = [...payload, turn];
 
       segments.push({ text: result.content || '', tools: roundTrace });
 
@@ -241,6 +259,17 @@ export class AgentRunner {
       // needs to call more tools or is ready to write the final reply.
     }
 
-    throw new Error(`MCP tool-use loop exceeded ${limit} iterations without a final response. Check the enabled MCP tools for a loop.`);
+    // Throwing here made chatView.js take its generic error path and DISCARD
+    // the whole turn - every round's narration and every tool result the user
+    // already waited for. Return what was actually produced, flagged so a
+    // caller can warn about the truncation instead of losing the work.
+    console.warn(`[AgentRunner] Tool-use loop hit its ${limit}-iteration cap without a final response.`);
+    return {
+      content: joinParts(contentParts),
+      thinking: joinParts(thinkingParts),
+      toolTrace,
+      segments,
+      limitReached: true
+    };
   }
 }
