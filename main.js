@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, Menu, ipcMain } = require('electron');
+const { app, BrowserWindow, shell, Menu, ipcMain, nativeTheme } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
@@ -17,14 +17,43 @@ try {
   console.warn('Failed to load splash icon base64:', e);
 }
 
+// Mirrors css/variables.css's light/dark tokens so the MAIN window's own
+// backgroundColor never clashes with the theme the renderer is about to boot
+// into. nativeTheme is synchronously available in the main process (no
+// IndexedDB/localStorage round-trip needed, unlike the renderer's pre-paint
+// bootstrap in index.html), so this is a one-time read at launch, not a live
+// listener.
+//
+// The splash window deliberately does NOT follow this: it is a fixed
+// near-black, monochrome loading screen (see SPLASH below) whose whole
+// identity is a dark full-bleed hero panel with white type over it. A light
+// inversion of that would not be the same design, and unlike the main window
+// there is nothing behind the splash for it to clash with.
+const dark = nativeTheme.shouldUseDarkColors;
+const palette = dark
+  ? { bg: '#0b1220', surface: '#131c2e', border: '#24304a', text: '#e8ecf3', dim: '#8595ab', from: '#fbbf24', to: '#f59e0b' }
+  : { bg: '#f1f5f9', surface: '#ffffff', border: '#e2e8f0', text: '#0f172a', dim: '#64748b', from: '#f59e0b', to: '#d97706' };
+
+// Fixed dark splash palette. `bg` MUST stay in sync with the splash
+// BrowserWindow's `backgroundColor` option so there is no flash of a
+// different colour before the inline HTML paints.
+const SPLASH = {
+  bg: '#0b0b0c', // window body - the single flat panel (no nested card)
+  text: '#f5f5f5',
+  dim: '#8a8a8e'
+};
+
 function createSplashWindow() {
   const iconPath = process.platform === 'win32'
     ? path.join(__dirname, 'src', 'icon.ico')
     : path.join(__dirname, 'src', 'icon.png');
 
   const splash = new BrowserWindow({
-    width: 400,
-    height: 280,
+    // 1.7:1: a full-bleed hero image column on the left, title + loading
+    // status on the right. A square-ish 440x360 cannot hold that split
+    // without cramping either half.
+    width: 680,
+    height: 400,
     frame: false,
     transparent: false,
     alwaysOnTop: true,
@@ -32,13 +61,25 @@ function createSplashWindow() {
     show: true,
     resizable: false,
     icon: iconPath,
-    backgroundColor: '#ffffff',
+    backgroundColor: SPLASH.bg,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true
     }
   });
 
+  // Self-contained inline document - this is a bare data: URL, so it has no
+  // access to the app's css/ stylesheets. Everything (including the logo, via
+  // the already-embedded iconBase64) must live in this string.
+  //
+  // Design notes / things previously rejected by the user, do not undo:
+  //  - <body> itself is the single flat panel painted in SPLASH.bg (same as
+  //    the BrowserWindow backgroundColor). No nested card div with its own
+  //    background/border/shadow - in a small opaque frameless window that read
+  //    as a "box inside a box". The hero column is full-bleed to the window
+  //    edges and fades into the body colour, so it is not a nested box either.
+  //  - No heartbeat/pulse (transform: scale) animation anywhere.
+  //  - Generous padding; the reference leaves a lot of breathing room.
   const splashHTML = `
     <!DOCTYPE html>
     <html>
@@ -47,24 +88,89 @@ function createSplashWindow() {
       <title>NnzRP Loading</title>
       <style>
         * { box-sizing: border-box; }
-        body { margin: 0; padding: 0; background: #ffffff; font-family: 'Segoe UI', system-ui, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; user-select: none; }
-        .splash-card { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 1.5rem; }
-        .logo-box { width: 64px; height: 64px; background: #f1f5f9; border-radius: 16px; display: flex; align-items: center; justify-content: center; margin-bottom: 1rem; border: 1px solid #e2e8f0; }
-        .logo-img { width: 48px; height: 48px; object-fit: contain; }
-        .title { font-size: 1.35rem; font-weight: 700; color: #0f172a; margin: 0 0 0.75rem 0; letter-spacing: -0.02em; }
-        .spinner { width: 28px; height: 28px; border: 3px solid #e2e8f0; border-top-color: #4f46e5; border-radius: 50%; animation: spin 0.8s linear infinite; margin-bottom: 0.75rem; }
-        .sub { font-size: 0.82rem; color: #64748b; margin: 0; font-weight: 500; }
-        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        html, body { width: 100%; height: 100%; }
+        body {
+          margin: 0; padding: 0; background: ${SPLASH.bg}; color: ${SPLASH.text};
+          font-family: 'Segoe UI', system-ui, -apple-system, 'Helvetica Neue', sans-serif;
+          display: flex; overflow: hidden;
+          user-select: none; -webkit-app-region: drag;
+          animation: fadeIn 0.35s ease-out;
+        }
+
+        /* ---- Left hero column (the reference's photographic panel) ---- */
+        .hero { position: relative; width: 40%; flex: none; overflow: hidden; }
+        .hero::before {
+          content: ''; position: absolute; inset: -40px;
+          background-image: url("${iconBase64}");
+          background-size: cover; background-position: center;
+          filter: blur(30px) brightness(0.3) saturate(0.65) contrast(1.12);
+        }
+        .hero::after {
+          content: ''; position: absolute; inset: 0;
+          background:
+            linear-gradient(to bottom, rgba(11,11,12,0.55) 0%, rgba(11,11,12,0) 34%, rgba(11,11,12,0) 62%, rgba(11,11,12,0.6) 100%),
+            linear-gradient(100deg, rgba(11,11,12,0.32) 0%, rgba(11,11,12,0.06) 42%, rgba(11,11,12,0.9) 84%, ${SPLASH.bg} 100%);
+        }
+        .hero-logo {
+          position: absolute; top: 50%; left: 50%; margin: -46px 0 0 -52px;
+          width: 92px; height: 92px; border-radius: 5px;
+          image-rendering: pixelated;
+          box-shadow: 0 20px 44px -18px rgba(0,0,0,0.95);
+        }
+
+        /* ---- Right content column: purely a loading state, nothing else ---- */
+        .panel {
+          position: relative; flex: 1 1 auto; min-width: 0;
+          padding: 36px 34px 30px 34px;
+          display: flex; flex-direction: column; justify-content: center;
+        }
+        .title {
+          margin: 0 0 40px 0; font-size: 30px; font-weight: 800;
+          line-height: 1.05; letter-spacing: -0.025em; color: #ffffff;
+        }
+        .loading-block { display: flex; align-items: center; gap: 18px; }
+        .spinner {
+          flex: none; width: 30px; height: 30px; border-radius: 50%;
+          border: 2.5px solid rgba(255,255,255,0.14); border-top-color: #f0f0f0;
+          animation: spin 0.85s linear infinite;
+        }
+        .loading-text { flex: 1 1 auto; min-width: 0; }
+        .loading-title { font-size: 14.5px; font-weight: 700; color: #f2f2f2; letter-spacing: -0.005em; }
+        .loading-sub { font-size: 12px; color: ${SPLASH.dim}; margin-top: 4px; }
+        .dot { display: inline-block; opacity: 0.2; animation: dotFade 1.4s ease-in-out infinite; }
+        .dot:nth-child(2) { animation-delay: 0.2s; }
+        .dot:nth-child(3) { animation-delay: 0.4s; }
+
+        /* Thin monochrome loading bar pinned to the very bottom edge. */
+        .progress { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(255,255,255,0.07); overflow: hidden; }
+        .progress span {
+          position: absolute; top: 0; bottom: 0; width: 34%;
+          background: linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.75) 50%, rgba(255,255,255,0) 100%);
+          animation: sweep 1.5s ease-in-out infinite;
+        }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+        @keyframes sweep { 0% { left: -34%; } 100% { left: 100%; } }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes dotFade { 0%, 60%, 100% { opacity: 0.2; } 30% { opacity: 1; } }
       </style>
     </head>
     <body>
-      <div class="splash-card">
-        <div class="logo-box">
-          <img src="${iconBase64}" class="logo-img" alt="NnzRP Icon">
+      <div class="hero">
+        <img src="${iconBase64}" class="hero-logo" alt="NnzRP">
+      </div>
+      <div class="panel">
+        <h1 class="title">NnzRP<br>Roleplay Studio</h1>
+
+        <div class="loading-block">
+          <div class="spinner"></div>
+          <div class="loading-text">
+            <div class="loading-title">Memuat Aplikasi<span class="dot">.</span><span class="dot">.</span><span class="dot">.</span></div>
+            <div class="loading-sub">Menyiapkan modul, tema &amp; database lokal</div>
+          </div>
         </div>
-        <h2 class="title">NnzRP Client</h2>
-        <div class="spinner"></div>
-        <p class="sub">Memuat Aplikasi Desktop...</p>
+
+        <div class="progress"><span></span></div>
       </div>
     </body>
     </html>
@@ -93,7 +199,7 @@ function createWindow() {
     icon: iconPath,
     frame: false, // Frameless window for custom header titlebar
     autoHideMenuBar: true,
-    backgroundColor: '#f1f5f9',
+    backgroundColor: palette.bg,
     show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),

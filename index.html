@@ -41,6 +41,17 @@
   -->
   <script>
     (function () {
+      // Stamped before first paint (not in app.js, which runs much later) so
+      // the desktop-only titlebar never flashes on screen before disappearing
+      // when the app is opened in a plain browser tab (see run_localhost.bat) -
+      // window.electronAPI is injected by preload.js ahead of any page script,
+      // so it's already reliable this early. Electron's own window always
+      // keeps the titlebar regardless of window width - this is a JS/runtime
+      // check, not a viewport-width media query, because a narrow Electron
+      // window still needs its minimize/maximize/close controls.
+      if (!window.electronAPI) {
+        document.documentElement.classList.add('browser-mode');
+      }
       try {
         var mode = localStorage.getItem('nnzrp_theme_mode');
         // 'auto' (or anything unrecognised) leaves data-theme unset, handing the
@@ -79,13 +90,50 @@
        flashes light-on-dark before the main stylesheets are parsed). -->
   <style>
     body { margin: 0; padding: 0; background-color: var(--bg-primary, #f1f5f9); font-family: 'Inter', system-ui, sans-serif; }
-    .app-loading-screen { display: flex; align-items: center; justify-content: center; min-height: 100vh; width: 100%; background: var(--bg-primary, #f1f5f9); }
-    .app-loading-card { display: flex; flex-direction: column; align-items: center; background: var(--bg-surface, #ffffff); padding: 2.5rem 3rem; border-radius: 16px; border: 1px solid var(--border-light, #e2e8f0); text-align: center; max-width: 380px; width: 90%; }
-    .app-loading-logo { width: 56px; height: 56px; background: transparent; border-radius: 14px; display: flex; align-items: center; justify-content: center; margin-bottom: 1.25rem; }
+    .app-loading-screen {
+      display: flex; align-items: center; justify-content: center;
+      min-height: 100vh; min-height: 100dvh; width: 100%;
+      background: var(--bg-primary, #f1f5f9);
+      animation: appLoadingFadeIn 0.3s ease-out;
+    }
+    .app-loading-card {
+      display: flex; flex-direction: column; align-items: center;
+      background: var(--bg-surface, #ffffff); padding: 2.75rem 3rem;
+      border-radius: 18px; border: 1px solid var(--border-light, #e2e8f0);
+      box-shadow: 0 24px 48px -24px rgba(0, 0, 0, 0.28);
+      text-align: center; max-width: 380px; width: 90%;
+      animation: appLoadingRiseIn 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .app-loading-logo {
+      width: 68px; height: 68px; border-radius: 18px;
+      display: flex; align-items: center; justify-content: center;
+      margin-bottom: 1.25rem;
+      background: linear-gradient(135deg, var(--brand-gradient-from, #f59e0b) 0%, var(--brand-gradient-to, #d97706) 100%);
+      box-shadow: 0 10px 28px -10px color-mix(in srgb, var(--brand-gradient-to, #d97706) 55%, transparent);
+      animation: appLoadingPulse 2.2s ease-in-out infinite;
+    }
+    .app-loading-logo-inner {
+      width: 58px; height: 58px; border-radius: 14px;
+      background: var(--bg-surface, #ffffff);
+      display: flex; align-items: center; justify-content: center;
+    }
     .app-loading-title { font-family: 'Outfit', sans-serif; font-size: 1.35rem; font-weight: 700; color: var(--text-main, #0f172a); margin: 0 0 1.25rem 0; }
-    .app-loading-spinner { width: 36px; height: 36px; border: 3px solid var(--border-light, #e2e8f0); border-top-color: var(--accent-primary, #4f46e5); border-radius: 50%; animation: appSpinnerRotate 0.8s linear infinite; margin-bottom: 1rem; }
+    .app-loading-spinner {
+      width: 36px; height: 36px; border-radius: 50%; margin-bottom: 1rem;
+      border: 3px solid var(--border-light, #e2e8f0);
+      border-top-color: var(--accent-primary, #4f46e5);
+      border-right-color: var(--accent-primary, #4f46e5);
+      animation: appSpinnerRotate 0.75s cubic-bezier(0.5, 0.1, 0.5, 0.9) infinite;
+    }
     .app-loading-sub { font-size: 0.85rem; color: var(--text-dim, #64748b); margin: 0; font-weight: 500; }
-    @keyframes appSpinnerRotate { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    .app-loading-dot { display: inline-block; opacity: 0.2; animation: appLoadingDotFade 1.4s ease-in-out infinite; }
+    .app-loading-dot:nth-child(2) { animation-delay: 0.2s; }
+    .app-loading-dot:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes appSpinnerRotate { to { transform: rotate(360deg); } }
+    @keyframes appLoadingPulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.05); } }
+    @keyframes appLoadingFadeIn { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes appLoadingRiseIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes appLoadingDotFade { 0%, 60%, 100% { opacity: 0.2; } 30% { opacity: 1; } }
   </style>
 </head>
 <body>
@@ -113,12 +161,14 @@
   <div id="app">
     <div class="app-loading-screen">
       <div class="app-loading-card">
-        <div class="app-loading-logo" style="width:64px; height:64px;">
-          <img src="src/icon.png" class="pixel-art" style="width:64px; height:64px;" alt="NnzRP Icon">
+        <div class="app-loading-logo">
+          <div class="app-loading-logo-inner">
+            <img src="src/icon.png" style="width:40px; height:40px;" alt="NnzRP Icon">
+          </div>
         </div>
         <h2 class="app-loading-title" style="background: linear-gradient(135deg, var(--brand-gradient-from, #f59e0b) 0%, var(--brand-gradient-to, #d97706) 100%); -webkit-background-clip:text; -webkit-text-fill-color:transparent;">NnzRP</h2>
         <div class="app-loading-spinner"></div>
-        <p class="app-loading-sub">Loading Session &amp; Database...</p>
+        <p class="app-loading-sub">Loading Session &amp; Database<span class="app-loading-dot">.</span><span class="app-loading-dot">.</span><span class="app-loading-dot">.</span></p>
       </div>
     </div>
   </div>
