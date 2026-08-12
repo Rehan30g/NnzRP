@@ -1,5 +1,6 @@
 /* js/storage/proxyStore.js - Multi-Proxy & API Key Config Storage */
 import { db } from './db.js';
+import { APP_CONFIG } from '../config.js';
 
 export class ProxyStore {
   static async getAll() {

@@ -1,5 +1,5 @@
 /* js/services/backupService.js - Complete Full Application Data Backup & Restore */
-import { db, syncToDisk } from '../storage/db.js';
+import { db } from '../storage/db.js';
 
 export class BackupService {
   /**
@@ -98,7 +98,6 @@ export class BackupService {
             }
           }
 
-          await syncToDisk();
           resolve(stats);
         } catch (err) {
           reject(new Error('Invalid NnzRP Backup File: ' + err.message));
