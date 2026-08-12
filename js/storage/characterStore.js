@@ -1,5 +1,5 @@
 /* js/storage/characterStore.js - AI Character Storage CRUD */
-import { db, syncToDisk } from './db.js';
+import { db } from './db.js';
 
 export class CharacterStore {
   static async getAll() {
@@ -21,7 +21,6 @@ export class CharacterStore {
       createdAt: characterData.createdAt || now
     };
     await db.put('characters', payload);
-    syncToDisk();
     return payload;
   }
 
@@ -35,6 +34,5 @@ export class CharacterStore {
       await db.delete('chats', chat.id);
     }
     await db.delete('characters', id);
-    syncToDisk();
   }
 }

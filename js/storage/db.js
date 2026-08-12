@@ -118,58 +118,8 @@ class NativeDB {
 
 export const db = new NativeDB();
 
-export async function syncToDisk() {
-  // Only attempt disk sync if running on local HTTP server (server.py), skip on static file:// Electron
-  if (!window.location.protocol.startsWith('http')) return;
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 400);
-    const data = {
-      characters: await db.getAll('characters'),
-      chats: await db.getAll('chats'),
-      messages: await db.getAll('messages'),
-      personas: await db.getAll('personas'),
-      proxies: await db.getAll('proxies'),
-      settings: await db.getAll('settings')
-    };
-    await fetch('/api/sync-data', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-      signal: controller.signal
-    });
-    clearTimeout(timeoutId);
-  } catch (err) {
-    // Silent catch if offline/static host
-  }
-}
-
 export async function initDatabase() {
   await db.open();
-
-  // Try loading local project file storage if running on HTTP server (server.py)
-  if (window.location.protocol.startsWith('http')) {
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 400);
-      const res = await fetch('/api/sync-data', { signal: controller.signal });
-      clearTimeout(timeoutId);
-      if (res.ok) {
-        const diskData = await res.json();
-        if (diskData.characters && diskData.characters.length > 0) {
-          console.log('Restoring data from local project storage (data/nnzrp_data.json)...');
-          for (const char of diskData.characters) await db.put('characters', char);
-          if (diskData.chats) for (const item of diskData.chats) await db.put('chats', item);
-          if (diskData.messages) for (const item of diskData.messages) await db.put('messages', item);
-          if (diskData.personas) for (const item of diskData.personas) await db.put('personas', item);
-          if (diskData.proxies) for (const item of diskData.proxies) await db.put('proxies', item);
-          if (diskData.settings) for (const item of diskData.settings) await db.put('settings', item);
-        }
-      }
-    } catch (err) {
-      console.warn('Local disk data sync check bypassed:', err);
-    }
-  }
 
   const charCount = await db.count('characters');
   if (charCount === 0) {
@@ -226,7 +176,4 @@ export async function initDatabase() {
       value: APP_CONFIG.DEFAULT_SYSTEM_PROMPT_PRESETS
     });
   }
-
-  // Backup current state to local disk JSON file
-  syncToDisk();
 }

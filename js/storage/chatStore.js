@@ -231,8 +231,7 @@ export class ChatStore {
    *   one note below the whole (already-joined) message. Purely additive and
    *   optional - `content`/`toolTrace` keep their existing shape/meaning exactly
    *   as before, since other code (prompt history, editing, forking, search)
-   *   depends on those. Same single-current-variation limitation as `thoughts`/
-   *   `toolTrace` - not retained per past swipe, see CLAUDE.md.
+   *   depends on those.
    * @param {Array<string>} [images] - optional base64 `data:` URLs attached to
    *   this message. On a USER message these come from the composer's
    *   image-upload button; on an ASSISTANT message these come from the
@@ -244,8 +243,12 @@ export class ChatStore {
    *   snippets the builtin "Embed HTML" tool (js/services/builtinTools.js)
    *   produced mid-reply, surfaced from AgentRunner's toolTrace the same way
    *   `images` is (see chatView.js's `collectToolEmbeds`). Rendered in a
-   *   sandboxed iframe by chatView.js's `messageEmbedsHTML()`. Same
-   *   single-current-variation limitation as `thoughts`/`toolTrace`/`images`.
+   *   sandboxed iframe by chatView.js's `messageEmbedsHTML()`.
+   *
+   * `thoughts`/`toolTrace`/`toolSegments`/`images`/`embeds` all mirror only the
+   * currently-active swipe variation on the message's flat fields, but each
+   * variation's own copy is additionally kept in `swipeMeta` below, so switching
+   * between swipes restores the right one instead of showing blank/stale data.
    */
   static async addMessage(chatId, role, content, thoughts = '', swipes = [], toolTrace = [], toolSegments = [], images = [], embeds = []) {
     const now = Date.now();
