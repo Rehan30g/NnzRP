@@ -359,10 +359,17 @@
     flex-direction: column;
   }
 
-  /* Main Header on Mobile */
+  /* Main Header on Mobile. padding-top clears the OS status bar - the
+     installed Android APK (Capacitor WebView) draws edge-to-edge behind it,
+     so without this the header's own 52px content row renders directly
+     under/behind the status bar's clock/battery icons instead of below them.
+     Total height grows by the same inset so the 52px content row itself
+     stays fully visible and centered, not squeezed by the added padding.
+     env()'s 0px fallback makes this a no-op on desktop Electron/browsers
+     without a safe area. */
   .main-header {
-    padding: 0 1rem;
-    height: 52px;
+    padding: env(safe-area-inset-top, 0px) 1rem 0 1rem;
+    height: calc(52px + env(safe-area-inset-top, 0px));
     justify-content: center !important;
   }
 
@@ -416,9 +423,10 @@
     justify-content: center;
   }
 
-  /* View Container Padding on Mobile (Clear of 60px bottom nav bar) */
+  /* View Container Padding on Mobile (Clear of the bottom nav bar, which is
+     now 60px + env(safe-area-inset-bottom) tall - see .app-sidebar above). */
   .view-container:not(.chat-mode) {
-    padding: 1rem 1rem 110px 1rem !important;
+    padding: 1rem 1rem calc(110px + env(safe-area-inset-bottom, 0px)) 1rem !important;
   }
   .view-container.chat-mode {
     padding: 0 !important;
@@ -435,7 +443,12 @@
     margin-bottom: 2rem;
   }
 
-  /* Transform Sidebar into Sticky Mobile Bottom Navigation Bar */
+  /* Transform Sidebar into Sticky Mobile Bottom Navigation Bar.
+     padding-bottom clears Android's gesture-navigation bar the same way
+     .chat-input-container's own safe-area padding does - without it the
+     60px nav row (icons + labels) sits partly/fully behind the gesture
+     pill on a standalone/fullscreen install. The extra height keeps the
+     60px tap area itself full-size, with the inset as pure clearance below it. */
   .app-sidebar {
     position: fixed;
     bottom: 0;
@@ -443,7 +456,8 @@
     right: 0;
     top: auto;
     width: 100% !important;
-    height: 60px;
+    height: calc(60px + env(safe-area-inset-bottom, 0px));
+    padding-bottom: env(safe-area-inset-bottom, 0px);
     flex-direction: row;
     border-right: none;
     border-top: 1px solid var(--border-light);
