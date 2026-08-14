@@ -1258,9 +1258,12 @@
      bottom-shifted position (or the composer, sitting that much higher on a
      device with a gesture-nav inset, covers the last message/button - this
      was reported as "space at the bottom is too small, text gets covered
-     by the input"). */
+     by the input"). 165px (up from the old 110px) leaves genuine breathing
+     room past the floating composer's own height instead of landing the
+     last message's footer flush against its top edge - reported as the
+     last message reading cramped/squished against the input on mobile. */
   .messages-container {
-    padding: 0 0 calc(110px + env(safe-area-inset-bottom, 0px)) 0;
+    padding: 0 0 calc(165px + env(safe-area-inset-bottom, 0px)) 0;
     height: calc(100% - 52px - env(safe-area-inset-top, 0px));
   }
 
