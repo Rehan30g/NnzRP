@@ -66,16 +66,26 @@ jobs:
           if [ -z "$APK_PATH" ]; then echo "No APK produced" >&2; exit 1; fi
           echo "path=$APK_PATH" >> "$GITHUB_OUTPUT"
 
-      # One fixed, stable tag/release so there's always a single bookmarkable
-      # download URL (.../releases/latest/download/<apk-filename>) - each run
-      # overwrites the previous asset rather than piling up releases.
+      # One fixed, stable tag/release - shared with build-windows.yml - so
+      # there's always a single bookmarkable release page with a download for
+      # each platform. Re-running either workflow only replaces that
+      # workflow's own asset (softprops/action-gh-release adds/updates files,
+      # it doesn't clear the release), so the Android and Windows builds don't
+      # need to happen in the same run or even the same day to both show up here.
       - name: Publish / update release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: latest-apk
-          name: NnzRP (latest build)
+          tag_name: latest
+          name: NnzRP (Latest Build)
           body: |
-            Signed Android APK for NnzRP. The app's content always loads live
-            from GitHub Pages - this native shell only needs rebuilding when
-            the icon, permissions, appId, or Capacitor/Android SDK versions change.
+            Latest builds of NnzRP for each platform.
+
+            - **Android**: sideload the `.apk` (Chrome will warn about installing
+              from an unknown source - expected for a non-Play-Store app). Its
+              content always loads live from GitHub Pages, so it never needs
+              reinstalling for ordinary app updates - only for native-shell
+              changes (icon, permissions, appId, Capacitor/Android SDK version).
+            - **Windows**: run the `Setup .exe` installer (NSIS). This is a
+              fully bundled desktop build, so a new install IS needed whenever
+              the app itself changes - it does not load anything live.
           files: ${{ steps.apk.outputs.path }}

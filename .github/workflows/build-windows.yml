@@ -1,0 +1,59 @@
+name: Build Windows installer
+
+# Manual trigger ONLY. Unlike the Android APK (which loads its content live
+# from GitHub Pages, see build-apk.yml), the Electron desktop build is a
+# fully bundled local app (main.js loadFile()s index.html directly) - so a
+# new installer genuinely IS required whenever the app changes, there's no
+# "content updates without rebuilding" story here. Still manual-only rather
+# than on-push, since routine web-app iteration shouldn't force a multi-
+# minute Windows build on every commit; run this deliberately when a new
+# desktop release is actually wanted.
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: npm ci
+
+      # Matches the existing local `npm run build:exe` script exactly -
+      # produces an NSIS installer, a portable .exe, and a .zip in dist/.
+      - run: npm run build:exe
+
+      # Fail fast rather than let a silently-empty dist/ reach the release step.
+      - name: Verify installer was produced
+        shell: bash
+        run: |
+          INSTALLER_PATH=$(find dist -maxdepth 1 -iname "*Setup*.exe" | head -n1)
+          if [ -z "$INSTALLER_PATH" ]; then echo "No installer .exe produced" >&2; exit 1; fi
+
+      # Same shared `latest` release tag as build-apk.yml (see its own
+      # comment) - this just adds/updates the Windows asset on that release
+      # without touching the Android one.
+      - name: Publish / update release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: NnzRP (Latest Build)
+          body: |
+            Latest builds of NnzRP for each platform.
+
+            - **Android**: sideload the `.apk` (Chrome will warn about installing
+              from an unknown source - expected for a non-Play-Store app). Its
+              content always loads live from GitHub Pages, so it never needs
+              reinstalling for ordinary app updates - only for native-shell
+              changes (icon, permissions, appId, Capacitor/Android SDK version).
+            - **Windows**: run the `Setup .exe` installer (NSIS). This is a
+              fully bundled desktop build, so a new install IS needed whenever
+              the app itself changes - it does not load anything live.
+          files: dist/*.exe
