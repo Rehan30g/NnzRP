@@ -81,6 +81,23 @@
   background-color: var(--bg-primary);
 }
 
+/* Outside Electron (web/Android PWA - see the `browser-mode` class stamped by
+   index.html's pre-paint script when window.electronAPI is absent), the
+   Windows-style frameless titlebar has nothing to control - js/app.js already
+   hides its buttons, but the bar itself (icon + drag region) and its 36px
+   height reservation on #app were left in place, which reads as a stray
+   whitespace strip on a phone. Drop it entirely and let #app reclaim the
+   full viewport (100dvh accounts for mobile browser chrome resizing the
+   viewport as it shows/hides, which 100vh does not). */
+.browser-mode .custom-titlebar {
+  display: none;
+}
+
+.browser-mode #app {
+  height: 100vh;
+  height: 100dvh;
+}
+
 /* Sidebar Navigation - Flat White/Gray Sidebar */
 .app-sidebar {
   width: var(--sidebar-width);

@@ -1,0 +1,76 @@
+name: Build signed Android APK
+
+# Manual trigger ONLY, deliberately never runs on push. Routine frontend/CSS/
+# JS changes are handled entirely by deploy-pages.yml and reach the already-
+# installed APK on its next launch with no rebuild - this workflow only needs
+# to run again when the native shell itself changes (app icon, permissions,
+# appId, Capacitor/Android SDK version).
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: npm ci
+
+      # Copies www/ + capacitor.config.json into the native project so the
+      # build always reflects the current server.url / appId / etc.
+      - run: npx cap sync android
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      # Keystore is never committed (see .gitignore) - decoded here from the
+      # ANDROID_KEYSTORE_BASE64 repo secret into a gitignored (*.keystore)
+      # path for this job only, then referenced by android/app/build.gradle's
+      # env-var-driven signingConfig.
+      - name: Decode release keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "${{ github.workspace }}/release.keystore"
+
+      - name: Build release APK
+        working-directory: android
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ github.workspace }}/release.keystore
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleRelease --no-daemon
+
+      - name: Locate built APK
+        id: apk
+        run: |
+          APK_PATH=$(find android/app/build/outputs/apk/release -name "*.apk" | head -n1)
+          if [ -z "$APK_PATH" ]; then echo "No APK produced" >&2; exit 1; fi
+          echo "path=$APK_PATH" >> "$GITHUB_OUTPUT"
+
+      # One fixed, stable tag/release so there's always a single bookmarkable
+      # download URL (.../releases/latest/download/<apk-filename>) - each run
+      # overwrites the previous asset rather than piling up releases.
+      - name: Publish / update release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest-apk
+          name: NnzRP (latest build)
+          body: |
+            Signed Android APK for NnzRP. The app's content always loads live
+            from GitHub Pages - this native shell only needs rebuilding when
+            the icon, permissions, appId, or Capacitor/Android SDK versions change.
+          files: ${{ steps.apk.outputs.path }}

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <!-- Generic fallback only. js/app.js's navigate() rewrites document.title (and
        the .titlebar-title span below) to "NnzRP - <current view / character>"
        on every route change; Electron mirrors document.title to the taskbar. -->
@@ -10,6 +10,16 @@
   <link rel="icon" type="image/png" href="src/icon.png">
   <link rel="shortcut icon" type="image/x-icon" href="src/icon.ico">
   <link rel="apple-touch-icon" href="src/icon.png">
+
+  <!-- PWA (Android/web install target only - inert inside Electron, which
+       never reads manifest.json and loads via file:// instead of http(s)://). -->
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff">
+  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#131c2e">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="NnzRP">
 
   <!-- Google Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -175,5 +185,17 @@
 
   <!-- Main JavaScript ES Module -->
   <script type="module" src="js/app.js?v=1.2.0"></script>
+
+  <!-- Service worker: web/Android install target only. Electron always loads
+       via file:// and never needs this, so it's skipped entirely there. -->
+  <script>
+    if (!window.electronAPI && 'serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('sw.js').catch((err) => {
+          console.warn('Service worker registration failed:', err);
+        });
+      });
+    }
+  </script>
 </body>
 </html>
