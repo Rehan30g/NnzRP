@@ -10,6 +10,7 @@ import { MCPView } from './ui/views/mcpView.js';
 import { MCPToolRegistry } from './services/mcpToolRegistry.js';
 import { CharacterStore } from './storage/characterStore.js';
 import { initTheme } from './ui/theme.js';
+import { Toast } from './ui/components/toast.js';
 
 /**
  * Window-title suffixes per route. `navigate()` composes these into
@@ -84,6 +85,33 @@ class App {
       if (btnMinimize) btnMinimize.style.display = 'none';
       if (btnMaximize) btnMaximize.style.display = 'none';
       if (btnClose) btnClose.style.display = 'none';
+    }
+
+    // Android hardware/gesture back button (installed APK only - the
+    // @capacitor/app plugin's global is only ever present inside the native
+    // WebView, so this is a no-op in Electron/plain-browser builds). Fully
+    // overrides Capacitor's default goBack()-then-exit handling: from any
+    // view other than the character library, back returns to the library
+    // instead of exiting; from the library itself, exiting needs two presses
+    // within 2s (with a hint toast on the first) rather than one, matching
+    // the standard Android "press back again to exit" pattern.
+    const capacitorApp = window.Capacitor?.Plugins?.App;
+    if (capacitorApp) {
+      let lastBackPressAt = 0;
+      capacitorApp.addListener('backButton', () => {
+        const { view: currentView } = this.parseHash();
+        if (currentView !== 'characters') {
+          this.navigate('characters');
+          return;
+        }
+        const now = Date.now();
+        if (now - lastBackPressAt < 2000) {
+          capacitorApp.exitApp();
+        } else {
+          lastBackPressAt = now;
+          Toast.info('Press back again to exit');
+        }
+      });
     }
 
     // Restore view from the URL hash (if any)

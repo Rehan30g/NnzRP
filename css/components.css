@@ -821,26 +821,59 @@ input[type="color"] {
 }
 
 @media (max-width: 768px) {
+  /* The desktop `top: 44px` only clears the 36px custom titlebar - on
+     mobile/APK there's no titlebar, but there IS an OS status bar the
+     edge-to-edge install draws behind. Add its inset on top of the
+     existing clearance so the toast doesn't render under the status bar
+     icons (0px fallback keeps this a no-op without a real safe area). */
   .toast-container {
+    top: calc(44px + env(safe-area-inset-top, 0px));
     max-width: calc(100vw - 2rem);
   }
 
   /* .settings-savebar's `left: var(--sidebar-width)` assumes the desktop
-     left sidebar. On mobile the sidebar becomes a 60px-tall FIXED BOTTOM nav
-     bar instead (see .app-sidebar's mobile rules in layout.css), so that same
+     left sidebar. On mobile the sidebar becomes a FIXED BOTTOM nav bar
+     instead (see .app-sidebar's mobile rules in layout.css), so that same
      250px `left` sliced the savebar down to a squeezed sliver pinned to the
      right edge of the screen, and its `bottom: 0` sat it directly behind the
      bottom nav bar (nav's z-index 1000 beats the savebar's 40). Reset to span
-     the full width and sit just above the nav bar instead. */
+     the full width and sit just above the nav bar instead - `bottom` must
+     match .app-sidebar's actual mobile height (60px + safe-area-inset-bottom),
+     not a bare 60px, or this sits flush against/inside the nav bar's own
+     safe-area padding on a device with a gesture-nav inset. */
   .settings-savebar,
   .app-sidebar.collapsed ~ .app-main .settings-savebar {
     left: 0;
-    bottom: 60px;
+    bottom: calc(60px + env(safe-area-inset-bottom, 0px));
   }
 
   .settings-savebar-inner {
     padding: 0.75rem 1rem;
     justify-content: center;
+  }
+
+  /* .segmented is `display: inline-flex` (sizes to its children's intrinsic
+     content width, not its container's available width), and each
+     .segmented-option is `flex: 1; white-space: nowrap` - flex items don't
+     shrink below their own content's min-content size by default ("min-width:
+     auto" gotcha), so a group with longer labels (Chat Font Size's "Small
+     (14px)" / "Medium (15.5px)" / "Big (18px)") simply overflowed past the
+     viewport edge instead of the 3 options ever actually sharing the
+     available width evenly. Forcing the container to a real 100% width AND
+     giving options `min-width: 0` (to actually allow shrinking) plus
+     wrapping instead of clipping fixes both the overflow and the "Big"
+     option being cut off entirely. */
+  .segmented {
+    display: flex;
+    width: 100%;
+  }
+
+  .segmented-option {
+    min-width: 0;
+    padding: 0.5rem 0.5rem;
+    font-size: 0.8rem;
+    white-space: normal;
+    text-align: center;
   }
 }
 

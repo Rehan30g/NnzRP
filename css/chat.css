@@ -1238,18 +1238,30 @@
    Mobile Responsive Chat Layout Adjustments
    =================================================== */
 @media (max-width: 768px) {
+  /* Same OS status-bar clearance as .main-header (css/layout.css) - the
+     installed Android APK draws edge-to-edge, so without this the chat
+     header (avatar + character name) renders directly under the status
+     bar's clock/battery icons instead of below them. */
   .chat-header {
-    height: 52px;
-    padding: 0 0.75rem;
+    height: calc(52px + env(safe-area-inset-top, 0px));
+    padding: env(safe-area-inset-top, 0px) 0.75rem 0 0.75rem;
   }
 
   .message-block {
     padding: 1rem 0.85rem;
   }
 
+  /* Both values must track the safe-area additions above: height's 52px
+     subtraction has to grow with .chat-header's new inset-top padding (or
+     the stream renders that many px too tall, running under the header),
+     and the bottom padding has to grow with .chat-input-container's inset-
+     bottom-shifted position (or the composer, sitting that much higher on a
+     device with a gesture-nav inset, covers the last message/button - this
+     was reported as "space at the bottom is too small, text gets covered
+     by the input"). */
   .messages-container {
-    padding: 0 0 110px 0;
-    height: calc(100% - 52px);
+    padding: 0 0 calc(110px + env(safe-area-inset-bottom, 0px)) 0;
+    height: calc(100% - 52px - env(safe-area-inset-top, 0px));
   }
 
   .chat-input-container {
