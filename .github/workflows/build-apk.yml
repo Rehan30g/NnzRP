@@ -41,7 +41,12 @@ jobs:
       - name: Decode release keystore
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-        run: echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "${{ github.workspace }}/release.keystore"
+        # tr strips any stray whitespace/newlines the secret's value may carry
+        # (base64 -d is lenient about embedded newlines, but not other stray
+        # whitespace) before decoding to the keystore file.
+        run: |
+          echo -n "$ANDROID_KEYSTORE_BASE64" | tr -d '[:space:]' | base64 -d > "${{ github.workspace }}/release.keystore"
+          ls -la "${{ github.workspace }}/release.keystore"
 
       - name: Build release APK
         working-directory: android

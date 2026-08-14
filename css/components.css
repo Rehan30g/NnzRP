@@ -824,6 +824,24 @@ input[type="color"] {
   .toast-container {
     max-width: calc(100vw - 2rem);
   }
+
+  /* .settings-savebar's `left: var(--sidebar-width)` assumes the desktop
+     left sidebar. On mobile the sidebar becomes a 60px-tall FIXED BOTTOM nav
+     bar instead (see .app-sidebar's mobile rules in layout.css), so that same
+     250px `left` sliced the savebar down to a squeezed sliver pinned to the
+     right edge of the screen, and its `bottom: 0` sat it directly behind the
+     bottom nav bar (nav's z-index 1000 beats the savebar's 40). Reset to span
+     the full width and sit just above the nav bar instead. */
+  .settings-savebar,
+  .app-sidebar.collapsed ~ .app-main .settings-savebar {
+    left: 0;
+    bottom: 60px;
+  }
+
+  .settings-savebar-inner {
+    padding: 0.75rem 1rem;
+    justify-content: center;
+  }
 }
 
 .toast {

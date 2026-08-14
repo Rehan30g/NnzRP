@@ -22,14 +22,20 @@ android {
     // absent (e.g. a plain local `gradlew assembleRelease`), the signingConfig
     // is left unset and Gradle produces an unsigned release build instead of
     // failing, so this file works the same whether or not CI secrets exist.
-    def ksFile = System.getenv("ANDROID_KEYSTORE_PATH")
+    // .trim() guards against a stray trailing newline/whitespace sneaking into
+    // a GitHub secret's value when it was copy-pasted in (a JKS wrong-password
+    // failure from this looks identical to an actually-wrong password:
+    // "Given final block not properly padded" from the JCE, no hint it was
+    // just an extra \n) - trimming here is harmless when the secret was clean
+    // to begin with.
+    def ksFile = System.getenv("ANDROID_KEYSTORE_PATH")?.trim()
     if (ksFile) {
         signingConfigs {
             release {
                 storeFile file(ksFile)
-                storePassword System.getenv("ANDROID_KEYSTORE_PASSWORD")
-                keyAlias System.getenv("ANDROID_KEY_ALIAS")
-                keyPassword System.getenv("ANDROID_KEY_PASSWORD")
+                storePassword System.getenv("ANDROID_KEYSTORE_PASSWORD")?.trim()
+                keyAlias System.getenv("ANDROID_KEY_ALIAS")?.trim()
+                keyPassword System.getenv("ANDROID_KEY_PASSWORD")?.trim()
             }
         }
     }
