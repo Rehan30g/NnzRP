@@ -1,0 +1,57 @@
+name: Deploy web app to GitHub Pages
+
+# Only the actual web-app files trigger a deploy - this is what lets the
+# installed Android APK (a Capacitor WebView shell pointed at this Pages URL,
+# see capacitor.config.json) pick up frontend changes on its next launch with
+# zero rebuild/reinstall. Anything under android/ or the workflows themselves
+# never touches Pages and never needs to.
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'index.html'
+      - 'manifest.json'
+      - 'sw.js'
+      - 'css/**'
+      - 'js/**'
+      - 'src/**'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Stage only the actual public web root - deliberately excludes
+      # Electron-only files (main.js, preload.js, serve.js) and the Android/
+      # Capacitor project, which have no reason to be published as a static site.
+      - name: Stage site
+        run: |
+          mkdir -p _site
+          cp index.html manifest.json sw.js _site/
+          cp -r css js src _site/
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

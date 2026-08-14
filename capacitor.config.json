@@ -1,0 +1,12 @@
+{
+  "appId": "com.nnzrp.app",
+  "appName": "NnzRP",
+  "webDir": "www",
+  "server": {
+    "url": "https://rehan30g.github.io/NnzRP/",
+    "cleartext": false
+  },
+  "android": {
+    "allowMixedContent": false
+  }
+}

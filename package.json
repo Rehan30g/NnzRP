@@ -5,7 +5,8 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "build:exe": "electron-builder --win nsis zip portable"
+    "build:exe": "electron-builder --win nsis zip portable",
+    "serve": "node serve.js"
   },
   "keywords": [
     "ai",
@@ -20,6 +21,9 @@
     "url": "https://github.com/Rehan30g/NnzRP.git"
   },
   "devDependencies": {
+    "@capacitor/android": "^8.5.0",
+    "@capacitor/cli": "^8.5.0",
+    "@capacitor/core": "^8.5.0",
     "electron": "^31.2.0",
     "electron-builder": "^24.13.3"
   },

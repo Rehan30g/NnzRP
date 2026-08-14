@@ -1253,7 +1253,11 @@
   }
 
   .chat-input-container {
-    bottom: 12px;
+    /* env(safe-area-inset-bottom) keeps the composer clear of Android's
+       gesture-navigation bar when installed as a standalone PWA - falls back
+       to 0px on browsers without safe-area support (e.g. desktop Electron,
+       which never applies this rule anyway since it stays above 768px). */
+    bottom: calc(12px + env(safe-area-inset-bottom, 0px));
     width: calc(100% - 20px);
   }
 
