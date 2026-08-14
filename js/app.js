@@ -181,6 +181,15 @@ class App {
       return; // Already on requested view
     }
 
+    // ChatView's generation state (in-flight fetch, an open MCP tool-permission
+    // prompt, window-level keydown/message listeners) is a module-level
+    // singleton that outlives this route swap unless explicitly torn down.
+    // Every navigation path funnels through here - hashchange, sidebar clicks,
+    // the dedicated Back button, a stray link inside a chat message - so this
+    // is the one place that can reliably catch all of them. A no-op when chat
+    // isn't (or wasn't) mounted. See CLAUDE.md's chatView-internals notes.
+    ChatView.teardown();
+
     this.currentView = viewName;
     if (params.characterId) {
       this.activeCharacterId = params.characterId;
