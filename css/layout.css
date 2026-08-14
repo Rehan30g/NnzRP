@@ -387,6 +387,18 @@
     margin-bottom: 1.25rem;
   }
 
+  /* .view-header-row > *:first-child's `flex: 1 1 320px` (desktop rule,
+     above) sets a flex-BASIS of 320px on whatever axis is currently the main
+     axis. That's fine as a min-width on the desktop row layout, but once the
+     rule right above flips this container to flex-direction: column, the
+     same 320px becomes a min-HEIGHT instead - combined with flex-grow: 1 it
+     stretches the title/description block far taller than its actual text
+     content, shoving the action button down and reading as a huge empty gap.
+     Must be reset every time the axis flips. */
+  .view-header-row > *:first-child {
+    flex: 0 1 auto;
+  }
+
   .view-header-row > div {
     width: 100%;
   }
