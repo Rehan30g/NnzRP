@@ -74,10 +74,19 @@ if (window.marked) {
 let activeAbortController = null;
 let isGenerating = false;
 
-// Torn down at the start of the next render(): the window listeners below are
-// otherwise only removed by the Back button, so leaving chat via a hashchange
-// leaked one pair per visit.
-let disposeChatWindowListeners = null;
+// Set by render(), invoked by the static teardown() below (called from
+// App.navigate() right before it wipes #view-container's innerHTML - see
+// CLAUDE.md's chatView-internals notes) and re-checked at the start of the
+// next render() as a belt-and-braces cleanup of a stale previous mount.
+// Covers every way the chat view can go away mid-generation, not just the
+// dedicated Back button: sidebar nav, a hashchange from a link inside a chat
+// message (`[x](#settings)` renders as a real link), Ctrl+./Alt+C leading
+// elsewhere, etc. Without this, an open MCP tool-permission prompt's promise
+// never settles (nothing left to click, and no abort was ever issued), which
+// hangs AgentRunner's tool loop forever and leaves `isGenerating` - a
+// module-level singleton shared by the whole app - stuck true, silently
+// blocking every future generation in every chat until app restart.
+let activeChatTeardown = null;
 
 // A message typed/submitted while a generation is already in flight - kept
 // here (not disabling the composer) so the user can keep drafting instead of
@@ -1492,7 +1501,7 @@ export class ChatView {
         drawerOverlay.classList.add('hidden');
       }
     };
-    if (disposeChatWindowListeners) disposeChatWindowListeners();
+    if (activeChatTeardown) activeChatTeardown();
     window.addEventListener('keydown', handleKeydown);
 
     // Message-based bridge for embed-HTML iframes (js/ui/views/chatView.js's
@@ -1543,7 +1552,13 @@ export class ChatView {
       }
     };
     window.addEventListener('message', handleEmbedMessage);
-    disposeChatWindowListeners = () => {
+    activeChatTeardown = () => {
+      // The permission prompt lives in a DOM the router is about to throw
+      // away; without resolving it here (abort first - showToolPermissionPrompt
+      // resolves 'decline' on the signal's abort event - then force-close as a
+      // second layer) its promise never settles and the tool loop hangs.
+      if (activeAbortController) activeAbortController.abort();
+      removeToolPermissionPrompt();
       window.removeEventListener('keydown', handleKeydown);
       window.removeEventListener('message', handleEmbedMessage);
     };
@@ -1577,13 +1592,9 @@ export class ChatView {
     const backBtn = container.querySelector('#btn-chat-back');
     if (backBtn && onBack) {
       backBtn.onclick = () => {
-        window.removeEventListener('keydown', handleKeydown);
-        window.removeEventListener('message', handleEmbedMessage);
-        // The permission prompt lives in a DOM the router is about to throw
-        // away; without resolving it here its promise never settles, the tool
-        // loop hangs forever and `isGenerating` stays stuck true.
-        if (activeAbortController) activeAbortController.abort();
-        removeToolPermissionPrompt();
+        // App.navigate() (reached via onBack()) calls ChatView.teardown()
+        // itself before swapping the view, same as every other navigation
+        // path - no need to duplicate the cleanup here.
         onBack();
       };
     }
@@ -2405,6 +2416,12 @@ export class ChatView {
 
     const renderMessages = async () => {
       const messagesEl = container.querySelector('#messages-container');
+      // The user may have navigated away while this call was queued behind an
+      // earlier `await` (e.g. a generation's abort/error handler racing
+      // App.navigate()'s DOM swap after ChatView.teardown() runs) - the data
+      // is already safely persisted via ChatStore by this point, there's just
+      // nothing left on screen to render it into.
+      if (!messagesEl) return;
       const msgs = await ChatStore.getMessages(currentChatId);
       const activePersonaObj = await PersonaStore.getDefault();
       const userName = activePersonaObj?.name || 'User';
@@ -2807,6 +2824,11 @@ export class ChatView {
       }));
 
       const messagesEl = container.querySelector('#messages-container');
+      // The awaits above (proxy/settings/tool discovery) give a navigation-away
+      // a window to tear this view down before generation actually starts -
+      // same reasoning as renderMessages()'s guard below, just earlier in the
+      // sequence. Nothing to attach a typing indicator to.
+      if (!messagesEl) { isGenerating = false; return; }
       const typingIndicator = document.createElement('div');
       typingIndicator.className = 'message-block assistant';
       typingIndicator.id = 'typing-indicator';
@@ -3086,6 +3108,23 @@ export class ChatView {
     // Initial render
     await updateSessionList();
     await renderMessages();
+  }
+
+  /**
+   * Tears down whatever ChatView.render() currently has mounted: aborts an
+   * in-flight generation, force-resolves any open MCP tool-permission prompt,
+   * and removes the window-level keydown/message listeners. Idempotent (safe
+   * to call when nothing is mounted, or more than once) since it clears
+   * `activeChatTeardown` after running. Must be called by App.navigate()
+   * before it replaces #view-container's innerHTML for ANY route change,
+   * not just the dedicated Back button - see the note on `activeChatTeardown`
+   * above for why.
+   */
+  static teardown() {
+    if (!activeChatTeardown) return;
+    const cleanup = activeChatTeardown;
+    activeChatTeardown = null;
+    cleanup();
   }
 
   /* Direct Message Swipe Handlers */
