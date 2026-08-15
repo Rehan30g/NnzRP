@@ -22,6 +22,7 @@ import { Toast } from '../components/toast.js';
 import { dropdownHTML, wireDropdown } from '../components/dropdown.js';
 import { toggleRowHTML } from '../components/toggle.js';
 import { ACCENT_PRESETS, setThemeMode, setAccent, applyAccent } from '../theme.js';
+import { showOnboardingWizard } from '../components/onboardingWizard.js';
 import { escapeHtml, escapeAttr } from '../../utils/sanitize.js';
 
 const TAB_ICONS = {
@@ -375,6 +376,17 @@ export class SettingsView {
               <input type="file" id="input-import-data-file" accept=".json" style="display:none;">
             </div>
           </div>
+
+          <div class="card">
+            <h3 class="settings-section-title">Setup Wizard</h3>
+            <p class="settings-section-desc">
+              Re-run the first-run walkthrough (provider, model, persona, and the recommended optional settings) - useful for revisiting it after skipping, or for setting up a second provider from scratch.
+            </p>
+            <button class="btn btn-secondary" id="btn-rerun-onboarding">
+              <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21.5 2v6h-6"></path><path d="M2.5 22v-6h6"></path><path d="M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"></path></svg>
+              Run Setup Wizard Again
+            </button>
+          </div>
         </div>
 
         <div class="settings-savebar${initialTab === 'proxies' || initialTab === 'data' ? ' hidden' : ''}" id="settings-savebar">
@@ -718,6 +730,11 @@ export class SettingsView {
           inputImportFile.value = '';
         }
       };
+    }
+
+    const btnRerunOnboarding = container.querySelector('#btn-rerun-onboarding');
+    if (btnRerunOnboarding) {
+      btnRerunOnboarding.onclick = () => showOnboardingWizard();
     }
   }
 }

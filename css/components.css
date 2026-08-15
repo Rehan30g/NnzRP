@@ -858,6 +858,166 @@ input[type="color"] {
   background: var(--bg-muted);
 }
 
+/* ===================================================
+   First-run setup wizard (js/ui/components/onboardingWizard.js)
+   ===================================================
+   Deliberately its own overlay, not a Modal.open() call - a Modal doesn't
+   support multi-step navigation, a progress indicator, or (on mobile) a
+   true fullscreen takeover with directional slide transitions between
+   steps. Desktop keeps the same "dimmed backdrop + floating card" language
+   as .modal-overlay/.modal-content, just bigger and with its own
+   progress/footer chrome; the mobile-only fullscreen treatment lives in
+   this file's shared @media (max-width: 768px) block further down. */
+.onboarding-overlay {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: var(--overlay-bg);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10500;
+  padding: 1.5rem;
+  animation: fadeIn var(--transition-fast);
+}
+
+.onboarding-window {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-xl);
+  width: 100%;
+  max-width: 680px;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+
+.onboarding-progress {
+  display: flex;
+  justify-content: center;
+  gap: 0.4rem;
+  padding: 1.25rem 1.5rem 0;
+  flex-shrink: 0;
+}
+
+.onboarding-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-full);
+  background: var(--border-light);
+  transition: background var(--transition-fast), width var(--transition-fast);
+}
+
+.onboarding-dot.done {
+  background: var(--accent-primary-soft);
+}
+
+.onboarding-dot.active {
+  width: 20px;
+  background: var(--accent-primary);
+}
+
+.onboarding-slide {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1.75rem 2rem;
+  min-height: 340px;
+}
+
+.onboarding-step h2 {
+  font-size: 1.4rem;
+  margin: 0 0 0.5rem;
+}
+
+.onboarding-step-eyebrow {
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-accent);
+  margin-bottom: 0.4rem;
+}
+
+.onboarding-step-desc {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  line-height: 1.55;
+  margin: 0 0 1.35rem;
+}
+
+.onboarding-step-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  height: 100%;
+  min-height: 290px;
+}
+
+/* The app's own icon (src/icon.png), plain - no frame/badge/gradient
+   wrapper. A first attempt reused index.html's boot-splash gradient-square
+   treatment (.app-loading-logo/-inner), but that square's own colour clashed
+   with the icon's own pixel-art palette instead of matching it - the icon
+   was never designed to sit inside a coloured frame. */
+.onboarding-step-icon {
+  margin-bottom: 1.25rem;
+}
+
+.onboarding-step-icon img {
+  display: block;
+  width: 64px;
+  height: 64px;
+}
+
+.onboarding-step-center .onboarding-step-desc {
+  max-width: 420px;
+  margin-bottom: 0;
+}
+
+.onboarding-footer {
+  padding: 1rem 1.5rem;
+  border-top: 1px solid var(--border-light);
+  background: var(--bg-muted);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+}
+
+.onboarding-footer-nav {
+  display: flex;
+  gap: 0.6rem;
+}
+
+.onboarding-btn-hidden {
+  visibility: hidden;
+}
+
+/* Directional "slide" transition between steps - a plain opacity fadeIn
+   would read the same going forward or back, which is what made this feel
+   like a form instead of the "slideshow" the mobile layout is going for.
+   translateX's sign is the only difference between the two directions. */
+@keyframes onboardingSlideInFwd {
+  from { opacity: 0; transform: translateX(24px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes onboardingSlideInBack {
+  from { opacity: 0; transform: translateX(-24px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.onboarding-slide-enter-fwd > .onboarding-step {
+  animation: onboardingSlideInFwd 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.onboarding-slide-enter-back > .onboarding-step {
+  animation: onboardingSlideInBack 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
 /* Toasts - Phone-style banner: drops from the top, never stacks, gets out of the way fast. */
 .toast-container {
   position: fixed;
@@ -1168,6 +1328,123 @@ input[type="color"] {
 
   .settings-section-title {
     font-size: 0.98rem;
+  }
+
+  /* First-run wizard goes fullscreen "slideshow" on mobile instead of a
+     floating card - safe-area padding on top/bottom since it's the one
+     overlay in the app that can be the very first thing a user ever sees,
+     before they've scrolled past a status bar anywhere else. */
+  .onboarding-overlay {
+    padding: 0;
+    align-items: stretch;
+  }
+
+  .onboarding-window {
+    max-width: none;
+    max-height: none;
+    width: 100%;
+    height: 100%;
+    border: none;
+    border-radius: 0;
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+
+  .onboarding-slide {
+    padding: 2rem 1.35rem 1.5rem;
+    min-height: 0;
+  }
+
+  .onboarding-step-center {
+    min-height: 0;
+    height: 100%;
+    justify-content: center;
+  }
+
+  /* Typography sized for a 680px floating desktop card reads small and
+     cramped stretched across a full phone screen - a native mobile
+     onboarding screen leans bigger and more generous, not "the same
+     desktop form, just wider". Bumped independently of the desktop
+     values above rather than scaling them, since the two are trying to
+     look like different things (a compact settings-style card vs. a
+     full-screen welcome/step screen). */
+  .onboarding-step h2 {
+    font-size: 1.7rem;
+  }
+
+  .onboarding-step-desc {
+    font-size: 1rem;
+    line-height: 1.6;
+  }
+
+  .onboarding-step-eyebrow {
+    font-size: 0.82rem;
+  }
+
+  .onboarding-step-icon img {
+    width: 84px;
+    height: 84px;
+  }
+
+  /* Next is the prominent, thumb-reachable action; Back/Skip are secondary
+     and sit below it. column-reverse (rather than reordering the markup)
+     is what puts .onboarding-footer-nav (the 2nd DOM child) above
+     #onboarding-skip (the 1st) - last child renders first in a reversed
+     column. */
+  .onboarding-footer {
+    flex-direction: column-reverse;
+    gap: 0.6rem;
+    padding-bottom: calc(1rem + env(safe-area-inset-bottom, 0px));
+  }
+
+  .onboarding-footer-nav {
+    width: 100%;
+  }
+
+  .onboarding-footer-nav #onboarding-next {
+    flex: 1;
+  }
+
+  /* On the welcome/done slides Back or Skip is inapplicable - desktop's
+     .onboarding-btn-hidden (base rule, above) keeps that as visibility:
+     hidden to hold its place in a fixed side-by-side row, but that same
+     reserved space here left Next looking shoved off to one side of an
+     invisible ghost button instead of genuinely full-width. Collapsing it
+     out of the layout entirely is correct for THIS stacked arrangement. */
+  .onboarding-btn-hidden {
+    display: none;
+  }
+
+  /* Small plain-text link, not a button - a bordered/filled .btn read as a
+     second competing call-to-action sitting right under "Get Started",
+     which is exactly the "aneh banget" complaint. Strips every .btn/.btn-sm
+     visual (background, border, shadow, min-height, bold weight) back to
+     inline text; still a real <button> underneath so it stays a proper
+     tap target and keeps working with the existing click handler. */
+  #onboarding-skip {
+    align-self: center;
+    background: none;
+    border: none;
+    box-shadow: none;
+    min-height: 0;
+    padding: 0.5rem 0.75rem;
+    font-weight: 500;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+  }
+
+  #onboarding-skip:hover {
+    background: none;
+    color: var(--text-main);
+  }
+
+  /* Only the very first slide offers Skip at all on mobile - once "Get
+     Started" is pressed it stops being offered on every following slide
+     instead of sitting there as a second option each time. Desktop keeps
+     showing it through every step (its own .onboarding-btn-hidden handling,
+     base rule above, only hides it on the very last step) since that
+     wasn't what was reported as the problem. */
+  .onboarding-skip-not-first {
+    display: none !important;
   }
 }
 

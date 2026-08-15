@@ -11,6 +11,7 @@ import { MCPToolRegistry } from './services/mcpToolRegistry.js';
 import { CharacterStore } from './storage/characterStore.js';
 import { initTheme } from './ui/theme.js';
 import { Toast } from './ui/components/toast.js';
+import { maybeShowOnboardingWizard } from './ui/components/onboardingWizard.js';
 
 /**
  * Window-title suffixes per route. `navigate()` composes these into
@@ -117,6 +118,12 @@ class App {
     // Restore view from the URL hash (if any)
     const { view, params } = this.parseHash();
     await this.navigate(view, params);
+
+    // First-run setup wizard - shown as an overlay on top of whatever route
+    // just rendered above (normally the character library), not a route of
+    // its own. No-ops instantly after the first successful run (or an
+    // explicit Skip) via js/storage/onboardingStore.js's completion flag.
+    await maybeShowOnboardingWizard().catch(err => console.warn('Onboarding wizard failed to show:', err.message));
   }
 
   /** Reads window.location.hash into a { view, params } route descriptor. */
