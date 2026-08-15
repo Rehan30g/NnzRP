@@ -6,7 +6,7 @@
 
 ### Roleplay with AI characters that can actually *use tools* — mid-scene, in character.
 
-A 100% client-side, BYOK AI roleplay desktop app with real MCP tool-calling.<br>
+A 100% client-side, BYOK AI roleplay app with real MCP tool-calling — Windows, Android, or the browser.<br>
 No backend. No account. No telemetry.
 
 <br>
@@ -14,7 +14,7 @@ No backend. No account. No telemetry.
 [![MCP](https://img.shields.io/badge/MCP-native%20tool%20calling-8B5CF6?style=flat-square)](#the-part-that-makes-this-different)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
 [![Electron](https://img.shields.io/badge/Electron-31-47848F?style=flat-square&logo=electron&logoColor=white)](https://www.electronjs.org/)
-[![Platform](https://img.shields.io/badge/platform-Windows-0078D6?style=flat-square)](#getting-started)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Android%20%7C%20Web-0078D6?style=flat-square)](#get-nnzrp)
 [![Backend](https://img.shields.io/badge/backend-none-success?style=flat-square)](#data--privacy)
 
 <br>
@@ -109,10 +109,27 @@ Two tools ship built in. No MCP server, no config file — they go through the e
 | **Characters & personas** | Avatars by URL or upload, keyword-triggered lorebooks, switchable system prompt presets. |
 | **Themeable** | Light, dark, or follow-the-OS, with a custom accent color. |
 | **Backup & restore** | Export everything to one JSON file and re-import it anywhere. |
+| **Actually built for phones** | Not desktop chrome shrunk to fit — a bottom-sheet model/provider picker, swipe-to-dismiss sheets, and a settings/tools UI that stays flat and thumb-reachable instead of stacking desktop-sized cards. |
 
 ---
 
-## Getting Started
+## Get NnzRP
+
+The same app, three ways — pick whichever fits how you actually use it.
+
+| | |
+|---|---|
+| **Web / PWA** | Open **[rehan30g.github.io/NnzRP](https://rehan30g.github.io/NnzRP/)** in any browser. Works as a regular tab, or use your browser's *Install app* option to add it to your home screen/desktop like a native app. Full mobile-optimized UI — bottom-sheet pickers, swipe-to-dismiss gestures, safe-area aware layout for notches and gesture bars. |
+| **Android** | Grab the signed APK from the **[latest release](https://github.com/Rehan30g/NnzRP/releases/latest)** and sideload it — no Play Store listing. It's a thin shell that loads the app live from the Pages URL above, so it updates itself on next launch, no reinstall needed. |
+| **Windows** | Grab the NSIS installer or the portable `.exe` from the same **[latest release](https://github.com/Rehan30g/NnzRP/releases/latest)** — or build it yourself, see below. |
+
+> [!NOTE]
+> Local MCP servers that run as a child process (**stdio/command** transport) only work in the Windows desktop build. Web and Android are sandboxed and can only reach **HTTP** MCP servers — use an HTTP-based server if you're on mobile.
+
+<details>
+<summary><b>Run from source</b></summary>
+
+<br>
 
 > **Requires** [Node.js](https://nodejs.org/) 18 or newer.
 
@@ -123,12 +140,9 @@ npm install
 npm start
 ```
 
-On Windows, double-clicking `run.bat` does the same thing.
+On Windows, double-clicking `run.bat` does the same thing. That runs the Electron desktop build; `npm run serve` instead serves the plain web/PWA build locally (what the Android APK ultimately points at in production).
 
-<details>
-<summary><b>Build a Windows distributable</b></summary>
-
-<br>
+**Build a Windows distributable:**
 
 ```bash
 npm run build:exe
@@ -192,7 +206,13 @@ Once enabled, that server's tools are available to every character in every chat
 
 ## Tech Stack
 
-[Electron](https://www.electronjs.org/) shell (frameless, `contextIsolation: true`, `nodeIntegration: false`, minimal IPC surface) around a vanilla ES6-module renderer — no framework, no build step. Storage is native IndexedDB; markdown via [`marked.js`](https://marked.js.org/); packaging via [`electron-builder`](https://www.electron.build/).
+Three thin platform shells around one vanilla ES6-module renderer — no framework, no build step:
+
+- **[Electron](https://www.electronjs.org/)** (Windows desktop) — frameless window, `contextIsolation: true`, `nodeIntegration: false`, a minimal IPC surface (window controls plus a stdio MCP bridge). The only shell that can spawn local MCP servers.
+- **PWA** (any browser) — a service worker and manifest make it installable from a plain browser tab, with stale-while-revalidate caching.
+- **[Capacitor](https://capacitorjs.com/)** (Android) — a thin WebView shell pointed at the live GitHub Pages deployment instead of a bundled snapshot, so a push to `master` reaches the installed APK on its next launch with no rebuild or reinstall.
+
+Storage is native IndexedDB everywhere; markdown via [`marked.js`](https://marked.js.org/); desktop packaging via [`electron-builder`](https://www.electron.build/), Android via Gradle. GitHub Actions auto-deploys the web build on every push and can build signed APK/Windows releases on demand.
 
 Provider calls are direct `fetch()` requests in each provider's native shape — including each one's own streaming format, reasoning format, and function-calling wire format, normalized behind a single interface.
 
