@@ -1285,4 +1285,26 @@
     font-size: 0.9rem;
     max-height: 120px;
   }
+
+  /* The model picker's wrapperStyle (`max-width:260px; width:auto;
+     min-width:150px`, set inline via dropdownHTML - see dropdown.js) was
+     tuned for desktop. On a narrow phone a long model id (e.g.
+     "deepseek/deepseek-v4-flash-0731") still rendered at close to its full
+     content width instead of reliably clamping to max-width in this flex
+     row, squeezing/shifting the send button instead of the dropdown's own
+     .dropdown-trigger-label just ellipsis-truncating (which it already
+     supports - css/components.css). !important is required to beat the
+     inline style. Making the dropdown the ONLY flexible item (flex:1,
+     min-width:0) and pinning the attach/send buttons to their own size is
+     what actually guarantees the buttons never move. */
+  .chat-attach-wrap,
+  #btn-send-message {
+    flex-shrink: 0;
+  }
+
+  [data-dropdown-for="chat-model-select"] {
+    flex: 1 1 0 !important;
+    min-width: 0 !important;
+    max-width: none !important;
+  }
 }

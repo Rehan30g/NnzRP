@@ -831,6 +831,16 @@ input[type="color"] {
     max-width: calc(100vw - 2rem);
   }
 
+  /* Info/success toasts (e.g. "Model diset ke: ...", theme/proxy switch
+     confirmations) read as clutter on a small screen, easily overlapping
+     other content - only error toasts are important enough to interrupt the
+     view on mobile. Still created/timed normally in JS (toast.js has no
+     mobile-awareness and doesn't need any - this is purely a display:none),
+     so nothing about the desktop behavior changes. */
+  .toast:not(.toast-error) {
+    display: none;
+  }
+
   /* .settings-savebar's `left: var(--sidebar-width)` assumes the desktop
      left sidebar. On mobile the sidebar becomes a FIXED BOTTOM nav bar
      instead (see .app-sidebar's mobile rules in layout.css), so that same
