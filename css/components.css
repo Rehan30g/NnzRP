@@ -59,6 +59,21 @@
   color: var(--accent-on-solid);
 }
 
+/* Transient "Saved" state for the Settings save button (settingsView.js's
+   flashSaved) - and for chatView.js's Modal-footer twin, which triggers it.
+   The button is `disabled` for the ~1.6s the label is swapped so a double tap
+   can't re-enter it, so `.btn:disabled`'s opacity: 0.5 has to be undone here
+   or the confirmation reads as greyed-out/failed rather than as success. */
+.btn.btn-saved-flash,
+.btn.btn-saved-flash:disabled,
+.btn.btn-saved-flash[disabled] {
+  opacity: 1;
+  cursor: default;
+  background: var(--badge-emerald-bg);
+  color: var(--badge-emerald-fg);
+  border-color: var(--badge-emerald-border);
+}
+
 .btn-secondary {
   background: var(--bg-surface);
   color: var(--text-main);
@@ -621,6 +636,25 @@ input[type="color"] {
   display: none !important;
 }
 
+/* Tab switching used to be an instant swap (one panel display:none, the next
+   display:flex), which reads as a hard snap - most noticeable on mobile,
+   where the tab bar and the panel fill the whole screen.
+
+   Deliberately an ANIMATION on the visible panel, not a transition: `display`
+   isn't animatable, but a CSS animation restarts every time an element goes
+   from `display: none` to rendered, which is exactly the moment we want it.
+   No JS involvement, nothing to keep in sync with settingsView.js's
+   `classList.toggle('hidden')`, and no interaction is blocked while it plays.
+
+   Reuses the existing `fadeIn` keyframe + `--transition-fast` (150ms) rather
+   than inventing a per-element duration/easing - it is the same subtle
+   opacity+4px rise already used by modals, dropdowns and the drawer overlay.
+   The tab bar itself is a SIBLING of the panels, so its `position: sticky`
+   is unaffected by the panel's transient transform. */
+.settings-panel:not(.hidden) {
+  animation: fadeIn var(--transition-fast);
+}
+
 .settings-section-title {
   font-size: 1.1rem;
   margin-bottom: 0.35rem;
@@ -659,7 +693,13 @@ input[type="color"] {
   right: 0;
   bottom: 0;
   z-index: 40;
-  background: var(--bg-primary);
+  /* Was --bg-primary, the page CANVAS colour - identical to .view-container's
+     own background, so the bar visually disappeared into the page behind it
+     ("looks transparent" on mobile, where there's no card immediately behind
+     it to contrast against). --bg-surface is the token variables.css itself
+     documents for "cards, bars" - .settings-tabbar/.main-header/.modal-header
+     all already use it; this bar just never matched them. */
+  background: var(--bg-surface);
   border-top: 1px solid var(--border-light);
   box-shadow: 0 -4px 12px rgba(15, 23, 42, 0.06);
 }
@@ -736,6 +776,16 @@ input[type="color"] {
   padding: 1.5rem;
   box-shadow: var(--shadow-sm);
   transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+  /* Grid/flex items default to min-width:auto, which lets a nowrap child
+     (proxiesView.js's endpoint URL line - white-space:nowrap +
+     text-overflow:ellipsis) force the item wider than its track instead of
+     ever actually truncating - the whole .grid-cards row (and on mobile,
+     the whole modal/page around it) overflows sideways instead. Reported as
+     "Proxies di mobile overflow": the card's badges/text were visibly
+     clipped off the right edge of the screen. min-width:0 is what lets a
+     grid/flex item shrink below its content's intrinsic width so the
+     ellipsis rule can actually engage. */
+  min-width: 0;
 }
 
 .card:hover {
@@ -857,9 +907,19 @@ input[type="color"] {
     bottom: calc(60px + env(safe-area-inset-bottom, 0px));
   }
 
+  /* Only the Save button on a phone, pushed to the right edge. The hint
+     sentence ("Theme & accent save instantly...") is desktop-only copy that
+     ate most of the bar's width next to the button, squeezing it into a
+     centered sliver - same "explanatory sentence is the majority of what's
+     visible" call already made for .view-header-row p and
+     .settings-section-desc. */
+  .settings-savebar-hint {
+    display: none;
+  }
+
   .settings-savebar-inner {
     padding: 0.75rem 1rem;
-    justify-content: center;
+    justify-content: flex-end;
   }
 
   /* .segmented is `display: inline-flex` (sizes to its children's intrinsic
@@ -884,6 +944,230 @@ input[type="color"] {
     font-size: 0.8rem;
     white-space: normal;
     text-align: center;
+  }
+
+  /* .modal-content had NO mobile-specific rules at all - a centered
+     max-width:650px box shrunk to fit a phone still reads as "a small
+     window", and with a 5-tab .settings-tabbar wrapping into a dense grid
+     (below) plus proxy cards inside, the Global Settings modal in
+     particular felt cramped/overflowing. Same bottom-sheet treatment as
+     the chat right-drawer (.chat-right-drawer-content, css/chat.css) and
+     the new model-picker sheet - reuses the already-proven slideUpMobile
+     keyframe (defined in css/chat.css, globally available since both
+     files load on the same page). */
+  .modal-overlay {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  .modal-content {
+    width: 100% !important;
+    max-width: 100% !important;
+    max-height: 88vh !important;
+    border-radius: 20px 20px 0 0;
+    animation: slideUpMobile 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  /* Was `flex-wrap: wrap`, which packed 5 icon+label tabs into a dense
+     2-3 row grid - a horizontally-scrollable single row is the standard
+     mobile tab-bar pattern and reads far less cramped.
+
+     ...and it must stop looking like a free-floating rounded pill with a gap
+     above it. A mobile tab bar sits FLUSH under whatever header is above it,
+     as one continuous surface: no top gap, no rounded top corners, no border
+     boxing it off from that header, and full-bleed to the screen edges.
+
+     An EARLIER version of this fix tried a negative margin-top on
+     `.settings-tabbar` itself (the same trick `.settings-panel > .card` uses
+     further down for its own edge-to-edge bleed) to cancel the scroll
+     container's own top padding. That does not work here and was confirmed
+     broken by direct measurement (getBoundingClientRect), not just code
+     review: `.settings-tabbar` is `position: sticky`, and Chromium computes a
+     sticky element's rendered position against its nearest scrolling
+     ancestor's padding box directly - it does NOT pick up a negative margin
+     that only "visually" relocates an ancestor via ordinary block margin
+     collapsing. The bar's OWN box measurably stayed pinned at the padding
+     boundary (i.e. still offset from the header by the full padding amount)
+     no matter which element in the chain carried the negative margin,
+     confirmed with `position: static` on the same element (no sticky) making
+     the identical margin land exactly flush - sticky was the only variable
+     that mattered.
+
+     The actual fix: don't fight the scroll container's padding with a
+     margin at all. Zero out the TOP padding of whichever scroll container
+     currently holds a `.settings-tabbar` (`#view-container` standalone, or
+     `.modal-body` embedded - see their own `:has()` rules below/elsewhere in
+     this file), so there is no padding for a sticky bar's static position to
+     be offset by in the first place. `.settings-tabbar` itself keeps
+     `position: sticky; top: 0` completely untouched (still sticks correctly
+     while scrolling) and now needs NO vertical margin - only the horizontal
+     bleed (edge-to-edge background) remains a margin/padding trick, which
+     works fine since horizontal centering was never sticky-affected. The
+     horizontal amount still differs per mounting context exactly like the
+     card bleed's does - keep these in sync with .view-container's 1rem and
+     .modal-body's 1.5rem. */
+  .settings-tabbar {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    margin: 0 -1rem 1rem -1rem;
+    padding: 0.35rem 1rem;
+    border: none;
+    border-bottom: 1px solid var(--border-light);
+    border-radius: 0;
+  }
+
+  /* Companion to `.settings-tabbar`'s comment above: this is what actually
+     removes the gap above a STANDALONE `#settings` page's tab bar, now that
+     the bar itself carries no vertical margin. `:has()` scopes it to only
+     the settings route (every other view still gets `.view-container`'s
+     normal 1rem top padding) without needing a route-specific class from
+     JS. */
+  #view-container:has(.settings-tabbar) {
+    padding-top: 0 !important;
+  }
+
+  /* Embedded in the "Global Settings" Modal (chat drawer), the header the
+     user means is a literal one: `.modal-header` (bg-muted + bottom border)
+     sits directly above. Matching its background is what actually merges the
+     two into a single surface - a bg-surface strip under a bg-muted header
+     still reads as two stacked bars however small the gap is. Same `:has()`
+     zero-padding treatment as `#view-container` above, targeting
+     `.modal-body` instead - every other Modal usage (ProxiesView, character
+     detail, etc) keeps its normal 1.5rem padding since none of them contain
+     a `.settings-tabbar`. */
+  .modal-body:has(.settings-tabbar) {
+    padding-top: 0 !important;
+  }
+
+  .settings-shell-embedded .settings-tabbar {
+    margin: 0 -1.5rem 1rem -1.5rem;
+    padding: 0.35rem 1.5rem;
+    background: var(--bg-muted);
+  }
+
+  .settings-tab {
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  /* Proxy card's Test Ping / Set Active / Edit row - squeezed 3-across on a
+     narrow modal, same category of fix as the earlier .view-header-row
+     mobile overflow fix. min-width:0 is what actually lets a button shrink
+     below its label's natural width instead of forcing the row to overflow. */
+  .proxy-card-actions {
+    flex-wrap: wrap;
+  }
+
+  .proxy-card-actions .btn {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  /* Settings tabs / MCP config panels stack several `.card` blocks (1.5rem
+     padding + border + shadow + radius each) - on a phone that reads as
+     wasted chrome rather than a legitimate grid of separate items (unlike
+     the character/persona library or the per-proxy/per-MCP-server list
+     cards inside .grid-cards, both left untouched below). Flatten into a
+     plain divided list instead - the standard mobile settings pattern.
+     Scoped to DIRECT children of .settings-panel (settingsView.js) so
+     ProxiesView's nested .grid-cards items (mounted into the Proxies tab)
+     are never touched; the chat drawer's Options/MCP tabs (chatView.js)
+     target their tab-content ids directly since neither has per-item grid
+     cards to accidentally catch; mcpView.js's own intro/toggles/empty-state
+     cards are marked with .mcp-section-card since that view has no single
+     wrapper to scope a descendant selector against without also hitting
+     its per-server .grid-cards items. `!important` on padding only:
+     the drawer's cards set their own inline `style="padding:1rem"`, which
+     otherwise outranks any external rule regardless of selector specificity.
+     Only the VERTICAL padding is set here - the horizontal padding is part
+     of the full-bleed rules further down, which have to differ per mounting
+     context. */
+  .settings-panel > .card,
+  #tab-content-options .card,
+  #tab-content-mcp .card,
+  .mcp-section-card {
+    padding-top: 1rem !important;
+    padding-bottom: 1rem !important;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .settings-panel > .card:not(:last-child),
+  #tab-content-options .card:not(:last-child),
+  #tab-content-mcp .card:not(:last-child),
+  .mcp-section-card:not(:last-child) {
+    border-bottom: 1px solid var(--border-light);
+  }
+
+  /* Full-bleed for those same flattened sections. Dropping the border/radius
+     alone wasn't enough: the section still has a background and a divider
+     line, and both stopped short of the screen edges because the SCROLL
+     CONTAINER around it keeps its own horizontal padding - so a flattened
+     section read as a floating rectangle with a gap on each side ("terpotong")
+     rather than as a native full-width settings list.
+
+     The fix is the standard negative-margin bleed: pull the box out by
+     exactly the ancestor's horizontal padding, then give it back the same
+     amount as its own padding, so the BACKGROUND/divider reach the true
+     screen edges while the text/controls keep the identical inset they had
+     before. Because `width: auto` resolves to `containing-block width -
+     margins`, the used width lands exactly on the ancestor's padding box -
+     no horizontal overflow, no extra scrollbar (this holds for the flex
+     children too: a stretched flex item's MARGIN box fills the cross size).
+
+     The ancestor differs per mounting context, so the offsets do too:
+       - .mcp-section-card (mcpView.js) and the standalone Settings page both
+         sit in .view-container, whose mobile padding is 1rem (css/layout.css).
+       - Settings opened from the chat drawer is rendered inside a Modal, so
+         its ancestor is .modal-body instead - padding 1.5rem, no mobile
+         override. .settings-shell-embedded is the marker settingsView.js
+         already sets for exactly that case.
+       - The chat right-drawer's Options/MCP tabs ARE .drawer-body
+         (css/chat.css), padding 1.25rem, no mobile override.
+     Keep these three numbers in sync with those three paddings. */
+  .settings-panel > .card,
+  .mcp-section-card {
+    margin-left: -1rem;
+    margin-right: -1rem;
+    padding-left: 1rem !important;
+    padding-right: 1rem !important;
+  }
+
+  .settings-shell-embedded .settings-panel > .card {
+    margin-left: -1.5rem;
+    margin-right: -1.5rem;
+    padding-left: 1.5rem !important;
+    padding-right: 1.5rem !important;
+  }
+
+  #tab-content-options .card,
+  #tab-content-mcp .card {
+    margin-left: -1.25rem;
+    margin-right: -1.25rem;
+    padding-left: 1.25rem !important;
+    padding-right: 1.25rem !important;
+  }
+
+  .settings-panel {
+    gap: 0;
+  }
+
+  /* Same "dense/unnecessary explanation" complaint as .view-header-row p
+     (css/layout.css) - every settings section repeats its title's meaning
+     in a full sentence underneath (e.g. "Theme" / "Auto follows your
+     operating system's..."), which is most of the visible text on a phone
+     once cards are already flattened into a tight list above. Dropped
+     entirely on mobile, kept on desktop where it's not competing for
+     space. Title itself shrunk slightly too - was sized for a spacious
+     bordered card, now sits directly above a divider line as a compact
+     list heading. */
+  .settings-section-desc {
+    display: none;
+  }
+
+  .settings-section-title {
+    font-size: 0.98rem;
   }
 }
 

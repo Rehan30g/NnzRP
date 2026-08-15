@@ -382,8 +382,19 @@ export function wireDropdown(scopeEl, id, onChange) {
  * Replaces a live dropdown's option list (and optionally its value) in place.
  * Used by chatView's `populateModelSelect` / `populateDrawerSelects`, which
  * rebuild their choices after a proxy switch.
+ *
+ * `{ reopen: true }` (default false, fully backward-compatible for every
+ * existing caller) re-opens the menu with the new options instead of just
+ * leaving it closed - used by chatView.js's model-picker "Switch Provider"
+ * drill-down to swap the open menu's contents in place rather than making
+ * the user re-click the trigger. This is deferred a tick rather than done
+ * synchronously: when called from inside an *option's own click handler*
+ * (exactly the drill-down case), that handler calls closeDropdown() again
+ * right after commitValue()/onChange() return, which would immediately
+ * undo a synchronous reopen here. Waiting for the current call stack to
+ * unwind first sidesteps that ordering entirely.
  */
-export function setDropdownOptions(scopeEl, id, options, value) {
+export function setDropdownOptions(scopeEl, id, options, value, { reopen = false } = {}) {
   const rootEl = findRoot(scopeEl, id);
   if (!rootEl) return null;
   const opts = normalizeOptions(options);
@@ -398,7 +409,11 @@ export function setDropdownOptions(scopeEl, id, options, value) {
     }
   }
   syncTriggerLabel(rootEl);
-  if (openState && openState.rootEl === rootEl) closeDropdown();
+  const wasOpen = openState && openState.rootEl === rootEl;
+  if (wasOpen) closeDropdown();
+  if (wasOpen && reopen) {
+    setTimeout(() => openDropdown(rootEl, rootEl._onChange), 0);
+  }
   return rootEl;
 }
 

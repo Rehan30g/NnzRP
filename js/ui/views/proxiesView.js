@@ -67,7 +67,7 @@ export class ProxiesView {
               API Key: ${p.apiKey ? '••••••••' + escapeHtml(p.apiKey.slice(-4)) : '(No API Key Set)'}
             </div>
 
-            <div style="display:flex; gap:0.5rem; border-top:1px solid var(--border-light); padding-top:0.8rem;">
+            <div class="proxy-card-actions" style="display:flex; gap:0.5rem; border-top:1px solid var(--border-light); padding-top:0.8rem;">
               <button class="btn btn-secondary btn-sm btn-test-proxy" data-id="${p.id}">
                 Test Ping
               </button>

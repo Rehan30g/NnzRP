@@ -2,7 +2,7 @@
  * namespaced tool list for provider function-calling, and dispatches execution
  * back to the correct server. */
 import { MCPStore } from '../storage/mcpStore.js';
-import { MCPClient } from './mcpClient.js';
+import { MCPClient, isTransportUnsupportedHere } from './mcpClient.js';
 import { BUILTIN_VIEW_IMAGE_TOOL, BUILTIN_EMBED_HTML_TOOL } from './builtinTools.js';
 
 const TOOL_CACHE_TTL_MS = 60000;
@@ -35,6 +35,14 @@ export class MCPToolRegistry {
     const usedNames = new Set(); // guards against sanitizeKey() collisions - see below
 
     for (const server of servers) {
+      // A stdio/command server in a non-Electron shell can never answer
+      // tools/list (see mcpClient.js). Discovery already degraded gracefully
+      // via the catch below - it just contributed zero tools - but it threw
+      // and logged a warning on EVERY generation (nothing is cached on
+      // failure, so the TTL never kicks in). Skip it up front: same zero-tool
+      // outcome, no per-turn console noise, no pointless bridge round trip.
+      if (isTransportUnsupportedHere(server)) continue;
+
       let entry = toolCache.get(server.id);
       if (!entry || Date.now() - entry.fetchedAt > TOOL_CACHE_TTL_MS) {
         try {

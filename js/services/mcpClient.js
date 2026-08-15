@@ -8,6 +8,23 @@
 const PROTOCOL_VERSION = '2024-11-05';
 const CLIENT_INFO = { name: 'NnzRP', version: '1.0.0' };
 
+/* Stdio/command MCP servers are spawned as a child process by Electron's main
+ * process and reached through preload.js's `window.electronAPI.mcp` bridge.
+ * That global only exists in the Electron desktop build - a plain browser tab,
+ * the installed PWA and the Capacitor Android APK all run without it (see
+ * CLAUDE.md's "browser-mode" bullet), so a `transport: 'command'` server there
+ * is not "offline"/misconfigured, it is simply not supported by that shell.
+ * Callers use isTransportUnsupportedHere() to say so plainly instead of
+ * rendering the same alarming red "Offline" badge a real connection failure
+ * gets - there is nothing to retry and nothing for the user to go fix. */
+export const UNSUPPORTED_TRANSPORT_REASON =
+  'Stdio/command MCP servers only run in the NnzRP desktop app. The browser, PWA and Android builds support HTTP MCP servers only.';
+
+/** True when `server`'s transport cannot work in the shell we are running in right now. */
+export function isTransportUnsupportedHere(server) {
+  return server?.transport === 'command' && !window.electronAPI?.mcp;
+}
+
 // Per-server-id session state kept only for the lifetime of the app (not persisted).
 const sessionIds = new Map(); // serverId -> Mcp-Session-Id header value (HTTP transport)
 const initializedServers = new Set(); // serverId - has the initialize handshake succeeded once
@@ -71,7 +88,7 @@ async function httpRpc(server, method, params, { isNotification = false, timeout
 
 async function commandRpc(server, method, params, { isNotification = false } = {}) {
   if (!window.electronAPI?.mcp) {
-    throw new Error('Stdio/command MCP servers require the NnzRP desktop app and are not available in browser mode.');
+    throw new Error(UNSUPPORTED_TRANSPORT_REASON);
   }
   const startInfo = await window.electronAPI.mcp.start({ id: server.id, command: server.command, args: server.args || [], env: server.env || {} });
   // A FRESH process (the previous one crashed and main.js dropped it) has not

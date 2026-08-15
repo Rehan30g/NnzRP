@@ -14,14 +14,16 @@ import { estimateTokens } from '../../utils/tokenEstimate.js';
 import { getContextWindowSize } from '../../utils/contextWindowSize.js';
 import { GreetingWizardService, GREETING_WIZARD_TOTAL_QUESTIONS } from '../../services/greetingWizardService.js';
 import { MCPStore } from '../../storage/mcpStore.js';
-import { MCPClient } from '../../services/mcpClient.js';
+import { MCPClient, isTransportUnsupportedHere, UNSUPPORTED_TRANSPORT_REASON } from '../../services/mcpClient.js';
 import { Modal } from '../components/modal.js';
 import { Toast } from '../components/toast.js';
 import { ProxiesView } from './proxiesView.js';
 import { SettingsView } from './settingsView.js';
 import { MCPView, INTENSITY_LABELS, MCP_INTENSITY_HINTS } from './mcpView.js';
-import { dropdownHTML, wireDropdown, setDropdownOptions, setDropdownDisabled } from '../components/dropdown.js';
+import { dropdownHTML, wireDropdown, setDropdownOptions, setDropdownDisabled, setDropdownValue } from '../components/dropdown.js';
 import { toggleSwitchHTML, toggleRowHTML } from '../components/toggle.js';
+import { openModelPickerSheet } from '../components/modelPickerSheet.js';
+import { attachSheetDragToClose } from '../components/sheetGesture.js';
 import { escapeHtml, escapeAttr, unescapeHtml } from '../../utils/sanitize.js';
 import { extractThinking } from '../../utils/thinkingParser.js';
 import { replaceMacros } from '../../utils/macroReplacer.js';
@@ -1210,7 +1212,7 @@ export class ChatView {
               <div class="chat-attach-preview hidden" id="chat-attach-preview"></div>
               <textarea class="chat-textarea" id="chat-input" rows="2" placeholder="Type action (*looks around*) or dialogue (&quot;Hello...&quot;)... (Shift+Enter for new line)"></textarea>
               <div class="chat-input-toolbar" style="justify-content:space-between;">
-                <div style="display:flex; align-items:center; gap:0.4rem;">
+                <div class="chat-toolbar-left-group">
                   <!-- Only shown when the active model looks vision-capable (js/utils/modelVision.js) -->
                   <div class="chat-attach-wrap hidden" id="chat-attach-wrap">
                     <button type="button" class="btn-icon chat-attach-btn" id="btn-chat-attach" title="Attach" aria-label="Attach image">
@@ -1242,6 +1244,12 @@ export class ChatView {
         <!-- Slide-over Right Drawer with Separate Tabs for Chat Sessions & Options -->
         <div class="chat-right-drawer-overlay hidden" id="right-drawer-overlay">
           <div class="chat-right-drawer-content">
+            <!-- Mobile-only grab strip (display:none on desktop, where this
+                 drawer is a side panel rather than a bottom sheet). Powers
+                 swipe-down-to-dismiss via js/ui/components/sheetGesture.js -
+                 deliberately its own inert element rather than the tab header,
+                 which is full of tappable tabs a drag would fight. -->
+            <div class="sheet-drag-handle" id="drawer-drag-handle" aria-hidden="true"></div>
             <div class="drawer-tab-header">
               <div class="drawer-tab active" id="tab-btn-sessions">Sessions</div>
               <div class="drawer-tab" id="tab-btn-options">Options</div>
@@ -1428,19 +1436,35 @@ export class ChatView {
     tabOptionsBtn.onclick = () => switchTab('options');
     tabMcpBtn.onclick = () => switchTab('mcp');
 
+    const drawerSheetEl = container.querySelector('.chat-right-drawer-content');
+    const closeDrawer = () => drawerOverlay.classList.add('hidden');
+
     openDrawerBtn.onclick = () => {
+      // Defensive: a drag that ended in a dismissal clears its own inline
+      // transform, but if anything ever left one behind it would survive the
+      // `slideUpMobile` open animation and drop the sheet off-screen the
+      // instant that animation finished. Cheap insurance, no downside.
+      if (drawerSheetEl) {
+        drawerSheetEl.style.transform = '';
+        drawerSheetEl.style.transition = '';
+      }
       drawerOverlay.classList.remove('hidden');
     };
 
-    closeDrawerBtn.onclick = () => {
-      drawerOverlay.classList.add('hidden');
-    };
+    closeDrawerBtn.onclick = closeDrawer;
 
     drawerOverlay.onclick = (e) => {
-      if (e.target === drawerOverlay) {
-        drawerOverlay.classList.add('hidden');
-      }
+      if (e.target === drawerOverlay) closeDrawer();
     };
+
+    // Mobile swipe-down-to-dismiss. Additive only - the close button and the
+    // backdrop tap above are untouched, and the handle is display:none on
+    // desktop so the gesture simply never engages there.
+    attachSheetDragToClose({
+      sheetEl: drawerSheetEl,
+      handleEl: container.querySelector('#drawer-drag-handle'),
+      onDismiss: closeDrawer
+    });
 
     // Toggle keybind: Ctrl+. or Cmd+. or Alt+C or Esc
     // Undocumented debug shortcut (Ctrl+Alt+D, see handleKeydown below) - not
@@ -2002,11 +2026,25 @@ export class ChatView {
     };
     container.querySelector('#btn-compact-now').onclick = handleCompactChat;
 
+    // Sentinels for the model-select dropdown's inline "Switch Provider"
+    // drill-down (see populateModelSelect below) - never real model/proxy
+    // ids, so they can't collide with anything ProxyStore would return.
+    const MODEL_SELECT_SWITCH_PROVIDER = '__switch_provider__';
+    const MODEL_SELECT_BACK_TO_MODELS = '__back_to_models__';
+
     // Compact model switcher next to the send button (Claude-style) - reads
     // the active proxy's `models` list (js/ui/views/proxiesView.js lets you
     // configure more than one for custom/openrouter proxies) and falls back
     // to just showing the single `selectedModel` when no list is configured.
-    const populateModelSelect = async () => {
+    // When more than one proxy is configured, a trailing "Switch Provider"
+    // row lets the SAME dropdown drill into the proxy list in place (no
+    // modal) - picking one does exactly what the navbar's "Active Proxy"
+    // dropdown and the Proxies tab's "Set Active" button already do
+    // (proxy.isDefault = true), reusing that mechanism rather than
+    // reinventing provider switching. On mobile this same data feeds the
+    // bottom-sheet picker (openModelPickerSheet) instead - see the trigger
+    // wiring further down.
+    const populateModelSelect = async ({ reopen = false } = {}) => {
       if (!container.querySelector('[data-dropdown-for="chat-model-select"]')) return;
       const proxy = await ProxyStore.getDefault();
       if (!proxy) {
@@ -2017,27 +2055,122 @@ export class ChatView {
         return;
       }
 
+      const allProxies = await ProxyStore.getAll();
+      const canSwitchProvider = allProxies.length > 1;
+
       const candidates = Array.isArray(proxy.models) ? [...proxy.models] : [];
       if (proxy.selectedModel && !candidates.includes(proxy.selectedModel)) candidates.unshift(proxy.selectedModel);
       if (candidates.length === 0) candidates.push(proxy.selectedModel || proxy.provider);
 
-      setDropdownOptions(container, 'chat-model-select', candidates, proxy.selectedModel || candidates[0]);
-      // Same rule as before the dropdown swap: a single-model proxy has nothing
-      // to switch to, so the control is shown but inert.
-      setDropdownDisabled(container, 'chat-model-select', candidates.length <= 1);
+      const modelOptions = candidates.map(m => ({ value: m, label: m }));
+      if (canSwitchProvider) {
+        modelOptions.push({
+          value: MODEL_SELECT_SWITCH_PROVIDER,
+          label: 'Switch Provider ›',
+          hint: `Currently: ${proxy.name}`
+        });
+      }
+
+      setDropdownOptions(container, 'chat-model-select', modelOptions, proxy.selectedModel || candidates[0], { reopen });
+      // Same rule as before the dropdown swap: nothing worth doing in here
+      // if there's only one model AND no other provider to switch to.
+      setDropdownDisabled(container, 'chat-model-select', candidates.length <= 1 && !canSwitchProvider);
       await refreshAttachButtonVisibility();
       await refreshContextGauge();
 
-      wireDropdown(container, 'chat-model-select', async (value) => {
+      // Shared by both pickers (desktop dropdown drill-down below, and the
+      // mobile bottom sheet wired further down) so selecting a model/
+      // provider behaves identically regardless of which UI it came from.
+      const selectModel = async (value) => {
         const updatedProxy = await ProxyStore.getById(proxy.id);
         if (!updatedProxy) return;
         updatedProxy.selectedModel = value;
         await ProxyStore.save(updatedProxy);
         Toast.info(`Model diset ke: ${value}`);
+        // The desktop dropdown syncs its own trigger label as part of its
+        // click handling (dropdown.js's commitValue), but the mobile bottom
+        // sheet (modelPickerSheet.js) calls this directly and never touches
+        // the dropdown component at all - without this, the trigger button
+        // keeps showing the old model name after picking a new one there.
+        setDropdownValue(container, 'chat-model-select', value);
         await refreshAttachButtonVisibility();
         await refreshContextGauge();
+        // Re-run the whole populate pass, exactly like selectProvider() below
+        // already does. populateModelSelect() closes over the `proxy` object
+        // it fetched at its own top, and the mobile trigger's onclick uses
+        // that stale copy to compute `active: m === proxy.selectedModel` -
+        // i.e. the bottom sheet's checkmark. Without this re-run the sheet
+        // keeps ticking the PREVIOUS model every time it's reopened; the
+        // desktop dropdown didn't show it because dropdown.js syncs its own
+        // trigger label on click. Cheap and non-recursive: it only redefines
+        // these closures, it never calls them.
+        await populateModelSelect();
         if (onProxyChanged) onProxyChanged();
+      };
+
+      const selectProvider = async (proxyId) => {
+        const targetProxy = allProxies.find(p => p.id === proxyId);
+        if (!targetProxy) return;
+        targetProxy.isDefault = true;
+        await ProxyStore.save(targetProxy);
+        Toast.success(`Active Proxy: ${targetProxy.name}`);
+        await populateModelSelect();
+        if (onProxyChanged) onProxyChanged();
+      };
+
+      wireDropdown(container, 'chat-model-select', async (value) => {
+        if (value === MODEL_SELECT_SWITCH_PROVIDER) {
+          const providerOptions = [
+            { value: MODEL_SELECT_BACK_TO_MODELS, label: '‹ Back to models' },
+            ...allProxies.map(p => ({ value: p.id, label: p.name, hint: p.selectedModel || p.provider }))
+          ];
+          setDropdownOptions(container, 'chat-model-select', providerOptions, proxy.id, { reopen: true });
+          return;
+        }
+
+        if (value === MODEL_SELECT_BACK_TO_MODELS) {
+          await populateModelSelect({ reopen: true });
+          return;
+        }
+
+        if (allProxies.some(p => p.id === value)) {
+          await selectProvider(value);
+          return;
+        }
+
+        await selectModel(value);
       });
+
+      // Mobile: open the bottom sheet instead of the normal dropdown menu.
+      // wireDropdown() (above) just set triggerEl.onclick to its own open/
+      // close logic - save that reference and wrap it, rather than adding a
+      // second listener (a second `addEventListener` on the same element
+      // fires in attachment order regardless of capture/bubble, so it
+      // can't reliably run BEFORE the onclick property wireDropdown already
+      // assigned; overwriting the property is what actually guarantees
+      // ordering). Checked at tap time, not just once here, so resizing
+      // across the breakpoint doesn't need a re-render to take effect.
+      const triggerEl = container.querySelector('[data-dropdown-for="chat-model-select"] .dropdown-trigger');
+      if (triggerEl) {
+        const desktopOnClick = triggerEl.onclick;
+        triggerEl.onclick = (e) => {
+          if (window.innerWidth > 768) {
+            desktopOnClick(e);
+            return;
+          }
+          e.preventDefault();
+          e.stopPropagation();
+          openModelPickerSheet({
+            models: candidates.map(m => ({ value: m, label: m, active: m === (proxy.selectedModel || candidates[0]) })),
+            currentProxyName: proxy.name,
+            proxies: canSwitchProvider
+              ? allProxies.map(p => ({ id: p.id, name: p.name, hint: p.selectedModel || p.provider }))
+              : [],
+            onSelectModel: selectModel,
+            onSelectProvider: selectProvider
+          });
+        };
+      }
     };
 
     const renderDrawerMCPList = async () => {
@@ -2105,6 +2238,18 @@ export class ChatView {
       const checkDrawerServerStatus = async (server, { silent = false } = {}) => {
         const badgeEl = mcpListEl.querySelector(`#drawer-mcp-status-${server.id}`);
         if (!badgeEl) return;
+
+        // Mirrors mcpView.js's checkServerStatus: a stdio server without the
+        // Electron bridge is an unsupported platform, not a broken server, so
+        // it gets a neutral "Desktop Only" badge instead of the red "Offline"
+        // one - and no round trip, no error toast (nothing to retry).
+        if (isTransportUnsupportedHere(server)) {
+          badgeEl.textContent = 'Desktop Only';
+          badgeEl.className = 'badge';
+          badgeEl.title = UNSUPPORTED_TRANSPORT_REASON;
+          return;
+        }
+
         badgeEl.textContent = 'Checking...';
         badgeEl.className = 'badge';
 
@@ -2120,6 +2265,12 @@ export class ChatView {
       };
 
       mcpListEl.querySelectorAll('.drawer-check-mcp').forEach(btn => {
+        const owner = servers.find(s => s.id === btn.dataset.id);
+        if (owner && isTransportUnsupportedHere(owner)) {
+          btn.disabled = true;
+          btn.title = UNSUPPORTED_TRANSPORT_REASON;
+          return;
+        }
         btn.onclick = async () => {
           const server = await MCPStore.getById(btn.dataset.id);
           if (server) await checkDrawerServerStatus(server);

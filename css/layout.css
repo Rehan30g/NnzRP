@@ -417,10 +417,61 @@
     width: 100%;
   }
 
-  .view-header-row .btn, 
+  .view-header-row .btn,
   .view-header-row label.btn {
     width: 100%;
     justify-content: center;
+  }
+
+  /* Every view (AI Character Library, User Personas, Proxies, MCP, Settings)
+     repeats the same "big title + a full sentence explaining what the page
+     obviously already is" header - reported as dense/unnecessary on a phone
+     screen, where that sentence is most of what's visible above the fold.
+     Dropped entirely on mobile rather than shrunk - it's decorative copy,
+     not information the mobile flow needs to function (still shown on
+     desktop, where there's room to spare). .view-header-desc is
+     settingsView.js's own non-.view-header-row copy of the same pattern
+     (its full-page, non-embedded header). */
+  .view-header-row p,
+  .view-header-desc {
+    display: none;
+  }
+
+  /* The page title goes away entirely on mobile, not just shrunk (it was a
+     `font-size: 1.2rem` override first) - the bottom nav bar already
+     highlights which page you're on, so a big "AI Character Library" heading
+     above it is pure desktop chrome forced onto a phone.
+     .view-header-title mirrors .view-header-row's h2 selector for
+     settingsView.js's standalone (non-embedded) header, which isn't wrapped
+     in .view-header-row. !important beats the inline `style="font-size:..."`
+     every view sets directly (display isn't set inline anywhere, but keeping
+     both selectors on one rule is simpler than splitting them). */
+  .view-header-row h2,
+  .view-header-title {
+    display: none !important;
+  }
+
+  /* ...and collapse the now-empty wrappers those titles lived in, otherwise
+     they leave dead space behind:
+       - .view-header-row's first child is a <div> holding exactly the <h2>
+         and the description <p> (true for all four call sites: characters,
+         personas, proxies, mcp views; the action buttons are the SECOND
+         child). Both children are display:none by now, so the div itself is
+         a zero-height box - but still a flex ITEM, so .view-header-row's
+         0.85rem `gap` would still be paid above the action buttons.
+         display:none removes it from the box tree entirely, gap included.
+       - settingsView.js's standalone header is a plain <div> (not a
+         .view-header-row) carrying an inline `margin-bottom: 1.25rem`, which
+         would survive its children being hidden. :has() scopes this to that
+         exact div - in embedded (Modal) mode that header isn't rendered at
+         all and .settings-shell's first child is .settings-tabbar, which
+         must NOT be hidden. */
+  .view-header-row > div:first-child {
+    display: none;
+  }
+
+  .settings-shell > div:first-child:has(> .view-header-title) {
+    display: none;
   }
 
   /* View Container Padding on Mobile (Clear of the bottom nav bar, which is

@@ -138,6 +138,215 @@
   to { transform: translateY(0); }
 }
 
+/* ===================================================
+   Bottom-sheet grab handle (js/ui/components/sheetGesture.js)
+
+   Shared by the chat right-drawer and the model-picker sheet, so both get an
+   identical swipe-down-to-dismiss affordance and identical thresholds.
+
+   Two things here are load-bearing rather than cosmetic:
+     - `touch-action: none` is what stops the browser from claiming the
+       vertical pan (page scroll / pull-to-refresh) before the JS ever sees a
+       pointermove. Without it the gesture is unreliable on Android.
+     - the strip is 22px tall with the visible 36x4 pill drawn as a ::after,
+       NOT a 4px-tall element - a 4px touch target is unhittable with a thumb.
+   The strip is otherwise inert (no text, no controls), which is exactly why
+   the drag is bound to it instead of to the sheet body or the tab header:
+   there is nothing here to scroll past or tap by accident.
+   =================================================== */
+.sheet-drag-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 22px;
+  flex-shrink: 0;
+  cursor: grab;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.sheet-drag-handle:active {
+  cursor: grabbing;
+}
+
+.sheet-drag-handle::after {
+  content: '';
+  display: block;
+  width: 36px;
+  height: 4px;
+  border-radius: var(--radius-full);
+  background: var(--border-subtle);
+}
+
+/* Desktop: the right-drawer is a full-height side panel, not a sheet - there
+   is nothing to swipe down, so the handle (and with it the whole gesture,
+   since a display:none element receives no pointer events) is off. The
+   model-picker sheet has no such rule: chatView.js only ever opens it at
+   <=768px in the first place. */
+.chat-right-drawer-content > .sheet-drag-handle {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .chat-right-drawer-content > .sheet-drag-handle {
+    display: flex;
+  }
+}
+
+/* ===================================================
+   Mobile bottom-sheet model/provider picker
+   (js/ui/components/modelPickerSheet.js)
+   =================================================== */
+/* position:fixed (not the drawer's position:absolute above) - this overlay
+   is appended straight to <body> like Modal.js, not nested inside the chat
+   layout. Reuses the same slideUpMobile keyframe as the drawer/Settings
+   modal for a consistent feel across every bottom-sheet in the app. */
+.model-picker-sheet-overlay {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: var(--overlay-bg-soft);
+  backdrop-filter: blur(2px);
+  z-index: 12000; /* above the dropdown portal (12000-adjacent) and drawer */
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  animation: fadeIn var(--transition-fast);
+}
+
+.model-picker-sheet-content {
+  width: 100%;
+  max-width: 480px;
+  max-height: 80vh;
+  background: var(--bg-surface);
+  border-radius: 20px 20px 0 0;
+  border-top: 1px solid var(--border-subtle);
+  box-shadow: 0 -4px 24px rgba(15, 23, 42, 0.25);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: slideUpMobile 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* (The old `.model-picker-sheet-handle` pill lives on as the shared
+   `.sheet-drag-handle` above - same look, but a real 22px touch target and a
+   `touch-action: none` drag surface, now that the handle actually does
+   something.) */
+
+.model-picker-sheet-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  flex-shrink: 0;
+}
+
+.model-picker-sheet-header h3 {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+/* Balances the close button's width so the title stays visually centered. */
+.model-picker-sheet-header-spacer {
+  width: 40px;
+  flex-shrink: 0;
+}
+
+.model-picker-sheet-body {
+  overflow-y: auto;
+  padding: 0 1rem 1.25rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.model-picker-sheet-group {
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.model-picker-sheet-group-gap {
+  height: 0.75rem;
+  flex-shrink: 0;
+}
+
+.model-picker-sheet-option {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.9rem 1rem;
+  background: var(--bg-surface);
+  border: none;
+  border-bottom: 1px solid var(--border-light);
+  text-align: left;
+  font-family: inherit;
+  font-size: 0.95rem;
+  color: var(--text-main);
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+/* Bare options (the "Switch Provider" row, the "Back" row) aren't inside
+   .model-picker-sheet-group, so they need their own rounding/border - the
+   grouped model rows get theirs from the group wrapper's overflow:hidden
+   and only need the bottom-border reset on the last child. */
+.model-picker-sheet-option:not(.model-picker-sheet-group .model-picker-sheet-option) {
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+}
+
+.model-picker-sheet-group .model-picker-sheet-option:last-child {
+  border-bottom: none;
+}
+
+.model-picker-sheet-option:hover {
+  background: var(--bg-surface-hover);
+}
+
+.model-picker-sheet-option-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.model-picker-sheet-option-label {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-picker-sheet-option-hint {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.model-picker-sheet-check {
+  flex-shrink: 0;
+  color: var(--accent-primary);
+}
+
+.model-picker-sheet-chevron,
+.model-picker-sheet-chevron-back {
+  flex-shrink: 0;
+  color: var(--text-dim);
+  font-size: 1.3rem;
+  line-height: 1;
+}
+
+.model-picker-sheet-back {
+  color: var(--text-muted);
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
 .drawer-tab-header {
   display: flex;
   border-bottom: 1px solid var(--border-light);
@@ -169,6 +378,14 @@
   display: flex;
   flex-direction: column;
   gap: 1.25rem;
+}
+
+/* Sessions / Options / MCP tab switching, same treatment (and the same shared
+   `fadeIn` keyframe + 150ms `--transition-fast`) as the Settings page's
+   `.settings-panel` in components.css - see the long comment there for why
+   this is an animation-on-display-change rather than a transition. */
+.drawer-body:not(.hidden) {
+  animation: fadeIn var(--transition-fast);
 }
 
 /* ===================================================
@@ -487,6 +704,21 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+}
+
+/* The attach button + model dropdown live in this inner flex group, which is
+   itself the actual flex ITEM inside .chat-input-toolbar - the model
+   dropdown is only a grandchild of the toolbar, not a direct child. flex:1;
+   min-width:0 here is what lets this whole group shrink to the space left
+   over by the send button; harmless on desktop (there's always enough room,
+   so nothing visibly changes) but required for the mobile long-model-name
+   fix below to have anything to actually act on. */
+.chat-toolbar-left-group {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 /* ===================================================
@@ -1241,10 +1473,12 @@
   /* Same OS status-bar clearance as .main-header (css/layout.css) - the
      installed Android APK draws edge-to-edge, so without this the chat
      header (avatar + character name) renders directly under the status
-     bar's clock/battery icons instead of below them. */
+     bar's clock/battery icons instead of below them. The extra flat 0.5rem
+     (beyond the raw inset) is genuine breathing room - clearing the status
+     bar exactly with no margin still read as too cramped. */
   .chat-header {
-    height: calc(52px + env(safe-area-inset-top, 0px));
-    padding: env(safe-area-inset-top, 0px) 0.75rem 0 0.75rem;
+    height: calc(52px + env(safe-area-inset-top, 0px) + 0.5rem);
+    padding: calc(env(safe-area-inset-top, 0px) + 0.5rem) 0.75rem 0 0.75rem;
   }
 
   .message-block {
@@ -1264,7 +1498,7 @@
      last message reading cramped/squished against the input on mobile. */
   .messages-container {
     padding: 0 0 calc(165px + env(safe-area-inset-bottom, 0px)) 0;
-    height: calc(100% - 52px - env(safe-area-inset-top, 0px));
+    height: calc(100% - 52px - env(safe-area-inset-top, 0px) - 0.5rem);
   }
 
   .chat-input-container {
@@ -1276,9 +1510,14 @@
     width: calc(100% - 20px);
   }
 
+  /* Rounder "bubble" composer on mobile (reference: the Claude mobile app's
+     input bar) - bigger radius + a touch more padding than the desktop
+     card. box-shadow stays `none`, matching the app's flat design language
+     (css/variables.css's --shadow-* tokens are deliberately none) rather
+     than importing that reference's elevation style wholesale. */
   .chat-input-wrapper {
-    padding: 0.65rem 0.85rem;
-    border-radius: var(--radius-md);
+    padding: 0.75rem 1rem;
+    border-radius: 1.5rem;
   }
 
   .chat-textarea {
@@ -1286,19 +1525,86 @@
     max-height: 120px;
   }
 
+  /* Gap between the attach+dropdown group and the send button - without an
+     explicit gap here, the dropdown's own flex:1 (below) just stretches
+     until it touches the send button with zero space between them. */
+  .chat-input-toolbar {
+    gap: 0.5rem;
+  }
+
+  /* Attach ("+") button as a filled circular chip instead of the desktop's
+     flat transparent icon button. */
+  .chat-attach-wrap .chat-attach-btn {
+    background: var(--bg-tertiary);
+    border-radius: var(--radius-full);
+  }
+
+  .chat-attach-wrap .chat-attach-btn:hover {
+    background: var(--bg-surface-hover);
+  }
+
+  /* Model picker as a filled pill chip (no border) instead of the desktop's
+     bordered input-style box - same visual language as the attach button.
+     min-height matches .chat-attach-btn's 40px (from the base .btn-icon
+     rule) - the dropdown's own compact padding otherwise renders it visibly
+     shorter than the attach button next to it. */
+  [data-dropdown-for="chat-model-select"] .dropdown-trigger {
+    background: var(--bg-tertiary);
+    border: none;
+    border-radius: var(--radius-full);
+    min-height: 40px;
+  }
+
+  [data-dropdown-for="chat-model-select"].open .dropdown-trigger,
+  [data-dropdown-for="chat-model-select"] .dropdown-trigger:focus-visible {
+    box-shadow: var(--shadow-glow);
+  }
+
+  /* Send button as a solid filled circle rather than the desktop's outlined
+     one - --text-main/--bg-surface (not a fixed color) so it inverts
+     correctly in dark mode too (light-filled circle w/ dark icon there). */
+  #btn-send-message {
+    background: var(--text-main);
+    border: none;
+    color: var(--bg-surface);
+    box-shadow: none;
+  }
+
+  #btn-send-message:hover {
+    background: var(--text-main);
+    color: var(--bg-surface);
+    opacity: 0.85;
+    transform: none;
+  }
+
+  #btn-send-message.generating {
+    background: var(--accent-rose);
+    color: #ffffff;
+    border: none;
+  }
+
   /* The model picker's wrapperStyle (`max-width:260px; width:auto;
      min-width:150px`, set inline via dropdownHTML - see dropdown.js) was
-     tuned for desktop. On a narrow phone a long model id (e.g.
-     "deepseek/deepseek-v4-flash-0731") still rendered at close to its full
-     content width instead of reliably clamping to max-width in this flex
-     row, squeezing/shifting the send button instead of the dropdown's own
-     .dropdown-trigger-label just ellipsis-truncating (which it already
-     supports - css/components.css). !important is required to beat the
-     inline style. Making the dropdown the ONLY flexible item (flex:1,
-     min-width:0) and pinning the attach/send buttons to their own size is
-     what actually guarantees the buttons never move. */
-  .chat-attach-wrap,
+     tuned for desktop. A first attempt at fixing this only made the
+     .dropdown itself flexible, which did nothing - the dropdown is a
+     GRANDCHILD of .chat-input-toolbar, not a direct flex child (it sits
+     inside .chat-toolbar-left-group, see chat.css's base rule for that
+     class), so `flex:1` on the dropdown had no flex container of its own to
+     size against; the actual flex item (.chat-toolbar-left-group) just kept
+     sizing to its content's full width, including the untruncated long
+     model id, and shoved the send button past the toolbar's edge. Fixing it
+     needs BOTH levels: the outer .chat-input-toolbar must let the left group
+     shrink (send button pinned to flex-shrink:0 so IT never moves) and,
+     within that group, the dropdown must be the one flexible/shrinkable
+     item (attach button pinned, dropdown gets flex:1 + min-width:0,
+     !important to beat its inline wrapperStyle) so its already-ellipsis-
+     capable .dropdown-trigger-label (css/components.css) is what actually
+     truncates a long model id instead of anything overflowing. */
   #btn-send-message {
+    flex-shrink: 0;
+  }
+
+  .chat-attach-wrap {
     flex-shrink: 0;
   }
 

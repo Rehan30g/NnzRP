@@ -52,9 +52,14 @@ export class Sidebar {
           <span class="nav-label">Settings</span>
         </div>
 
+        <!-- Label is just "MCP": this same markup renders BOTH the desktop
+             sidebar item and the mobile bottom-nav tab (there is no separate
+             mobile label mechanism), and "Custom MCP (Exp)" wrapped/crowded
+             the bottom bar. The longer descriptive name is kept on the
+             desktop-only hover tooltip. -->
         <div class="nav-item ${activeView === 'mcp' ? 'active' : ''}" data-view="mcp" data-tooltip="Custom MCP (Exp)">
           <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
-          <span class="nav-label">Custom MCP (Exp)</span>
+          <span class="nav-label">MCP</span>
         </div>
       </nav>
 

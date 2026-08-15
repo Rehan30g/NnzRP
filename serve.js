@@ -54,7 +54,13 @@ const server = http.createServer((req, res) => {
     }
     const ext = path.extname(resolved).toLowerCase();
     const headers = { 'Content-Type': MIME_TYPES[ext] || 'application/octet-stream' };
-    headers['Cache-Control'] = NO_CACHE_FILES.has(urlPath) ? 'no-cache' : 'public, max-age=3600';
+    // DEV_NO_CACHE=1 disables all caching (including for the app's own JS
+    // modules, which have no cache-busting query strings - see sw.js's own
+    // comment on why not) - for iterating locally without fighting stale
+    // browser/HTTP cache on every edit. Never set this for real deployments.
+    headers['Cache-Control'] = (process.env.DEV_NO_CACHE === '1' || NO_CACHE_FILES.has(urlPath))
+      ? 'no-cache'
+      : 'public, max-age=3600';
     res.writeHead(200, headers);
     res.end(data);
   });

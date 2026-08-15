@@ -116,8 +116,8 @@ export class SettingsView {
       <div class="settings-shell${embedded ? ' settings-shell-embedded' : ''}">
         ${embedded ? '' : `
         <div style="margin-bottom:1.25rem;">
-          <h2 style="font-size:1.6rem; margin-bottom:0.3rem;">Settings</h2>
-          <p style="color:var(--text-muted); font-size:0.9rem;">Appearance, generation behaviour, model parameters, API proxies and backups - all in one place.</p>
+          <h2 class="view-header-title" style="font-size:1.6rem; margin-bottom:0.3rem;">Settings</h2>
+          <p class="view-header-desc" style="color:var(--text-muted); font-size:0.9rem;">Appearance, generation behaviour, model parameters, API proxies and backups - all in one place.</p>
         </div>
         `}
 
@@ -379,7 +379,12 @@ export class SettingsView {
 
         <div class="settings-savebar${initialTab === 'proxies' || initialTab === 'data' ? ' hidden' : ''}" id="settings-savebar">
           <div class="settings-savebar-inner">
-            <span style="font-size:0.8rem; color:var(--text-dim);">Theme &amp; accent save instantly; everything else needs Save.</span>
+            <!-- .settings-savebar-hint is display:none on mobile (components.css)
+                 - the sentence ate most of the bar's width next to the button on
+                 a phone, and the bar switches to right-aligning the button alone
+                 there. A class, not a bare "span" selector, so a future second
+                 element in this bar isn't hidden by accident. -->
+            <span class="settings-savebar-hint" style="font-size:0.8rem; color:var(--text-dim);">Theme &amp; accent save instantly; everything else needs Save.</span>
             <button class="btn btn-primary" id="btn-save-settings">Save Settings</button>
           </div>
         </div>
@@ -608,7 +613,43 @@ export class SettingsView {
       this.render(container, { tab: 'generation' });
     };
 
-    /* ---------------- Save (everything except appearance) ---------------- */
+    /* ---------------- Save (everything except appearance) ----------------
+     *
+     * Feedback is IN the button ("Saved", checkmark, ~1.6s) rather than a
+     * toast: on mobile a toast is a separate banner at the top of the screen,
+     * far away from the button the thumb just pressed, and info/success toasts
+     * are display:none on mobile anyway (components.css) - so the old
+     * Toast.success meant pressing Save on a phone produced no feedback at
+     * all. Same shape as chatView.js's code-copy button ("Copied", 1500ms,
+     * original label restored): stash the label, swap, disable so a
+     * double-tap can't re-enter mid-feedback, restore on a timer.
+     *
+     * The Modal-embedded copy (chat drawer -> Settings) hides this bar
+     * entirely and drives it via its own footer "Save Settings" button, which
+     * `.click()`s this one - so the flash is mirrored onto that button too,
+     * otherwise the feedback would land on an invisible element. */
+    const SAVED_FLASH_MS = 1600;
+    const CHECK_SVG =
+      '<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" ' +
+      'stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">' +
+      '<polyline points="20 6 9 17 4 12"></polyline></svg>';
+
+    const flashSaved = (btn) => {
+      if (!btn || btn.dataset.flashing === '1') return;
+      const originalHTML = btn.innerHTML;
+      const wasDisabled = btn.disabled;
+      btn.dataset.flashing = '1';
+      btn.disabled = true;
+      btn.classList.add('btn-saved-flash');
+      btn.innerHTML = `${CHECK_SVG}<span>Saved</span>`;
+      setTimeout(() => {
+        btn.innerHTML = originalHTML;
+        btn.classList.remove('btn-saved-flash');
+        btn.disabled = wasDisabled;
+        delete btn.dataset.flashing;
+      }, SAVED_FLASH_MS);
+    };
+
     container.querySelector('#btn-save-settings').onclick = async () => {
       const globalPromptVal = container.querySelector('#global-system-prompt').value.trim();
       const selectedFontSize = container.querySelector('#setting-font-size').value || 'medium';
@@ -638,7 +679,9 @@ export class SettingsView {
       await ProxyStore.saveGlobalSystemPrompt(globalPromptVal);
       await ProxyStore.saveGenerationSettings(updatedSettings);
 
-      Toast.success('Settings saved successfully.');
+      // "bukan notif" - the confirmation lives on the button, not in a toast.
+      flashSaved(container.querySelector('#btn-save-settings'));
+      if (embedded) flashSaved(document.getElementById('btn-save-settings-modal'));
     };
 
     /* ---------------- Backup & restore ---------------- */

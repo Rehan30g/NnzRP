@@ -1,6 +1,6 @@
 /* js/ui/views/mcpView.js - Custom MCP Server Configuration View (Experimental) */
 import { MCPStore } from '../../storage/mcpStore.js';
-import { MCPClient } from '../../services/mcpClient.js';
+import { MCPClient, isTransportUnsupportedHere, UNSUPPORTED_TRANSPORT_REASON } from '../../services/mcpClient.js';
 import { MCPToolRegistry } from '../../services/mcpToolRegistry.js';
 import { Modal } from '../components/modal.js';
 import { Toast } from '../components/toast.js';
@@ -35,13 +35,13 @@ export class MCPView {
         </div>
       </div>
 
-      <div class="card card-muted" style="margin-bottom:1.5rem;">
+      <div class="card card-muted mcp-section-card" style="margin-bottom:1.5rem;">
         <p style="color:var(--text-muted); font-size:0.85rem; line-height:1.5; margin:0;">
           Servers you add here are only reachable by name+arguments the model chooses at runtime - the model can never configure or launch a new server itself. Stdio/command servers run as local child processes of this desktop app.
         </p>
       </div>
 
-      <div class="card" style="margin-bottom:1.5rem; display:flex; flex-direction:column; gap:1rem;">
+      <div class="card mcp-section-card" style="margin-bottom:1.5rem; display:flex; flex-direction:column; gap:1rem;">
         ${toggleRowHTML({
           id: 'mcp-global-toggle',
           title: 'MCP Tools',
@@ -89,7 +89,7 @@ export class MCPView {
 
       <div id="mcp-servers-section">
         ${servers.length === 0 ? `
-          <div class="card" style="text-align:center; padding:3rem 1.5rem; color:var(--text-muted);">
+          <div class="card mcp-section-card" style="text-align:center; padding:3rem 1.5rem; color:var(--text-muted);">
             <h3 style="font-size:1.1rem; margin-bottom:0.5rem; color:var(--text-main);">Belum ada MCP Server</h3>
             <p style="font-size:0.88rem; max-width:480px; margin:0 auto 1.25rem;">Tambahkan server MCP baru atau paste konfigurasi <code>mcp_config.json</code> yang sudah ada.</p>
           </div>
@@ -271,6 +271,20 @@ export class MCPView {
     const checkServerStatus = async (server, { silent = false } = {}) => {
       const badgeEl = container.querySelector(`#status-badge-${server.id}`);
       if (!badgeEl) return;
+
+      // Stdio server + no Electron bridge = unsupported platform, NOT a failed
+      // connection. Rendering the same red "Offline" badge implied something
+      // was broken/misconfigured for the user to go fix; there is nothing to
+      // retry here, so skip the round trip and the error toast entirely and
+      // say what is actually true. The server config itself is left alone -
+      // it stays editable/deletable and works again in the desktop build.
+      if (isTransportUnsupportedHere(server)) {
+        badgeEl.textContent = 'Desktop Only';
+        badgeEl.className = 'badge';
+        badgeEl.title = UNSUPPORTED_TRANSPORT_REASON;
+        return;
+      }
+
       badgeEl.textContent = 'Checking...';
       badgeEl.className = 'badge';
       const status = await MCPClient.checkStatus(server);
@@ -286,6 +300,15 @@ export class MCPView {
     };
 
     container.querySelectorAll('.btn-check-mcp-status').forEach(btn => {
+      // Nothing a click could ever accomplish for a stdio server outside the
+      // desktop app - leave the button visible (so the card layout is
+      // unchanged) but inert, matching the "Desktop Only" badge.
+      const owner = servers.find(s => s.id === btn.dataset.id);
+      if (owner && isTransportUnsupportedHere(owner)) {
+        btn.disabled = true;
+        btn.title = UNSUPPORTED_TRANSPORT_REASON;
+        return;
+      }
       btn.onclick = async () => {
         const server = await MCPStore.getById(btn.dataset.id);
         if (server) await checkServerStatus(server);
