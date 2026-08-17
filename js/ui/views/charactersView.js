@@ -19,12 +19,12 @@ export class CharactersView {
         <div style="display:flex; gap:0.75rem;">
           <label class="btn btn-secondary btn-sm" style="cursor:pointer;">
             <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
-            Import JSON Card
+            Import Card
             <input type="file" id="import-card-file" accept=".json" style="display:none;">
           </label>
           <button class="btn btn-primary btn-sm" id="btn-create-character">
             <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 4v16m8-8H4"></path></svg>
-            Create Character
+            Create
           </button>
         </div>
       </div>
@@ -183,7 +183,7 @@ export class CharactersView {
       buttons: [
         ...(isEdit ? [{
           id: 'btn-delete-char',
-          label: 'Delete Character',
+          label: 'Delete',
           className: 'btn-danger',
           onClick: async () => {
             if (confirm(`Are you sure you want to delete ${charData.name}? All chat sessions for this character will be permanently deleted.`)) {
@@ -202,7 +202,7 @@ export class CharactersView {
         },
         {
           id: 'btn-save-char',
-          label: 'Save Character',
+          label: 'Save',
           className: 'btn-primary',
           onClick: async () => {
             const name = document.getElementById('char-name').value.trim();

@@ -23,7 +23,7 @@ import { MCPView, INTENSITY_LABELS, MCP_INTENSITY_HINTS } from './mcpView.js';
 import { dropdownHTML, wireDropdown, setDropdownOptions, setDropdownDisabled, setDropdownValue } from '../components/dropdown.js';
 import { toggleSwitchHTML, toggleRowHTML } from '../components/toggle.js';
 import { openModelPickerSheet } from '../components/modelPickerSheet.js';
-import { attachSheetDragToClose } from '../components/sheetGesture.js';
+import { attachSheetDragToClose, dismissSheet } from '../components/sheetGesture.js';
 import { escapeHtml, escapeAttr, unescapeHtml } from '../../utils/sanitize.js';
 import { extractThinking } from '../../utils/thinkingParser.js';
 import { replaceMacros } from '../../utils/macroReplacer.js';
@@ -159,6 +159,23 @@ const WRENCH_ICON_SVG = '<svg width="13" height="13" fill="none" stroke="current
  */
 function avatarSeed(name) {
   return encodeURIComponent(name || '').replace(/'/g, '%27');
+}
+
+/**
+ * OpenRouter/custom model ids look like "deepseek/deepseek-v4-flash-0731" or
+ * "z-ai/glm-5.2" - drops the "owner/" segment before the last "/", turns "-"
+ * into spaces, and capitalizes each word's first letter, so the chat
+ * composer's model picker (populateModelSelect below) shows "Deepseek V4
+ * Flash 0731" / "Glm 5.2" instead of the raw slug. Only the display label
+ * changes - selection/config still uses the untouched raw id as `value`.
+ */
+function formatModelLabel(modelId) {
+  const name = modelId.includes('/') ? modelId.slice(modelId.lastIndexOf('/') + 1) : modelId;
+  return name
+    .replace(/-/g, ' ')
+    .split(' ')
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
 }
 
 /**
@@ -1149,6 +1166,15 @@ export class ChatView {
 
     let currentChatId = sessions[0].id;
 
+    // Matches the CSS mobile breakpoint (css/chat.css) and the same
+    // window.innerWidth<=768 check populateModelSelect() uses below - only
+    // used here to word the composer placeholder correctly, since mobile
+    // soft keyboards use Enter for a newline (send stays button-only) while
+    // desktop uses Enter to send and Shift+Enter for a newline.
+    const composerPlaceholder = window.innerWidth <= 768
+      ? 'Type action (*looks around*) or dialogue (&quot;Hello...&quot;)...'
+      : 'Type action (*looks around*) or dialogue (&quot;Hello...&quot;)... (Shift+Enter for new line)';
+
     container.innerHTML = `
       <div class="chat-layout">
         <!-- Dedicated Chat Workspace -->
@@ -1194,7 +1220,7 @@ export class ChatView {
             </div>
             <div class="compact-chat-banner-actions">
               <button type="button" class="btn btn-secondary btn-sm" id="btn-compact-dismiss">Nanti</button>
-              <button type="button" class="btn btn-primary btn-sm" id="btn-compact-now">Compact Chat</button>
+              <button type="button" class="btn btn-primary btn-sm" id="btn-compact-now">Compact</button>
             </div>
           </div>
 
@@ -1210,7 +1236,7 @@ export class ChatView {
                 <button type="button" id="btn-cancel-queued" title="Batalkan" aria-label="Batalkan pesan yang diantrikan" style="background:none; border:none; cursor:pointer; color:var(--text-accent); font-size:1rem; line-height:1; padding:0 0.2rem;">&times;</button>
               </div>
               <div class="chat-attach-preview hidden" id="chat-attach-preview"></div>
-              <textarea class="chat-textarea" id="chat-input" rows="2" placeholder="Type action (*looks around*) or dialogue (&quot;Hello...&quot;)... (Shift+Enter for new line)"></textarea>
+              <textarea class="chat-textarea" id="chat-input" rows="2" placeholder="${composerPlaceholder}"></textarea>
               <div class="chat-input-toolbar" style="justify-content:space-between;">
                 <div class="chat-toolbar-left-group">
                   <!-- Only shown when the active model looks vision-capable (js/utils/modelVision.js) -->
@@ -1260,7 +1286,7 @@ export class ChatView {
             <!-- Tab 1 Content: Chat Sessions -->
             <div class="drawer-body" id="tab-content-sessions">
               <button class="btn btn-primary btn-sm" id="btn-new-session" style="width:100%;">
-                + New Chat Session
+                + New Session
               </button>
               <div id="right-drawer-session-list" style="display:flex; flex-direction:column; gap:0.6rem;"></div>
             </div>
@@ -1322,12 +1348,12 @@ export class ChatView {
                 <p style="font-size:0.78rem; color:var(--text-muted); margin-bottom:0.75rem;">
                   Rangkum percakapan ini dengan AI ke sesi chat baru agar tetap ringan tanpa kehilangan konteks. 4 pesan pertama dan 4 pesan terakhir tidak akan dirangkum.
                 </p>
-                <button class="btn btn-secondary btn-sm" id="btn-drawer-compact-chat" style="width:100%;">Compact Chat Sekarang</button>
+                <button class="btn btn-secondary btn-sm" id="btn-drawer-compact-chat" style="width:100%;">Compact Sekarang</button>
               </div>
 
               <!-- Quick Config Shortcuts -->
               <div style="display:flex; flex-direction:column; gap:0.5rem; margin-top:0.25rem;">
-                <button class="btn btn-secondary btn-sm" id="btn-open-proxies-config" style="width:100%;">Proxy Profiles</button>
+                <button class="btn btn-secondary btn-sm" id="btn-open-proxies-config" style="width:100%;">Proxies</button>
                 <button class="btn btn-secondary btn-sm" id="btn-open-global-settings" style="width:100%;">Settings</button>
               </div>
 
@@ -1336,7 +1362,7 @@ export class ChatView {
                 <div style="font-weight:700; font-size:0.95rem; margin-bottom:0.2rem;">${escapeHtml(activeChar.name)}</div>
                 <div style="color:var(--text-accent); font-size:0.78rem; margin-bottom:0.5rem;">${escapeHtml(activeChar.tagline) || ''}</div>
                 <p style="color:var(--text-muted); font-size:0.82rem; margin-bottom:0.75rem;">${escapeHtml(activeChar.description) || 'No description provided.'}</p>
-                <button class="btn btn-secondary btn-sm" id="btn-view-char-details" style="width:100%;">View Full Details</button>
+                <button class="btn btn-secondary btn-sm" id="btn-view-char-details" style="width:100%;">Details</button>
               </div>
 
               <div style="border-top:1px solid var(--border-light); padding-top:1rem; margin-top:auto;">
@@ -1437,7 +1463,17 @@ export class ChatView {
     tabMcpBtn.onclick = () => switchTab('mcp');
 
     const drawerSheetEl = container.querySelector('.chat-right-drawer-content');
-    const closeDrawer = () => drawerOverlay.classList.add('hidden');
+    // Mobile (bottom sheet): slide down + fade the backdrop before actually
+    // hiding it, matching the model-picker sheet's exit. Desktop (side panel)
+    // is unchanged - it never had a slide-in animation to begin with, so an
+    // added slide-out would be a new, unrequested motion rather than a fix.
+    const closeDrawer = () => {
+      if (window.innerWidth <= 768 && drawerSheetEl) {
+        dismissSheet({ sheetEl: drawerSheetEl, overlayEl: drawerOverlay, onDismiss: () => drawerOverlay.classList.add('hidden') });
+      } else {
+        drawerOverlay.classList.add('hidden');
+      }
+    };
 
     openDrawerBtn.onclick = () => {
       // Defensive: a drag that ended in a dismissal clears its own inline
@@ -1459,11 +1495,15 @@ export class ChatView {
 
     // Mobile swipe-down-to-dismiss. Additive only - the close button and the
     // backdrop tap above are untouched, and the handle is display:none on
-    // desktop so the gesture simply never engages there.
+    // desktop so the gesture simply never engages there. onDismiss is wired
+    // straight to the raw hide (not closeDrawer()) because the drag gesture
+    // already played its own slide-down/fade-out via overlayEl before calling
+    // this - going through closeDrawer() here would animate a second time.
     attachSheetDragToClose({
       sheetEl: drawerSheetEl,
       handleEl: container.querySelector('#drawer-drag-handle'),
-      onDismiss: closeDrawer
+      overlayEl: drawerOverlay,
+      onDismiss: () => drawerOverlay.classList.add('hidden')
     });
 
     // Toggle keybind: Ctrl+. or Cmd+. or Alt+C or Esc
@@ -1511,18 +1551,26 @@ export class ChatView {
       });
     };
 
+    // Opening never animates via JS (the CSS slideUpMobile keyframe replays on
+    // its own the instant `.hidden` is removed) - only closing needs to route
+    // through closeDrawer() for the animated exit.
+    const toggleDrawer = () => {
+      if (drawerOverlay.classList.contains('hidden')) drawerOverlay.classList.remove('hidden');
+      else closeDrawer();
+    };
+
     const handleKeydown = (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === '.') {
         e.preventDefault();
-        drawerOverlay.classList.toggle('hidden');
+        toggleDrawer();
       } else if (e.altKey && e.key.toLowerCase() === 'c') {
         e.preventDefault();
-        drawerOverlay.classList.toggle('hidden');
+        toggleDrawer();
       } else if (e.ctrlKey && e.altKey && e.key.toLowerCase() === 'd') {
         e.preventDefault();
         openEmbedDebugModal();
       } else if (e.key === 'Escape' && !drawerOverlay.classList.contains('hidden')) {
-        drawerOverlay.classList.add('hidden');
+        closeDrawer();
       }
     };
     if (activeChatTeardown) activeChatTeardown();
@@ -1572,6 +1620,7 @@ export class ChatView {
         const inputEl = container.querySelector('#chat-input');
         if (!inputEl) return;
         inputEl.value = typeof e.data.text === 'string' ? e.data.text.slice(0, 4000) : '';
+        autoResizeComposer();
         inputEl.focus();
       }
     };
@@ -2062,7 +2111,7 @@ export class ChatView {
       if (proxy.selectedModel && !candidates.includes(proxy.selectedModel)) candidates.unshift(proxy.selectedModel);
       if (candidates.length === 0) candidates.push(proxy.selectedModel || proxy.provider);
 
-      const modelOptions = candidates.map(m => ({ value: m, label: m }));
+      const modelOptions = candidates.map(m => ({ value: m, label: formatModelLabel(m) }));
       if (canSwitchProvider) {
         modelOptions.push({
           value: MODEL_SELECT_SWITCH_PROVIDER,
@@ -2121,15 +2170,29 @@ export class ChatView {
       wireDropdown(container, 'chat-model-select', async (value) => {
         if (value === MODEL_SELECT_SWITCH_PROVIDER) {
           const providerOptions = [
-            { value: MODEL_SELECT_BACK_TO_MODELS, label: '‹ Back to models' },
-            ...allProxies.map(p => ({ value: p.id, label: p.name, hint: p.selectedModel || p.provider }))
+            ...allProxies.map(p => ({ value: p.id, label: p.name, hint: p.selectedModel ? formatModelLabel(p.selectedModel) : p.provider })),
+            { value: MODEL_SELECT_BACK_TO_MODELS, label: '‹ Back to models' }
           ];
           setDropdownOptions(container, 'chat-model-select', providerOptions, proxy.id, { reopen: true });
           return;
         }
 
         if (value === MODEL_SELECT_BACK_TO_MODELS) {
-          await populateModelSelect({ reopen: true });
+          // Deliberately NOT `await populateModelSelect({ reopen: true })` here
+          // (that used to be the whole body of this branch) - populateModelSelect
+          // starts with several awaited IndexedDB reads before it ever reaches
+          // its own setDropdownOptions call, so this async onChange callback
+          // yields back to dropdown.js's option click handler at that very first
+          // await. That handler unconditionally calls closeDropdown() right after
+          // commitValue() returns (see dropdown.js), which ran BEFORE this
+          // callback's eventual setDropdownOptions - so by the time it finally
+          // ran, `openState` was already null and `{reopen:true}` had nothing to
+          // reopen, silently leaving the whole menu closed instead of back on
+          // the model list. `modelOptions`/`candidates` were already computed at
+          // the top of this populateModelSelect() call and haven't gone stale in
+          // the few ms since, so rebuilding via them here - synchronously, same
+          // as the SWITCH_PROVIDER branch above - sidesteps the race entirely.
+          setDropdownOptions(container, 'chat-model-select', modelOptions, proxy.selectedModel || candidates[0], { reopen: true });
           return;
         }
 
@@ -2161,10 +2224,10 @@ export class ChatView {
           e.preventDefault();
           e.stopPropagation();
           openModelPickerSheet({
-            models: candidates.map(m => ({ value: m, label: m, active: m === (proxy.selectedModel || candidates[0]) })),
+            models: candidates.map(m => ({ value: m, label: formatModelLabel(m), active: m === (proxy.selectedModel || candidates[0]) })),
             currentProxyName: proxy.name,
             proxies: canSwitchProvider
-              ? allProxies.map(p => ({ id: p.id, name: p.name, hint: p.selectedModel || p.provider }))
+              ? allProxies.map(p => ({ id: p.id, name: p.name, hint: p.selectedModel ? formatModelLabel(p.selectedModel) : p.provider }))
               : [],
             onSelectModel: selectModel,
             onSelectProvider: selectProvider
@@ -2216,7 +2279,7 @@ export class ChatView {
           <div style="display:flex; justify-content:space-between; align-items:center; gap:0.4rem; border-top:1px solid var(--border-light); padding-top:0.4rem; margin-top:0.2rem;">
             <span class="badge" id="drawer-mcp-status-${s.id}">Unknown</span>
             <div style="display:flex; gap:0.3rem;">
-              <button class="btn btn-secondary btn-sm drawer-check-mcp" data-id="${s.id}" style="padding:0.15rem 0.45rem; font-size:0.72rem;">Check Status</button>
+              <button class="btn btn-secondary btn-sm drawer-check-mcp" data-id="${s.id}" style="padding:0.15rem 0.45rem; font-size:0.72rem;">Status</button>
               <button class="btn btn-secondary btn-sm drawer-mcp-perms" data-id="${s.id}" style="padding:0.15rem 0.45rem; font-size:0.72rem;">Permissions</button>
             </div>
           </div>
@@ -2472,7 +2535,7 @@ export class ChatView {
           { id: 'btn-close-settings-modal', label: 'Tutup', className: 'btn-secondary', onClick: () => Modal.close() },
           {
             id: 'btn-save-settings-modal',
-            label: 'Save Settings',
+            label: 'Save',
             className: 'btn-primary',
             onClick: () => {
               // settingsView.js's own #btn-save-settings still holds the real
@@ -2501,7 +2564,7 @@ export class ChatView {
         clearQueuedMessage();
         await updateSessionList();
         await renderMessages();
-        drawerOverlay.classList.add('hidden');
+        closeDrawer();
         Toast.info('Chat session deleted.');
       }
     };
@@ -2530,7 +2593,7 @@ export class ChatView {
           if (e.target.closest('.btn-del-session') || e.target.closest('.btn-rename-session')) return;
           currentChatId = item.dataset.id;
           clearQueuedMessage();
-          drawerOverlay.classList.add('hidden');
+          closeDrawer();
           await updateSessionList();
           await renderMessages();
         };
@@ -2873,7 +2936,7 @@ export class ChatView {
             currentChatId = newChat.id;
             await updateSessionList();
             await renderMessages();
-            drawerOverlay.classList.add('hidden');
+            closeDrawer();
             Toast.success(`New session "${newChat.title}" created from fork.`);
           } catch (err) {
             Toast.error(err.message);
@@ -2924,6 +2987,26 @@ export class ChatView {
     const sendInput = container.querySelector('#chat-input');
     const sendBtn = container.querySelector('#btn-send-message');
     const newSessionBtn = container.querySelector('#btn-new-session');
+
+    // Grows the composer to fit a long draft instead of scrolling inside a
+    // fixed 2-row box, stopping at the CSS max-height (180px desktop / 120px
+    // mobile, see .chat-textarea in css/chat.css - read via getComputedStyle
+    // so this stays in sync with that breakpoint instead of duplicating the
+    // numbers here) and scrolling internally past that point. That cap is
+    // the "safe point" - it grows the input without ever eating so much of
+    // the floating composer's height that it crowds out the message stream
+    // or the toolbar/send button below it, on either desktop or mobile.
+    // style.height='auto' before measuring is required: scrollHeight only
+    // reports content beyond the CURRENT height, so without resetting first
+    // the box would never shrink back down after deleting text.
+    const autoResizeComposer = () => {
+      sendInput.style.height = 'auto';
+      const fullHeight = sendInput.scrollHeight;
+      const maxHeight = parseFloat(getComputedStyle(sendInput).maxHeight) || 180;
+      sendInput.style.height = `${Math.min(fullHeight, maxHeight)}px`;
+      sendInput.style.overflowY = fullHeight > maxHeight ? 'auto' : 'hidden';
+    };
+    sendInput.addEventListener('input', autoResizeComposer);
 
     const triggerAIGeneration = async () => {
       if (isGenerating) return;
@@ -3204,6 +3287,7 @@ export class ChatView {
       const images = pendingAttachedImages;
       if (!text && !images.length) return;
       sendInput.value = '';
+      autoResizeComposer();
       pendingAttachedImages = [];
       refreshAttachPreview();
 
@@ -3228,15 +3312,20 @@ export class ChatView {
       }
     };
     sendInput.onkeydown = (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        handleSendMessage();
-      }
+      if (e.key !== 'Enter' || e.shiftKey) return;
+      // Mobile: bare Enter just inserts a newline (soft-keyboard behavior),
+      // sending stays button-only - checked at keypress time, not just at
+      // render time, matching the same window.innerWidth<=768 convention
+      // populateModelSelect() uses for its own desktop/mobile branch.
+      if (window.innerWidth <= 768) return;
+      e.preventDefault();
+      handleSendMessage();
     };
 
     container.querySelector('#btn-cancel-queued').onclick = () => {
       if (!queuedMessage && !queuedImages.length) return;
       sendInput.value = queuedMessage || '';
+      autoResizeComposer();
       pendingAttachedImages = queuedImages;
       queuedMessage = null;
       queuedImages = [];

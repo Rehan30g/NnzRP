@@ -14,7 +14,7 @@
    meaningful open at a time, unlike Modal's nested-dialog use cases.
    ============================================================================ */
 import { escapeHtml } from '../../utils/sanitize.js';
-import { attachSheetDragToClose } from './sheetGesture.js';
+import { attachSheetDragToClose, dismissSheet } from './sheetGesture.js';
 
 const CHECK_SVG =
   '<svg class="model-picker-sheet-check" width="18" height="18" fill="none" stroke="currentColor" ' +
@@ -24,7 +24,12 @@ const CHECK_SVG =
 let activeOverlay = null;
 let detachDrag = null;
 
-function closeSheet() {
+/** Detaches the drag gesture and rips the overlay out - no animation. Used
+ * both as the final step of the animated `closeSheet()` below, and directly
+ * wherever a previous instance just needs to be gone instantly (a fresh
+ * `openModelPickerSheet()` call replacing it - see below - would otherwise
+ * visibly overlap its own exit animation with the new sheet's entrance). */
+function finalizeClose() {
   if (detachDrag) {
     try { detachDrag(); } catch { /* nothing to unwind */ }
     detachDrag = null;
@@ -32,6 +37,21 @@ function closeSheet() {
   if (activeOverlay) {
     activeOverlay.remove();
     activeOverlay = null;
+  }
+}
+
+/** User-facing close (backdrop tap, close button, picking a row) - always
+ * plays the same slide-down/fade-out as a drag-release dismiss before
+ * actually removing anything, so every way of leaving the sheet feels the
+ * same instead of only the drag gesture animating. */
+function closeSheet() {
+  if (!activeOverlay) return;
+  const overlay = activeOverlay;
+  const contentEl = overlay.querySelector('.model-picker-sheet-content');
+  if (contentEl) {
+    dismissSheet({ sheetEl: contentEl, overlayEl: overlay, onDismiss: finalizeClose });
+  } else {
+    finalizeClose();
   }
 }
 
@@ -46,7 +66,7 @@ function closeSheet() {
  * @param {(proxyId:string) => void} opts.onSelectProvider
  */
 export function openModelPickerSheet({ models, currentProxyName, proxies = [], onSelectModel, onSelectProvider }) {
-  closeSheet();
+  finalizeClose(); // instant - replacing a previous instance, not a user dismiss
 
   const overlay = document.createElement('div');
   overlay.className = 'model-picker-sheet-overlay';
@@ -73,10 +93,15 @@ export function openModelPickerSheet({ models, currentProxyName, proxies = [], o
   // tap above and the close button on the line above both keep working exactly
   // as before, and attachSheetDragToClose() returns a no-op if either element
   // is somehow missing.
+  // Drag-release already plays its own slide-down/fade-out (see
+  // attachSheetDragToClose's overlayEl param) before calling onDismiss, so
+  // this wires straight to finalizeClose - going through closeSheet() here
+  // would animate a second time on top of an already-finished animation.
   detachDrag = attachSheetDragToClose({
     sheetEl: overlay.querySelector('.model-picker-sheet-content'),
     handleEl: overlay.querySelector('.sheet-drag-handle'),
-    onDismiss: closeSheet
+    overlayEl: overlay,
+    onDismiss: finalizeClose
   });
 
   const titleEl = overlay.querySelector('#model-picker-sheet-title');
@@ -128,11 +153,11 @@ export function openModelPickerSheet({ models, currentProxyName, proxies = [], o
     `).join('');
 
     bodyEl.innerHTML = `
+      <div class="model-picker-sheet-group">${rows}</div>
       <button type="button" class="model-picker-sheet-option model-picker-sheet-back" id="model-picker-back">
         <span class="model-picker-sheet-chevron-back">&lsaquo;</span>
         <span class="model-picker-sheet-option-label">Kembali ke model</span>
       </button>
-      <div class="model-picker-sheet-group">${rows}</div>
     `;
 
     bodyEl.querySelector('#model-picker-back').onclick = renderModels;

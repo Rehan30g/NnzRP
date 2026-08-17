@@ -30,8 +30,8 @@ export class MCPView {
           <p style="color:var(--text-muted); font-size:0.88rem;">Connect Model Context Protocol servers (HTTP or local stdio/command) so AI characters can call real tools mid-roleplay.</p>
         </div>
         <div style="display:flex; gap:0.75rem;">
-          <button class="btn btn-secondary btn-sm" id="btn-edit-mcp-json">Edit JSON Config</button>
-          <button class="btn btn-primary btn-sm" id="btn-add-mcp">+ Add MCP Server</button>
+          <button class="btn btn-secondary btn-sm" id="btn-edit-mcp-json">Edit JSON</button>
+          <button class="btn btn-primary btn-sm" id="btn-add-mcp">+ Add MCP</button>
         </div>
       </div>
 
@@ -125,8 +125,8 @@ export class MCPView {
 
                 <div style="display:flex; flex-direction:column; gap:0.5rem; border-top:1px solid var(--border-light); padding-top:0.8rem;">
                   <div style="display:flex; gap:0.4rem;">
-                    <button class="btn btn-secondary btn-sm btn-check-mcp-status" data-id="${s.id}" style="flex:1;">Check Status</button>
-                    <button class="btn btn-secondary btn-sm btn-mcp-perms" data-id="${s.id}" style="flex:1;">Tool Permissions</button>
+                    <button class="btn btn-secondary btn-sm btn-check-mcp-status" data-id="${s.id}" style="flex:1;">Status</button>
+                    <button class="btn btn-secondary btn-sm btn-mcp-perms" data-id="${s.id}" style="flex:1;">Permissions</button>
                   </div>
                   <div style="display:flex; gap:0.4rem;">
                     <button class="btn btn-secondary btn-sm btn-edit-mcp" data-id="${s.id}" style="flex:1;">Edit</button>
@@ -490,7 +490,7 @@ export class MCPView {
       buttons: [
         { label: 'Batal', className: 'btn-secondary', onClick: () => Modal.close() },
         {
-          label: 'Simpan JSON',
+          label: 'Simpan',
           className: 'btn-primary',
           onClick: async () => {
             const rawText = document.getElementById('mcp-raw-json').value.trim();
@@ -619,7 +619,7 @@ export class MCPView {
       contentHTML,
       buttons: [
         ...(isEdit ? [{
-          label: 'Hapus MCP',
+          label: 'Hapus',
           className: 'btn-danger',
           onClick: async () => {
             if (!confirm(`Hapus profil MCP Server "${data.name}"?`)) return;
@@ -633,7 +633,7 @@ export class MCPView {
         }] : []),
         { label: 'Batal', className: 'btn-secondary', onClick: () => Modal.close() },
         {
-          label: 'Simpan Profil',
+          label: 'Simpan',
           className: 'btn-primary',
           onClick: async () => {
             const values = readFormValues();

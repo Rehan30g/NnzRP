@@ -17,7 +17,7 @@ export class PersonasView {
           <p style="color:var(--text-muted); font-size:0.88rem;">Create player persona profiles for your roleplay sessions.</p>
         </div>
         <button class="btn btn-primary btn-sm" id="btn-create-persona">
-          + Create New Persona
+          + New Persona
         </button>
       </div>
 

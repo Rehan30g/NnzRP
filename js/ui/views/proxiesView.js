@@ -20,14 +20,14 @@ export class ProxiesView {
         </div>
         <div style="display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center;">
           <button class="btn btn-secondary btn-sm" id="btn-export-all-proxies" title="Export all application data including API keys">
-            Export All Data
+            Export
           </button>
           <button class="btn btn-secondary btn-sm" id="btn-import-all-proxies" title="Import backup JSON file">
-            Import Backup
+            Import
           </button>
           <input type="file" id="input-proxies-import-file" accept=".json" style="display:none;">
           <button class="btn btn-primary btn-sm" id="btn-create-proxy">
-            + Add Proxy Profile
+            + Add Proxy
           </button>
         </div>
       </div>
@@ -69,15 +69,18 @@ export class ProxiesView {
 
             <div class="proxy-card-actions" style="display:flex; gap:0.5rem; border-top:1px solid var(--border-light); padding-top:0.8rem;">
               <button class="btn btn-secondary btn-sm btn-test-proxy" data-id="${p.id}">
-                Test Ping
+                Test
               </button>
               ${!p.isDefault ? `
                 <button class="btn btn-secondary btn-sm btn-set-default-proxy" data-id="${p.id}">
-                  Set Active
+                  Activate
                 </button>
               ` : ''}
               <button class="btn btn-secondary btn-sm btn-edit-proxy" data-id="${p.id}">
                 Edit
+              </button>
+              <button class="btn btn-secondary btn-sm btn-duplicate-proxy" data-id="${p.id}">
+                Copy
               </button>
             </div>
           </div>
@@ -151,6 +154,22 @@ export class ProxiesView {
       btn.onclick = async () => {
         const proxy = await ProxyStore.getById(btn.dataset.id);
         this.openProxyModal(proxy, () => this.render(container));
+      };
+    });
+
+    container.querySelectorAll('.btn-duplicate-proxy').forEach(btn => {
+      btn.onclick = async () => {
+        const proxy = await ProxyStore.getById(btn.dataset.id);
+        if (!proxy) return;
+        const { id, createdAt, updatedAt, ...rest } = proxy;
+        const clone = {
+          ...rest,
+          name: `${proxy.name} (Copy)`,
+          isDefault: false
+        };
+        await ProxyStore.save(clone);
+        Toast.success(`Proxy "${proxy.name}" duplicated.`);
+        this.render(container);
       };
     });
   }
@@ -289,7 +308,7 @@ export class ProxiesView {
       buttons: [
         ...(isEdit ? [{
           id: 'btn-del-proxy',
-          label: 'Delete Proxy',
+          label: 'Delete',
           className: 'btn-danger',
           onClick: async () => {
             if (!confirm(`Are you sure you want to delete proxy profile "${data.name}"?`)) return;
@@ -307,7 +326,7 @@ export class ProxiesView {
         },
         {
           id: 'btn-save-prx',
-          label: 'Save Profile',
+          label: 'Save',
           className: 'btn-primary',
           onClick: async () => {
             const name = document.getElementById('proxy-name').value.trim();

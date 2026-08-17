@@ -34,14 +34,19 @@ export class Sidebar {
           <span class="nav-label">Roleplay Chat</span>
         </div>
 
+        <!-- Same short-visible-label/full-tooltip split as the MCP item below:
+             "AI Characters"/"User Personas" as a nav-label was long enough to
+             wrap/crowd the 4-tab mobile bottom bar (same nav-label markup
+             renders both the desktop sidebar and the mobile bar - no separate
+             mobile text). The fuller name lives on the desktop-only tooltip. -->
         <div class="nav-item ${activeView === 'characters' ? 'active' : ''}" data-view="characters" data-tooltip="AI Characters">
           <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"></path></svg>
-          <span class="nav-label">AI Characters</span>
+          <span class="nav-label">Characters</span>
         </div>
 
         <div class="nav-item ${activeView === 'personas' ? 'active' : ''}" data-view="personas" data-tooltip="User Personas">
           <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path></svg>
-          <span class="nav-label">User Personas</span>
+          <span class="nav-label">Personas</span>
         </div>
 
         <!-- The former standalone "Multi-Proxy Config" item lived here. It is now

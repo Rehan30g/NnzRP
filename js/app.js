@@ -2,6 +2,7 @@
 import { initDatabase } from './storage/db.js';
 import { Navbar } from './ui/components/navbar.js';
 import { Sidebar } from './ui/components/sidebar.js';
+import { attachSwipeNav, playTabTransition, TAB_ORDER } from './ui/components/swipeNav.js';
 import { CharactersView } from './ui/views/charactersView.js';
 import { ChatView } from './ui/views/chatView.js';
 import { PersonasView } from './ui/views/personasView.js';
@@ -53,6 +54,23 @@ class App {
 
     // Render Shell Layout
     this.renderShell();
+
+    // Mobile: swipe left/right between the 4 bottom-nav tabs (Characters/
+    // Personas/Settings/MCP - "Chat" is excluded, see swipeNav.js's own
+    // comment). Bound to `.app-main`, NOT to #view-container: the swipe pager
+    // pre-renders the neighbouring tab into its own container and, on commit,
+    // promotes that element to be the new #view-container (see
+    // adoptPrerenderedView) - so #view-container is no longer a stable node
+    // and a listener bound to it would be lost after the first swipe.
+    // `.app-main` is created once by renderShell() above and lives for the
+    // app's whole lifetime.
+    attachSwipeNav({
+      hostEl: document.getElementById('app-main'),
+      getContainer: () => document.getElementById('view-container'),
+      getCurrentView: () => this.currentView,
+      renderView: (viewName, el) => this.renderViewInto(viewName, el, {}),
+      onNavigate: (viewName, opts) => this.navigate(viewName, opts)
+    });
 
     // Listen to hash changes for browser back/forward and direct URL navigation
     window.addEventListener('hashchange', () => {
@@ -197,7 +215,7 @@ class App {
     if (!appEl) return;
     appEl.innerHTML = `
       <aside class="app-sidebar" id="app-sidebar"></aside>
-      <main class="app-main">
+      <main class="app-main" id="app-main">
         <header class="main-header" id="main-header"></header>
         <section class="view-container" id="view-container"></section>
       </main>
@@ -205,6 +223,11 @@ class App {
   }
 
   async navigate(viewName, params = {}) {
+    // Captured before this.currentView is overwritten below - used only to
+    // decide whether a TAP between two swipeable tabs (bottom-nav click,
+    // Sidebar's onNavigate) should play the same slide transition a swipe
+    // commit does (see the animated-tap branch near the end of this method).
+    const previousView = this.currentView;
     const targetCharId = params.characterId || this.activeCharacterId;
     // `params.tab` must break the "already here" short-circuit: arriving at
     // #proxies while Settings is already open has to still switch to the
@@ -213,6 +236,11 @@ class App {
       && (viewName !== 'chat' || this.activeCharacterId === targetCharId)
       && !params.tab;
     if (sameView) {
+      // Defensive: a swipe should never commit onto the tab it started from,
+      // but if it somehow did, don't leave its pre-rendered container mounted.
+      if (params.prerenderedEl && params.prerenderedEl.id !== 'view-container') {
+        params.prerenderedEl.remove();
+      }
       return; // Already on requested view
     }
 
@@ -237,7 +265,13 @@ class App {
 
     const sidebarContainer = document.getElementById('app-sidebar');
     const headerContainer = document.getElementById('main-header');
-    const viewContainer = document.getElementById('view-container');
+    // A swipe-committed navigation hands us the container the target view was
+    // already rendered into during the drag; adopting it here (before the
+    // chat-mode/padding block below) means the rest of navigate() operates on
+    // the new authoritative element with no branching.
+    const viewContainer = params.prerenderedEl
+      ? this.adoptPrerenderedView(params.prerenderedEl)
+      : document.getElementById('view-container');
 
     if (!sidebarContainer || !headerContainer || !viewContainer) return;
 
@@ -259,6 +293,39 @@ class App {
       });
     }
 
+    // The pre-rendered path skips this entirely: its content already exists
+    // (rendered during the swipe drag), and re-running it would both waste an
+    // IndexedDB round trip and re-introduce the blank-flash this whole
+    // mechanism exists to remove.
+    if (params.prerenderedEl) return;
+
+    // Mobile: a TAP between two swipeable tabs (bottom-nav click, or anything
+    // else routing through here - hashchange included, there's no reason a
+    // tab jump should look different depending on trigger) plays the exact
+    // same slide transition a swipe commit does, via the SAME helper
+    // (playTabTransition), so tapping and dragging the pager feel like one
+    // consistent component rather than two different transition styles.
+    // Desktop and any transition touching a non-swipeable route (chat) stay
+    // instant, unchanged.
+    // previousView !== viewName excludes the "#settings/proxies while already
+    // on Settings" case (params.tab alone breaks the sameView short-circuit
+    // above so a same-view, different-tab navigation still reaches here) -
+    // that's an internal panel switch, not a tab jump, and should never
+    // full-page-slide.
+    if (window.innerWidth <= 768 && previousView !== viewName
+      && TAB_ORDER.includes(previousView) && TAB_ORDER.includes(viewName)) {
+      const direction = TAB_ORDER.indexOf(viewName) > TAB_ORDER.indexOf(previousView) ? 'left' : 'right';
+      const settledEl = await playTabTransition({
+        hostEl: document.getElementById('app-main'),
+        currentEl: viewContainer,
+        targetView: viewName,
+        direction,
+        renderView: (v, el) => this.renderViewInto(v, el, params)
+      });
+      this.adoptPrerenderedView(settledEl);
+      return;
+    }
+
     // Render Target View Loading State
     viewContainer.innerHTML = `
       <div style="display:flex; justify-content:center; align-items:center; min-height:300px; color:var(--text-muted); gap:0.75rem;">
@@ -266,40 +333,76 @@ class App {
         <span>Loading View...</span>
       </div>
     `;
-    
-    switch (this.currentView) {
+
+    await this.renderViewInto(this.currentView, viewContainer, params);
+  }
+
+  /**
+   * Renders a route's view into an arbitrary container element.
+   *
+   * Factored out of navigate() so the mobile swipe pager (swipeNav.js) can
+   * render the neighbouring tab into an off-screen "peek" container *while
+   * the finger is still moving*, using the exact same code path a normal
+   * navigation uses. This method deliberately does NO routing bookkeeping
+   * (hash, window title, sidebar/navbar) - that stays owned by navigate(),
+   * which is still the single entry point for every real navigation.
+   */
+  async renderViewInto(viewName, container, params = {}) {
+    const sidebarContainer = document.getElementById('app-sidebar');
+
+    switch (viewName) {
       case 'characters':
-        await CharactersView.render(viewContainer, (charId) => {
+        return CharactersView.render(container, (charId) => {
           this.navigate('chat', { characterId: charId });
         });
-        break;
 
       case 'chat':
-        await ChatView.render(viewContainer, this.activeCharacterId, {
+        return ChatView.render(container, this.activeCharacterId, {
           onBack: () => this.navigate('characters'),
           onProxyChanged: () => {
             Sidebar.render(sidebarContainer, this.currentView, (targetView) => this.navigate(targetView));
           }
         });
-        break;
 
       case 'personas':
-        await PersonasView.render(viewContainer);
-        break;
+        return PersonasView.render(container);
 
       case 'settings':
-        await SettingsView.render(viewContainer, { tab: params.tab });
-        break;
+        return SettingsView.render(container, { tab: params.tab });
 
       case 'mcp':
-        await MCPView.render(viewContainer);
-        break;
+        return MCPView.render(container);
 
       default:
-        await CharactersView.render(viewContainer, (charId) => {
+        return CharactersView.render(container, (charId) => {
           this.navigate('chat', { characterId: charId });
         });
     }
+  }
+
+  /**
+   * Promotes a swipe-pager peek container to be the live #view-container,
+   * unmounting the outgoing one.
+   *
+   * Element IDENTITY is swapped rather than the children being moved into the
+   * existing container: every view wires its listeners by querying inside the
+   * element it was rendered into and closes over that element (e.g.
+   * SettingsView's save handler re-reads every field via
+   * `container.querySelector(...)`), so that element has to survive as the
+   * live container or those handlers would query a detached node.
+   */
+  adoptPrerenderedView(el) {
+    const old = document.getElementById('view-container');
+    if (old && old !== el) {
+      old.removeAttribute('id'); // release the id before claiming it below
+      old.remove();
+    }
+    el.removeAttribute('style');  // drops the peek's absolute geometry + drag transform
+    el.removeAttribute('aria-hidden');
+    el.classList.remove('view-peek');
+    el.classList.add('view-container');
+    el.id = 'view-container';
+    return el;
   }
 }
 

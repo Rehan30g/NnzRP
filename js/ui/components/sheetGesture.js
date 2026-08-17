@@ -1,5 +1,6 @@
 /* js/ui/components/sheetGesture.js - Swipe-down-to-dismiss for the app's
-   mobile bottom sheets (the chat right-drawer and the model-picker sheet).
+   mobile bottom sheets (the chat right-drawer, the model-picker sheet, and
+   every Modal.js dialog on mobile).
 
    WHY A SHARED MODULE: both sheets already share the same look and the same
    `slideUpMobile` entry keyframe (css/chat.css); they should share the same
@@ -72,18 +73,63 @@ function offsetFor(dy) {
 }
 
 /**
+ * Plays a sheet's exit animation - slide the panel down off-screen, fade the
+ * backdrop out - and calls `onDismiss` once it finishes. This is the ONE
+ * place that animation lives: the drag-release path below delegates to it
+ * (from whatever mid-drag transform is already applied), and every tap-to-
+ * close path (backdrop tap, an explicit close button, a programmatic close)
+ * calls it directly, so a sheet always exits the same way no matter which of
+ * those triggered it - previously only a drag-release animated out; a tap on
+ * the backdrop or close button just vanished instantly.
+ *
+ * @param {object} opts
+ * @param {HTMLElement} opts.sheetEl    - the panel to slide down.
+ * @param {HTMLElement} [opts.overlayEl] - the dimmed backdrop to fade, if any.
+ * @param {() => void} opts.onDismiss   - called after the animation (or
+ *   immediately, if `sheetEl` is missing/invalid).
+ * @returns {number|null} the settle timeout id, so a caller that might need
+ *   to interrupt it (e.g. the handle being grabbed again mid-animation) can.
+ */
+export function dismissSheet({ sheetEl, overlayEl, onDismiss }) {
+  if (!sheetEl || typeof onDismiss !== 'function') return null;
+  sheetEl.style.transition = `transform ${DISMISS_MS}ms ${EASE}`;
+  sheetEl.style.transform = 'translateY(100%)';
+  if (overlayEl) {
+    overlayEl.style.transition = `opacity ${DISMISS_MS}ms ${EASE}`;
+    overlayEl.style.opacity = '0';
+  }
+  return window.setTimeout(() => {
+    sheetEl.style.transition = '';
+    sheetEl.style.transform = '';
+    sheetEl.style.willChange = '';
+    if (overlayEl) {
+      overlayEl.style.transition = '';
+      overlayEl.style.opacity = '';
+    }
+    try {
+      onDismiss();
+    } catch (err) {
+      console.warn('[sheetGesture] onDismiss threw:', err);
+    }
+  }, DISMISS_MS);
+}
+
+/**
  * Makes `sheetEl` follow a downward drag started on `handleEl` and call
  * `onDismiss` once the drag passes the distance or velocity threshold.
  *
  * @param {object} opts
  * @param {HTMLElement} opts.sheetEl  - the sheet panel that visually moves.
  * @param {HTMLElement} opts.handleEl - the grab strip the drag must start on.
+ * @param {HTMLElement} [opts.overlayEl] - the dimmed backdrop, faded out
+ *   alongside the sheet on dismiss (see `dismissSheet` above). Optional and
+ *   purely cosmetic - omitting it just skips the fade.
  * @param {() => void} opts.onDismiss - closes the sheet (whatever the call
  *   site's existing close button already does). Called AFTER the slide-out
  *   animation, with the inline drag styles already cleared.
  * @returns {() => void} detach function (safe to call more than once).
  */
-export function attachSheetDragToClose({ sheetEl, handleEl, onDismiss }) {
+export function attachSheetDragToClose({ sheetEl, handleEl, overlayEl, onDismiss }) {
   if (!sheetEl || !handleEl || typeof onDismiss !== 'function') return () => {};
 
   let pointerId = null;
@@ -117,22 +163,12 @@ export function attachSheetDragToClose({ sheetEl, handleEl, onDismiss }) {
     }, SNAP_BACK_MS);
   };
 
+  // Delegates to the shared dismissSheet() (see above) instead of duplicating
+  // its animation - works correctly starting from a mid-drag transform too,
+  // since it only ever transitions FROM whatever transform is already
+  // applied, never resets it first.
   const dismiss = () => {
-    sheetEl.style.transition = `transform ${DISMISS_MS}ms ${EASE}`;
-    sheetEl.style.transform = 'translateY(100%)';
-    settleTimer = window.setTimeout(() => {
-      settleTimer = null;
-      // Order matters: clear the transform FIRST, then hide/remove. Both land
-      // in the same task, so nothing is painted in between and the sheet never
-      // flashes back to its resting position - but if onDismiss throws, the
-      // sheet is at least left in a clean, re-openable state.
-      clearInlineDragStyles();
-      try {
-        onDismiss();
-      } catch (err) {
-        console.warn('[sheetGesture] onDismiss threw:', err);
-      }
-    }, DISMISS_MS);
+    settleTimer = dismissSheet({ sheetEl, overlayEl, onDismiss });
   };
 
   function onPointerDown(e) {

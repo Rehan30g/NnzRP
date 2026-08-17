@@ -834,6 +834,14 @@ input[type="color"] {
   overflow: hidden;
 }
 
+/* Bottom-sheet grab handle (js/ui/components/sheetGesture.js) - desktop is a
+   centered dialog, not a sheet, so the handle (and with it the whole drag
+   gesture, since a display:none element receives no pointer events) is off.
+   Turned back on in the mobile block below. */
+.modal-content > .sheet-drag-handle {
+  display: none;
+}
+
 .modal-header {
   padding: 1.25rem 1.5rem;
   border-bottom: 1px solid var(--border-light);
@@ -1126,6 +1134,25 @@ input[type="color"] {
     max-height: 88vh !important;
     border-radius: 20px 20px 0 0;
     animation: slideUpMobile 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    /* Fills the gap that would otherwise open below the sheet while dragging
+       UP past its resting position (sheetGesture.js's rubber-band overdrag,
+       capped at its MAX_OVERDRAG of 44px) - without this, that drag reveals
+       whatever sits behind the modal for a moment, reading as a "hole"/broken
+       seam at the bottom edge. padding-bottom paints 48px of the sheet's own
+       background past its real content; margin-bottom pulls the box back by
+       the same amount so normal (non-dragged) layout is completely
+       unaffected - that extra 48px sits below the viewport, invisible, until
+       an upward drag reveals exactly enough of it to cover the gap. Not
+       clipped by this element's own `overflow: hidden` above - padding is
+       inside the border box, only a child overflowing PAST the border box
+       would be clipped. Same trick applied to .model-picker-sheet-content
+       (css/chat.css) for the same reason. */
+    padding-bottom: 48px;
+    margin-bottom: -48px;
+  }
+
+  .modal-content > .sheet-drag-handle {
+    display: flex;
   }
 
   /* Was `flex-wrap: wrap`, which packed 5 icon+label tabs into a dense
@@ -1182,7 +1209,12 @@ input[type="color"] {
      the settings route (every other view still gets `.view-container`'s
      normal 1rem top padding) without needing a route-specific class from
      JS. */
-  #view-container:has(.settings-tabbar) {
+  /* Class, not `#view-container`: the mobile swipe pager (swipeNav.js) renders
+     the neighbouring tab into a second `.view-container` element that doesn't
+     hold the id yet, and a settings peek has to look identical to the settings
+     page it's about to become. Still scoped to the settings route only, and
+     still doesn't match `.modal-body` (handled by its own rule below). */
+  .view-container:has(.settings-tabbar) {
     padding-top: 0 !important;
   }
 

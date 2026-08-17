@@ -34,9 +34,68 @@ const MIME_TYPES = {
 // index.html itself, need to reach the client on the very next request.
 const NO_CACHE_FILES = new Set(['/index.html', '/manifest.json', '/sw.js']);
 
+/**
+ * Live-reload: this dev server only, never the real GitHub Pages deploy or
+ * the Electron/APK builds - just an SSE endpoint + a small watcher, no new
+ * dependency, matching this file's own "zero-dependency" design. A connected
+ * page gets a `reload` event over `/__livereload` whenever a project file
+ * changes on disk, instead of needing a manual pull-to-refresh on the phone
+ * after every edit.
+ */
+const liveReloadClients = new Set();
+const LIVE_RELOAD_SCRIPT = `
+<script>
+(function () {
+  var es = new EventSource('/__livereload');
+  es.onmessage = function (e) { if (e.data === 'reload') location.reload(); };
+})();
+</script>
+`;
+
+function broadcastReload() {
+  for (const res of liveReloadClients) res.write('data: reload\n\n');
+}
+
+// Top-level dirs that would otherwise spam the watcher with irrelevant churn
+// (VCS internals, build output, native Android project, py tooling venv) -
+// see CLAUDE.md's directory sitemap for what each of these actually is.
+const WATCH_IGNORE = new Set(['.git', 'node_modules', 'android', 'dist', 'venv']);
+let reloadTimer = null;
+try {
+  fs.watch(ROOT, { recursive: true }, (eventType, filename) => {
+    if (!filename) return;
+    const topLevel = filename.split(/[\\/]/)[0];
+    if (WATCH_IGNORE.has(topLevel)) return;
+    // Debounced: an editor save can fire several fs events for one logical
+    // change, and this would otherwise reload connected clients once per event.
+    clearTimeout(reloadTimer);
+    reloadTimer = setTimeout(() => {
+      console.log(`[live-reload] ${filename} changed - reloading connected clients`);
+      broadcastReload();
+    }, 150);
+  });
+} catch (err) {
+  // recursive fs.watch isn't available on every platform (reliable on
+  // Windows/macOS, not Linux) - live-reload just silently doesn't fire rather
+  // than crashing the whole dev server over a QoL feature.
+  console.warn('[live-reload] file watching unavailable:', err.message);
+}
+
 const server = http.createServer((req, res) => {
   let urlPath = decodeURIComponent(req.url.split('?')[0]);
   if (urlPath === '/') urlPath = '/index.html';
+
+  if (urlPath === '/__livereload') {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive'
+    });
+    res.write('\n');
+    liveReloadClients.add(res);
+    req.on('close', () => liveReloadClients.delete(res));
+    return;
+  }
 
   const resolved = path.normalize(path.join(ROOT, urlPath));
   // Reject any path that escapes ROOT (e.g. "../../secret").
@@ -58,9 +117,24 @@ const server = http.createServer((req, res) => {
     // modules, which have no cache-busting query strings - see sw.js's own
     // comment on why not) - for iterating locally without fighting stale
     // browser/HTTP cache on every edit. Never set this for real deployments.
+    // `no-store` (not `no-cache`) deliberately - `no-cache` still lets the
+    // browser keep a cached copy and merely requires it to revalidate first,
+    // which mobile Chrome doesn't always do reliably without a Last-Modified/
+    // ETag on the response; `no-store` forbids caching it at all.
     headers['Cache-Control'] = (process.env.DEV_NO_CACHE === '1' || NO_CACHE_FILES.has(urlPath))
-      ? 'no-cache'
+      ? 'no-store'
       : 'public, max-age=3600';
+
+    // Only index.html ever gets the live-reload client script injected - it's
+    // the one page actually loaded/navigated to; the ES modules and CSS it
+    // pulls in don't need their own copy.
+    if (urlPath === '/index.html') {
+      const html = data.toString('utf8').replace('</body>', `${LIVE_RELOAD_SCRIPT}</body>`);
+      res.writeHead(200, headers);
+      res.end(html);
+      return;
+    }
+
     res.writeHead(200, headers);
     res.end(data);
   });
@@ -70,6 +144,8 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(`NnzRP static server running:`);
   console.log(`  Local:   http://localhost:${PORT}`);
   console.log(`  Network: http://<this-pc-lan-ip>:${PORT}  (for other devices on the same Wi-Fi)`);
+  console.log('');
+  console.log('Live-reload is on - connected pages auto-refresh whenever a project file changes.');
   console.log('');
   console.log('For a real HTTPS URL an Android phone can install as a PWA over the internet,');
   console.log(`run in another terminal: cloudflared tunnel --url http://localhost:${PORT}`);

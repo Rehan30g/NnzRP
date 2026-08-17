@@ -320,6 +320,26 @@
   position: relative;
 }
 
+/* js/ui/components/swipeNav.js's tab pager: the neighbouring tab, rendered
+   speculatively while a horizontal drag is in progress and parked exactly one
+   container-width to the left/right of the live one. Created only for the
+   duration of a mobile swipe gesture, then either promoted to be the real
+   #view-container (App.adoptPrerenderedView) or removed.
+
+   It carries `.view-container` too, so it inherits that class's padding /
+   scrolling / mobile overrides and renders byte-identically to the live
+   container - this rule only supplies what differs: absolute positioning
+   (its top/left/width/height are set inline from the live container's
+   measured box, since `flex: 1` is inert on an out-of-flow element) and an
+   opaque canvas background, without which the outgoing and incoming views
+   would show through each other for the one frame they overlap at adoption
+   time. --bg-primary is the same page-canvas colour body uses. */
+.view-peek {
+  position: absolute;
+  z-index: 1;
+  background: var(--bg-primary);
+}
+
 /* Grid Views (Desktop Default) */
 .grid-cards {
   display: grid;
@@ -478,6 +498,21 @@
      now 60px + env(safe-area-inset-bottom) tall - see .app-sidebar above). */
   .view-container:not(.chat-mode) {
     padding: 1rem 1rem calc(110px + env(safe-area-inset-bottom, 0px)) 1rem !important;
+  }
+
+  /* js/ui/components/swipeNav.js's tab-swipe gesture. `pan-y` (not the
+     default `auto`) tells the browser "let native touch scrolling handle
+     vertical panning, but hand horizontal/diagonal touch movement to JS
+     (pointer events) instead of assuming it's a scroll attempt too" - without
+     it, on-device touch scroll recognition can start consuming a horizontal
+     drag before swipeNav.js's own axis-lock + preventDefault ever gets a
+     chance to run, making the gesture feel like it "eats" the first swipe or
+     never engages at all on some devices. Harmless outside swipeNav's own
+     window.innerWidth<=768 gate: it doesn't touch clicks/taps, only how a
+     touch-drag is triaged between native scroll and JS, and this element has
+     no horizontal content of its own to scroll either way. */
+  .view-container {
+    touch-action: pan-y;
   }
   .view-container.chat-mode {
     padding: 0 !important;

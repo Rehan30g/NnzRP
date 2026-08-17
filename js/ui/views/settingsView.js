@@ -36,7 +36,7 @@ const TAB_ICONS = {
 const TABS = [
   { id: 'appearance', label: 'Appearance' },
   { id: 'generation', label: 'Generation' },
-  { id: 'model', label: 'Model Configurations' },
+  { id: 'model', label: 'Model' },
   { id: 'proxies', label: 'Proxies' },
   { id: 'data', label: 'Data' }
 ];
@@ -367,11 +367,11 @@ export class SettingsView {
             <div style="display:flex; gap:0.75rem; flex-wrap:wrap; align-items:center;">
               <button class="btn btn-secondary" id="btn-export-all-data">
                 <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-                Export All Data
+                Export
               </button>
               <button class="btn btn-secondary" id="btn-trigger-import-data">
                 <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
-                Import Backup File
+                Import
               </button>
               <input type="file" id="input-import-data-file" accept=".json" style="display:none;">
             </div>
@@ -384,7 +384,7 @@ export class SettingsView {
             </p>
             <button class="btn btn-secondary" id="btn-rerun-onboarding">
               <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21.5 2v6h-6"></path><path d="M2.5 22v-6h6"></path><path d="M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"></path></svg>
-              Run Setup Wizard Again
+              Run Wizard Again
             </button>
           </div>
         </div>
@@ -397,7 +397,7 @@ export class SettingsView {
                  there. A class, not a bare "span" selector, so a future second
                  element in this bar isn't hidden by accident. -->
             <span class="settings-savebar-hint" style="font-size:0.8rem; color:var(--text-dim);">Theme &amp; accent save instantly; everything else needs Save.</span>
-            <button class="btn btn-primary" id="btn-save-settings">Save Settings</button>
+            <button class="btn btn-primary" id="btn-save-settings">Save</button>
           </div>
         </div>
       </div>

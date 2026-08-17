@@ -125,11 +125,38 @@
     width: 100% !important;
     max-width: 100% !important;
     height: 85vh !important;
+    position: relative;
     border-radius: 20px 20px 0 0;
     border-left: none;
     border-top: 1px solid var(--border-subtle);
     box-shadow: 0 -4px 24px rgba(15, 23, 42, 0.25);
     animation: slideUpMobile 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  /* Fills the gap that would otherwise open below the sheet while dragging UP
+     past its resting position (sheetGesture.js's rubber-band overdrag, capped
+     at MAX_OVERDRAG=44px). Unlike .modal-content/.model-picker-sheet-content
+     (auto/max-height content, so a padding-bottom + equal negative
+     margin-bottom bleeds the fill below the viewport there), THIS element has
+     a FIXED height and internal flex children sized to fill it - growing the
+     height itself would hand that flex children a matching amount of extra
+     content real estate above where the fill needs to sit, cutting the same
+     amount off the VISIBLE bottom of the panel at rest instead of hiding it
+     off-screen. An absolutely-positioned `::after` sidesteps that entirely:
+     it never becomes a flex item (position:absolute removes it from flow), so
+     it can't affect how the flex children size themselves, and this element
+     has no `overflow: hidden` of its own (unlike those other two) to clip it.
+     `background: inherit` pulls .chat-right-drawer-content's own
+     `background: var(--bg-surface)` (set outside this media query) so the
+     fill never drifts out of sync with a value declared elsewhere. */
+  .chat-right-drawer-content::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 100%;
+    height: 48px;
+    background: inherit;
   }
 }
 
@@ -227,6 +254,12 @@
   flex-direction: column;
   overflow: hidden;
   animation: slideUpMobile 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  /* Fills the gap that would otherwise open below the sheet while dragging UP
+     past its resting position (sheetGesture.js's rubber-band overdrag, capped
+     at MAX_OVERDRAG=44px) - see the identical trick + full explanation on
+     .modal-content's mobile rule in css/components.css. */
+  padding-bottom: 48px;
+  margin-bottom: -48px;
 }
 
 /* (The old `.model-picker-sheet-handle` pill lives on as the shared
@@ -341,10 +374,14 @@
   line-height: 1;
 }
 
+/* Sits below the provider list now (see modelPickerSheet.js's
+   renderProviders) - margin-top spaces it apart from the group above
+   instead of the margin-bottom this needed back when it was the lead
+   row. */
 .model-picker-sheet-back {
   color: var(--text-muted);
   gap: 0.5rem;
-  margin-bottom: 0.75rem;
+  margin-top: 0.75rem;
 }
 
 .drawer-tab-header {
@@ -677,7 +714,10 @@
   gap: 0.6rem;
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-lg);
+  /* Same rounded "bubble" shape as the mobile composer (see the mobile
+     media query below) - slightly larger radius here since desktop's wider
+     box reads as under-rounded at the mobile value. */
+  border-radius: 1.75rem;
   padding: 1rem 1.25rem;
   box-shadow: none;
   transition: border-color var(--transition-fast);
@@ -721,6 +761,24 @@
   min-width: 0;
 }
 
+/* Model picker as a filled pill chip (no border), same shape as the mobile
+   composer's model picker (see the mobile media query below) - unified so
+   desktop and mobile share one visual language. min-height:40px matches
+   .btn-icon's own 40px (the attach button sitting right next to it) -
+   dropdown-sm's own compact padding otherwise renders it visibly shorter
+   than the attach button, so the two look mismatched side by side. */
+[data-dropdown-for="chat-model-select"] .dropdown-trigger {
+  background: var(--bg-tertiary);
+  border: none;
+  border-radius: var(--radius-full);
+  min-height: 40px;
+}
+
+[data-dropdown-for="chat-model-select"].open .dropdown-trigger,
+[data-dropdown-for="chat-model-select"] .dropdown-trigger:focus-visible {
+  box-shadow: var(--shadow-glow);
+}
+
 /* ===================================================
    Image attach ("+") button, popup menu, and draft preview strip
    =================================================== */
@@ -729,12 +787,18 @@
   display: flex;
 }
 
+/* Filled circular chip, same shape as the mobile composer's attach button
+   (see the mobile media query below) - unified so desktop and mobile share
+   one visual language, adjusted only in size via .btn-icon's own padding. */
 .chat-attach-btn {
   color: var(--text-muted);
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-full);
 }
 
 .chat-attach-btn:hover {
   color: var(--accent-primary);
+  background: var(--bg-surface-hover);
 }
 
 /* Anchored to `.chat-attach-wrap` (position:relative), NOT portalled to
@@ -973,6 +1037,9 @@
 /* ===================================================
    Arrow-Up Icon Send Button
    =================================================== */
+/* Solid filled circle, same shape/fill as the mobile composer's send button
+   (see the mobile media query below) - --text-main/--bg-surface (not a fixed
+   color) so it inverts correctly in dark mode too. */
 .btn-send-icon {
   display: flex;
   align-items: center;
@@ -980,20 +1047,20 @@
   width: 42px;
   height: 42px;
   flex-shrink: 0;
-  border: 1px solid var(--border-subtle);
+  border: none;
   border-radius: var(--radius-full);
-  background: var(--bg-surface);
-  color: var(--accent-primary);
+  background: var(--text-main);
+  color: var(--bg-surface);
   cursor: pointer;
-  box-shadow: var(--shadow-raised);
-  transition: background var(--transition-fast), border-color var(--transition-fast), transform var(--transition-fast);
+  box-shadow: none;
+  transition: background var(--transition-fast), opacity var(--transition-fast), transform var(--transition-fast);
 }
 
 .btn-send-icon:hover {
-  background: var(--bg-surface-hover);
-  border-color: var(--accent-primary);
-  color: var(--accent-primary-hover);
-  transform: translateY(-1px);
+  background: var(--text-main);
+  color: var(--bg-surface);
+  opacity: 0.85;
+  transform: none;
 }
 
 .btn-send-icon:disabled {
@@ -1003,16 +1070,15 @@
 }
 
 .btn-send-icon.generating {
-  background: var(--bg-surface);
-  color: var(--accent-rose);
-  border: 1.5px solid var(--accent-rose);
-  box-shadow: var(--shadow-raised);
+  background: var(--accent-rose);
+  color: var(--text-inverse);
+  border: none;
+  box-shadow: none;
 }
 
 .btn-send-icon.generating:hover {
-  background: var(--accent-rose-soft);
-  border-color: var(--accent-rose-strong);
-  color: var(--accent-rose-strong);
+  background: var(--accent-rose-strong);
+  color: var(--text-inverse);
 }
 
 /* Locks message-level actions while a generation is in flight, so a
@@ -1510,11 +1576,12 @@
     width: calc(100% - 20px);
   }
 
-  /* Rounder "bubble" composer on mobile (reference: the Claude mobile app's
-     input bar) - bigger radius + a touch more padding than the desktop
-     card. box-shadow stays `none`, matching the app's flat design language
-     (css/variables.css's --shadow-* tokens are deliberately none) rather
-     than importing that reference's elevation style wholesale. */
+  /* Composer shape/fill (rounded wrapper, filled attach chip, filled model
+     pill w/ matching 40px height, filled send circle) is now shared with
+     desktop as a base rule (see .chat-input-wrapper / .chat-attach-btn /
+     the chat-model-select pill rules / .btn-send-icon above) - only the
+     sizing deltas below are mobile-specific: a slightly tighter
+     radius/padding than desktop's wider box. */
   .chat-input-wrapper {
     padding: 0.75rem 1rem;
     border-radius: 1.5rem;
@@ -1530,57 +1597,6 @@
      until it touches the send button with zero space between them. */
   .chat-input-toolbar {
     gap: 0.5rem;
-  }
-
-  /* Attach ("+") button as a filled circular chip instead of the desktop's
-     flat transparent icon button. */
-  .chat-attach-wrap .chat-attach-btn {
-    background: var(--bg-tertiary);
-    border-radius: var(--radius-full);
-  }
-
-  .chat-attach-wrap .chat-attach-btn:hover {
-    background: var(--bg-surface-hover);
-  }
-
-  /* Model picker as a filled pill chip (no border) instead of the desktop's
-     bordered input-style box - same visual language as the attach button.
-     min-height matches .chat-attach-btn's 40px (from the base .btn-icon
-     rule) - the dropdown's own compact padding otherwise renders it visibly
-     shorter than the attach button next to it. */
-  [data-dropdown-for="chat-model-select"] .dropdown-trigger {
-    background: var(--bg-tertiary);
-    border: none;
-    border-radius: var(--radius-full);
-    min-height: 40px;
-  }
-
-  [data-dropdown-for="chat-model-select"].open .dropdown-trigger,
-  [data-dropdown-for="chat-model-select"] .dropdown-trigger:focus-visible {
-    box-shadow: var(--shadow-glow);
-  }
-
-  /* Send button as a solid filled circle rather than the desktop's outlined
-     one - --text-main/--bg-surface (not a fixed color) so it inverts
-     correctly in dark mode too (light-filled circle w/ dark icon there). */
-  #btn-send-message {
-    background: var(--text-main);
-    border: none;
-    color: var(--bg-surface);
-    box-shadow: none;
-  }
-
-  #btn-send-message:hover {
-    background: var(--text-main);
-    color: var(--bg-surface);
-    opacity: 0.85;
-    transform: none;
-  }
-
-  #btn-send-message.generating {
-    background: var(--accent-rose);
-    color: #ffffff;
-    border: none;
   }
 
   /* The model picker's wrapperStyle (`max-width:260px; width:auto;
