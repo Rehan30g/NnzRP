@@ -2731,7 +2731,7 @@ export class ChatView {
                     </button>
                   ` : ''}
                   ${!isUser && idx === 0 && msgs.length === 1 ? `
-                    <button class="btn-msg-action btn-personalize-greeting" data-id="${m.id}" title="Personalisasi pesan pembuka dengan AI">
+                    <button class="btn-msg-action btn-personalize-greeting" data-id="${m.id}" title="Personalize opening message with AI">
                       <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M18.4 5.6l-2.8 2.8M8.4 15.6l-2.8 2.8"></path></svg>
                     </button>
                   ` : ''}
@@ -3028,7 +3028,7 @@ export class ChatView {
       const proxyObj = await ProxyStore.getDefault();
       if (!proxyObj) {
         isGenerating = false;
-        Toast.error('Silakan konfigurasi Multi-Proxy API terlebih dahulu di menu Multi-Proxy Config!');
+        Toast.error('Please configure a Multi-Proxy API profile first in the Multi-Proxy Config menu!');
         return;
       }
 
@@ -3666,21 +3666,27 @@ export class ChatView {
   static async openGreetingWizard({ messageId, character, persona, onApplied }) {
     const proxy = await ProxyStore.getDefault();
     if (!proxy) {
-      Toast.error('Silakan konfigurasi Multi-Proxy API terlebih dahulu di menu Multi-Proxy Config!');
+      Toast.error('Please configure a Multi-Proxy API profile first in the Multi-Proxy Config menu!');
       return;
     }
     const genSettings = await ProxyStore.getGenerationSettings();
 
     const answers = [];
     // questionHistory[step] is the {question, options} shown at that step -
-    // cached so "Kembali" can redisplay a prior question without a new AI call.
+    // cached so "Back" can redisplay a prior question without a new AI call.
     const questionHistory = [];
     let step = 0;
     let generatedText = '';
+    // Free-text language for the generated question/greeting text, captured by
+    // renderLanguageStep() before the Q&A flow starts. Empty string (never
+    // answered) is passed through as-is to GreetingWizardService, which
+    // defaults to English on its own - kept as the single source of truth for
+    // that default instead of duplicating it here.
+    let language = '';
 
     const overlay = Modal.open({
-      title: 'Personalisasi Pesan Pembuka (AI)',
-      contentHTML: '<div style="text-align:center; padding:2rem 0; color:var(--text-muted);">Memuat...</div>'
+      title: 'Personalize Opening Message (AI)',
+      contentHTML: '<div style="text-align:center; padding:2rem 0; color:var(--text-muted);">Loading...</div>'
     });
     const body = () => overlay.querySelector('.modal-body');
 
@@ -3698,15 +3704,44 @@ export class ChatView {
         <div style="text-align:center; padding:1rem 0;">
           <p style="color:var(--accent-rose); font-size:0.88rem; margin-bottom:1rem;">${escapeHtml(message)}</p>
           <div style="display:flex; justify-content:center; gap:0.5rem;">
-            ${onBack ? '<button class="btn btn-secondary btn-sm" id="wizard-err-back">Kembali</button>' : ''}
-            <button class="btn btn-primary btn-sm" id="wizard-err-retry">Coba Lagi</button>
-            <button class="btn btn-secondary btn-sm" id="wizard-err-cancel">Batal</button>
+            ${onBack ? '<button class="btn btn-secondary btn-sm" id="wizard-err-back">Back</button>' : ''}
+            <button class="btn btn-primary btn-sm" id="wizard-err-retry">Retry</button>
+            <button class="btn btn-secondary btn-sm" id="wizard-err-cancel">Cancel</button>
           </div>
         </div>
       `;
       body().querySelector('#wizard-err-retry').onclick = onRetry;
       if (onBack) body().querySelector('#wizard-err-back').onclick = onBack;
       body().querySelector('#wizard-err-cancel').onclick = () => Modal.closeOverlay(overlay);
+    };
+
+    // Free-text language capture, shown once before the Q&A flow starts (not
+    // reachable again via "Back" from question 1 - same as the flow never
+    // letting question 1 go further back than itself). Left blank = English,
+    // handled downstream by GreetingWizardService, not duplicated here.
+    const renderLanguageStep = () => {
+      body().innerHTML = `
+        <p style="font-weight:600; margin-bottom:0.4rem;">What language should the new opening message be written in?</p>
+        <p style="color:var(--text-muted); font-size:0.82rem; margin-bottom:0.9rem;">Type any language (e.g. "Indonesian", "Japanese", "Spanish") - leave it blank for English.</p>
+        <div style="display:flex; gap:0.5rem;">
+          <input class="input" id="wizard-language-input" placeholder="English (default)" style="flex:1;">
+          <button class="btn btn-primary" id="wizard-language-continue">Continue</button>
+        </div>
+        <div style="display:flex; justify-content:flex-end; margin-top:1.1rem;">
+          <button class="btn btn-secondary btn-sm" id="wizard-language-cancel">Cancel</button>
+        </div>
+      `;
+      const langInput = body().querySelector('#wizard-language-input');
+      langInput.focus();
+      const proceed = () => {
+        language = langInput.value.trim();
+        loadQuestion();
+      };
+      body().querySelector('#wizard-language-continue').onclick = proceed;
+      langInput.onkeydown = (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); proceed(); }
+      };
+      body().querySelector('#wizard-language-cancel').onclick = () => Modal.closeOverlay(overlay);
     };
 
     const goBackToQuestion = (targetStep) => {
@@ -3717,18 +3752,18 @@ export class ChatView {
 
     const renderQuestion = (q) => {
       body().innerHTML = `
-        <p style="color:var(--text-muted); font-size:0.78rem; margin-bottom:0.6rem;">Pertanyaan ${step + 1} dari ${GREETING_WIZARD_TOTAL_QUESTIONS}</p>
+        <p style="color:var(--text-muted); font-size:0.78rem; margin-bottom:0.6rem;">Question ${step + 1} of ${GREETING_WIZARD_TOTAL_QUESTIONS}</p>
         <p style="font-weight:600; margin-bottom:0.9rem;">${escapeHtml(q.question)}</p>
         <div style="display:flex; flex-direction:column; gap:0.5rem;">
           ${q.options.map(opt => `<button type="button" class="btn btn-secondary wizard-option-btn" data-value="${escapeAttr(opt)}" style="justify-content:flex-start; text-align:left; white-space:normal; width:100%;">${escapeHtml(opt)}</button>`).join('')}
         </div>
         <div style="display:flex; gap:0.5rem; margin-top:0.9rem;">
-          <input class="input" id="wizard-custom-input" placeholder="Atau ketik jawabanmu sendiri..." style="flex:1;">
-          <button class="btn btn-primary" id="wizard-custom-submit">Kirim</button>
+          <input class="input" id="wizard-custom-input" placeholder="Or type your own answer..." style="flex:1;">
+          <button class="btn btn-primary" id="wizard-custom-submit">Send</button>
         </div>
         <div style="display:flex; justify-content:space-between; margin-top:1.1rem;">
-          <button class="btn btn-secondary btn-sm" id="wizard-back" ${step === 0 ? 'disabled' : ''}>Kembali</button>
-          <button class="btn btn-secondary btn-sm" id="wizard-cancel">Batal</button>
+          <button class="btn btn-secondary btn-sm" id="wizard-back" ${step === 0 ? 'disabled' : ''}>Back</button>
+          <button class="btn btn-secondary btn-sm" id="wizard-cancel">Cancel</button>
         </div>
       `;
 
@@ -3757,13 +3792,13 @@ export class ChatView {
     };
 
     const loadQuestion = async () => {
-      renderLoading(step === 0 ? 'Membuat pertanyaan pertama...' : 'Membuat pertanyaan berikutnya...');
+      renderLoading(step === 0 ? 'Generating first question...' : 'Generating next question...');
       try {
-        const q = await GreetingWizardService.nextQuestion({ proxy, character, persona, answers });
+        const q = await GreetingWizardService.nextQuestion({ proxy, character, persona, answers, language });
         questionHistory[step] = q;
         renderQuestion(q);
       } catch (err) {
-        renderError(err.message || 'Gagal membuat pertanyaan.', {
+        renderError(err.message || 'Failed to generate question.', {
           onRetry: loadQuestion,
           onBack: step > 0 ? () => goBackToQuestion(step - 1) : null
         });
@@ -3771,12 +3806,12 @@ export class ChatView {
     };
 
     const loadPreview = async () => {
-      renderLoading('Menulis pesan pembuka baru...');
+      renderLoading('Writing new opening message...');
       try {
-        generatedText = await GreetingWizardService.generateGreeting({ proxy, genSettings, character, persona, answers });
+        generatedText = await GreetingWizardService.generateGreeting({ proxy, genSettings, character, persona, answers, language });
         renderPreview();
       } catch (err) {
-        renderError(err.message || 'Gagal membuat pesan pembuka.', {
+        renderError(err.message || 'Failed to generate opening message.', {
           onRetry: loadPreview,
           onBack: () => goBackToQuestion(GREETING_WIZARD_TOTAL_QUESTIONS - 1)
         });
@@ -3785,12 +3820,12 @@ export class ChatView {
 
     const renderPreview = () => {
       body().innerHTML = `
-        <p style="font-weight:600; margin-bottom:0.6rem;">Pratinjau Pesan Pembuka Baru</p>
+        <p style="font-weight:600; margin-bottom:0.6rem;">New Opening Message Preview</p>
         <textarea class="textarea" id="wizard-preview-text" style="min-height:180px;">${escapeHtml(generatedText)}</textarea>
         <div style="display:flex; flex-wrap:wrap; gap:0.5rem; justify-content:flex-end; margin-top:1rem;">
-          <button class="btn btn-secondary btn-sm" id="wizard-preview-back">Ubah Jawaban</button>
-          <button class="btn btn-secondary btn-sm" id="wizard-preview-regenerate">Buat Ulang</button>
-          <button class="btn btn-primary btn-sm" id="wizard-preview-apply">Gunakan Pesan Ini</button>
+          <button class="btn btn-secondary btn-sm" id="wizard-preview-back">Edit Answers</button>
+          <button class="btn btn-secondary btn-sm" id="wizard-preview-regenerate">Regenerate</button>
+          <button class="btn btn-primary btn-sm" id="wizard-preview-apply">Use This Message</button>
         </div>
       `;
       body().querySelector('#wizard-preview-back').onclick = () => goBackToQuestion(GREETING_WIZARD_TOTAL_QUESTIONS - 1);
@@ -3798,7 +3833,7 @@ export class ChatView {
       body().querySelector('#wizard-preview-apply').onclick = async () => {
         const finalText = body().querySelector('#wizard-preview-text').value.trim();
         if (!finalText) {
-          Toast.error('Teks pesan pembuka tidak boleh kosong.');
+          Toast.error('Opening message text cannot be empty.');
           return;
         }
         const msg = await ChatStore.getMessageById(messageId);
@@ -3809,12 +3844,12 @@ export class ChatView {
         const updatedSwipes = [...(msg.swipes && msg.swipes.length ? msg.swipes : [msg.content]), finalText];
         await ChatStore.updateMessageSwipes(messageId, updatedSwipes, updatedSwipes.length - 1);
         Modal.closeOverlay(overlay);
-        Toast.success('Pesan pembuka berhasil dipersonalisasi!');
+        Toast.success('Opening message personalized successfully!');
         if (onApplied) await onApplied();
       };
     };
 
-    await loadQuestion();
+    renderLanguageStep();
   }
 
   static formatRoleplayMarkdown(text = '', userName = '', charName = '') {
