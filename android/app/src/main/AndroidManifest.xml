@@ -32,4 +32,15 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Required on Android 8+ (API 26) for the in-app "Check Updates" flow
+         (js/services/androidUpdateService.js) to be a legitimate INSTALL
+         SOURCE: it downloads the newer signed APK from the shared `latest`
+         GitHub Release into the app's own cache dir and hands it to Android's
+         Package Installer via an ACTION_VIEW intent. Without this permission
+         that intent is refused outright. Note this permission does NOT (and on
+         Android cannot) make the install silent - the user still taps
+         "Install" on the OS's own confirmation dialog, which is unavoidable
+         for any non-Play-Store/non-device-owner app. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 </manifest>

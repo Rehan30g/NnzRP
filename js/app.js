@@ -13,6 +13,7 @@ import { CharacterStore } from './storage/characterStore.js';
 import { initTheme } from './ui/theme.js';
 import { Toast } from './ui/components/toast.js';
 import { maybeShowOnboardingWizard } from './ui/components/onboardingWizard.js';
+import { checkForUpdate, isAndroidNative } from './services/androidUpdateService.js';
 
 /**
  * Window-title suffixes per route. `navigate()` composes these into
@@ -56,32 +57,31 @@ function setNativeSplashStatus(title, sub) {
  * Never blocks app boot on a slow/unreachable/absent network (capped at a
  * 2s race) or throws - a failed check just silently skips the notice, same
  * "must never block boot" rule as the MCP tool-cache warm-up below.
+ *
+ * The actual version fetch+compare lives in js/services/androidUpdateService.js
+ * and is shared with Settings -> Data's "Check Updates" button, which goes on
+ * to download and install the newer APK. This call site only ever surfaces
+ * the notice.
  */
 let pendingUpdateNotice = null;
 async function checkForAppUpdate() {
-  const AppPlugin = window.Capacitor?.Plugins?.App;
-  if (!window.Capacitor?.isNativePlatform?.() || !AppPlugin) return; // Electron / plain browser / PWA
+  if (!isAndroidNative() || !window.Capacitor?.Plugins?.App) return; // Electron / plain browser / PWA
 
   setNativeSplashStatus('Checking for updates', 'Comparing with the latest release');
   try {
-    const check = (async () => {
-      const [info, res] = await Promise.all([
-        AppPlugin.getInfo(),
-        fetch('version.json', { cache: 'no-store' })
-      ]);
-      if (!res.ok) return null;
-      return { info, remote: await res.json() };
-    })();
-    const timeout = new Promise((resolve) => setTimeout(resolve, 2000, null));
-    const result = await Promise.race([check, timeout]);
+    // The fetch+compare itself lives in androidUpdateService.js so that this
+    // boot check and Settings -> Data's "Check Updates" button can never
+    // disagree about what "newer" means. `timeoutMs` is this call site's own
+    // requirement (never hold the splash on a dead network); the Settings
+    // button passes none.
+    const result = await checkForUpdate({ timeoutMs: 2000 });
 
-    if (result?.remote?.latestApkVersion && result.remote.latestApkVersion !== result.info.version) {
-      const releaseUrl = result.remote.releaseUrl || 'https://github.com/Rehan30g/NnzRP/releases/tag/latest';
-      pendingUpdateNotice = releaseUrl;
+    if (result.available) {
+      pendingUpdateNotice = result.releaseUrl;
       const updateEl = document.getElementById('native-splash-update');
       const linkEl = document.getElementById('native-splash-update-link');
       if (updateEl && linkEl) {
-        linkEl.href = releaseUrl;
+        linkEl.href = result.releaseUrl;
         updateEl.classList.remove('hidden');
       }
     }

@@ -23,6 +23,7 @@ import { dropdownHTML, wireDropdown } from '../components/dropdown.js';
 import { toggleRowHTML } from '../components/toggle.js';
 import { ACCENT_PRESETS, setThemeMode, setAccent, applyAccent } from '../theme.js';
 import { showOnboardingWizard } from '../components/onboardingWizard.js';
+import { checkForUpdate, downloadAndInstall, isAndroidNative } from '../../services/androidUpdateService.js';
 import { escapeHtml, escapeAttr } from '../../utils/sanitize.js';
 
 const TAB_ICONS = {
@@ -102,6 +103,19 @@ export class SettingsView {
     const themeMode = await ThemeStore.getMode();
     const accent = await ThemeStore.getAccent();
 
+    /* Android-only "App Updates" card in the Data panel. Gated here rather
+       than hidden with CSS so it is entirely ABSENT from the DOM on Electron /
+       a browser tab / the PWA, none of which have an APK to replace (the web
+       content there is always current by construction - see
+       js/services/androidUpdateService.js's header). */
+    const isAndroidApp = isAndroidNative();
+    let installedAppVersion = '';
+    if (isAndroidApp) {
+      try {
+        installedAppVersion = (await window.Capacitor?.Plugins?.App?.getInfo())?.version || '';
+      } catch { /* non-fatal - the card just omits the version line */ }
+    }
+
     const initialTab = TABS.some(t => t.id === options.tab) ? options.tab : 'appearance';
     // Embedded mode (opened from the chat drawer's "Settings" shortcut, inside
     // a Modal) drops the page title/section descriptions and hides the
@@ -154,7 +168,7 @@ export class SettingsView {
       proxies: proxies.length
         ? `${proxies.length} profile${proxies.length === 1 ? '' : 's'} configured`
         : 'No profiles yet',
-      data: 'Backup, restore & setup wizard'
+      data: isAndroidApp ? 'App updates, backup & restore' : 'Backup, restore & setup wizard'
     };
 
     const menuRowHTML = (id) => {
@@ -438,6 +452,28 @@ export class SettingsView {
 
         <!-- ============ DATA ============ -->
         <div class="settings-panel${initialTab === 'data' ? '' : ' hidden'}" data-panel="data">
+          ${isAndroidApp ? `
+          <div class="card">
+            <h3 class="settings-section-title">App Updates</h3>
+            <p class="settings-section-desc">
+              The app's content updates itself on every launch. This checks whether the <em>installed Android app</em> itself${installedAppVersion ? ` (currently version ${escapeHtml(installedAppVersion)})` : ''}
+              has a newer released build, downloads it, and opens Android's installer.
+              Android always asks you to confirm the install - that single tap can't be skipped by any app outside the Play Store.
+            </p>
+            <div style="display:flex; gap:0.75rem; flex-wrap:wrap; align-items:center;">
+              <button class="btn btn-secondary" id="btn-check-app-update">
+                <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21.5 2v6h-6"></path><path d="M2.5 22v-6h6"></path><path d="M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"></path></svg>
+                Check Updates
+              </button>
+            </div>
+            <!-- Inline status, NOT a toast: Toast.info/.success are display:none
+                 on mobile (components.css) and this card only ever renders on a
+                 phone, so a toast-driven flow would be completely invisible
+                 exactly where it matters. Only Toast.error survives there. -->
+            <p id="app-update-status" class="hidden" style="margin:0.85rem 0 0; font-size:0.85rem; color:var(--text-dim);"></p>
+          </div>
+          ` : ''}
+
           <div class="card">
             <h3 class="settings-section-title">Data Backup &amp; Migration</h3>
             <p class="settings-section-desc">
@@ -858,6 +894,90 @@ export class SettingsView {
     const btnRerunOnboarding = container.querySelector('#btn-rerun-onboarding');
     if (btnRerunOnboarding) {
       btnRerunOnboarding.onclick = () => showOnboardingWizard();
+    }
+
+    /* ---------------- Android app updates ----------------
+       Only wired when the card was actually rendered (Android APK only).
+
+       Every state lands INLINE - the button label plus the #app-update-status
+       line - rather than in a toast, because Toast.info/.success are
+       display:none on mobile (see components.css) and this card is
+       mobile-only; a toast-driven flow here would be invisible on the exact
+       device it exists for. Toast.error still shows on mobile, so real
+       failures get one on top of the inline message.
+
+       The flow ends at Android's own install dialog: downloadAndInstall()
+       resolves once the installer intent has been fired, and the OS owns the
+       screen from there - so the final state is just "confirm the install in
+       the dialog", never a spinner waiting on something this page can see. */
+    const btnCheckUpdate = container.querySelector('#btn-check-app-update');
+    const updateStatusEl = container.querySelector('#app-update-status');
+    if (btnCheckUpdate && updateStatusEl) {
+      let statusClearTimer = null;
+      // tone -> token. No raw hex anywhere (CLAUDE.md rule 2).
+      const STATUS_TONES = {
+        neutral: 'var(--text-dim)',
+        good: 'var(--accent-emerald)',
+        bad: 'var(--accent-rose)'
+      };
+      const setStatus = (text, tone = 'neutral', autoClearMs = 0) => {
+        clearTimeout(statusClearTimer);
+        updateStatusEl.textContent = text;
+        updateStatusEl.style.color = STATUS_TONES[tone] || STATUS_TONES.neutral;
+        updateStatusEl.classList.toggle('hidden', !text);
+        if (autoClearMs) {
+          statusClearTimer = setTimeout(() => {
+            updateStatusEl.textContent = '';
+            updateStatusEl.classList.add('hidden');
+          }, autoClearMs);
+        }
+      };
+
+      const originalUpdateBtnHTML = btnCheckUpdate.innerHTML;
+      const setBusy = (label) => {
+        btnCheckUpdate.disabled = !!label;
+        btnCheckUpdate.innerHTML = label ? `<span>${escapeHtml(label)}</span>` : originalUpdateBtnHTML;
+      };
+
+      btnCheckUpdate.onclick = async () => {
+        setBusy('Checking');
+        setStatus('Checking for a newer app version...');
+        let info;
+        try {
+          info = await checkForUpdate();
+        } catch (err) {
+          setBusy(null);
+          setStatus(`Update check failed: ${err.message}`, 'bad');
+          Toast.error('Update check failed: ' + err.message);
+          return;
+        }
+
+        if (!info.available) {
+          setBusy(null);
+          setStatus(`You're on the latest version (${info.currentVersion || 'unknown'}).`, 'good', 5000);
+          return;
+        }
+
+        setBusy('Downloading');
+        setStatus(`Update available (v${info.latestVersion}) - downloading...`);
+        try {
+          await downloadAndInstall(info.downloadUrl, ({ percent }) => {
+            setStatus(
+              percent === null
+                ? `Update available (v${info.latestVersion}) - downloading...`
+                : `Update available (v${info.latestVersion}) - downloading ${percent}%...`
+            );
+          });
+          // Android's package installer is now on screen (or about to be).
+          // Nothing further for this page to do or wait on.
+          setBusy(null);
+          setStatus(`Downloaded v${info.latestVersion}. Confirm the install in the Android dialog.`, 'good');
+        } catch (err) {
+          setBusy(null);
+          setStatus(`Download failed: ${err.message}. You can still install it manually from the release page.`, 'bad');
+          Toast.error('Update download failed: ' + err.message);
+        }
+      };
     }
   }
 }

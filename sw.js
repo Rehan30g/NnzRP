@@ -51,6 +51,14 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
 
+  // version.json is the Android update manifest (js/services/androidUpdateService.js)
+  // and must ALWAYS come from the network: served stale, it would report "you're
+  // on the latest version" right after a newer APK was published, which is the
+  // exact failure this whole update path exists to fix. The callers already pass
+  // `cache: 'no-store'`, but that only governs the HTTP cache - it does not reach
+  // the Cache Storage lookup below, so the skip has to happen here.
+  if (url.pathname.endsWith('/version.json')) return;
+
   event.respondWith(
     caches.open(CACHE_NAME).then(async (cache) => {
       const cached = await cache.match(request);
