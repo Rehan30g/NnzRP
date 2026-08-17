@@ -121,7 +121,7 @@ The same app, three ways — pick whichever fits how you actually use it.
 |---|---|
 | **Web / PWA** | Open **[rehan30g.github.io/NnzRP](https://rehan30g.github.io/NnzRP/)** in any browser. Works as a regular tab, or use your browser's *Install app* option to add it to your home screen/desktop like a native app. Full mobile-optimized UI — bottom-sheet pickers, swipe-to-dismiss gestures, safe-area aware layout for notches and gesture bars. |
 | **Android** | Grab the signed APK from the **[latest release](https://github.com/Rehan30g/NnzRP/releases/latest)** and sideload it — no Play Store listing. It's a thin shell that loads the app live from the Pages URL above, so it updates itself on next launch, no reinstall needed. |
-| **Windows** | Grab the NSIS installer or the portable `.exe` from the same **[latest release](https://github.com/Rehan30g/NnzRP/releases/latest)** — or build it yourself, see below. |
+| **Windows** | Grab the NSIS installer or the portable `.exe` from the same **[latest release](https://github.com/Rehan30g/NnzRP/releases/latest)** — or build it yourself, see below. The NSIS install self-updates after that (checks on launch, downloads in the background, asks to restart when ready); the portable `.exe` doesn't, since there's no installed copy in place to update. |
 
 > [!NOTE]
 > Local MCP servers that run as a child process (**stdio/command** transport) only work in the Windows desktop build. Web and Android are sandboxed and can only reach **HTTP** MCP servers — use an HTTP-based server if you're on mobile.

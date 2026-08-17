@@ -40,6 +40,16 @@ jobs:
       # Same shared `latest` release tag as build-apk.yml (see its own
       # comment) - this just adds/updates the Windows asset on that release
       # without touching the Android one.
+      #
+      # dist/latest.yml + the installer's .blockmap are included alongside
+      # the .exe files so main.js's electron-updater (autoUpdater) can find
+      # and verify a newer release - both are written locally by
+      # electron-builder regardless of --publish=never above (confirmed:
+      # they're produced even with no GH_TOKEN/publish flag in play at all),
+      # so this just uploads what's already sitting in dist/ rather than
+      # switching to electron-builder's own --publish flow, which would
+      # create a separate version-tagged release instead of using this
+      # shared one. See main.js's setupAutoUpdater() for the full mechanism.
       - name: Publish / update release
         uses: softprops/action-gh-release@v2
         with:
@@ -53,7 +63,13 @@ jobs:
               content always loads live from GitHub Pages, so it never needs
               reinstalling for ordinary app updates - only for native-shell
               changes (icon, permissions, appId, Capacitor/Android SDK version).
-            - **Windows**: run the `Setup .exe` installer (NSIS). This is a
-              fully bundled desktop build, so a new install IS needed whenever
-              the app itself changes - it does not load anything live.
-          files: dist/*.exe
+            - **Windows**: run the `Setup .exe` installer (NSIS) once. After that,
+              the installed app checks this same release for updates on launch
+              and installs newer ones automatically (prompts to restart) - no
+              manual reinstall needed unless a `latest.yml`-covered auto-update
+              itself fails, in which case re-running the Setup installer always
+              works as a fallback.
+          files: |
+            dist/*.exe
+            dist/latest.yml
+            dist/*.blockmap

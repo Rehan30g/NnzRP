@@ -20,6 +20,9 @@
     "type": "git",
     "url": "https://github.com/Rehan30g/NnzRP.git"
   },
+  "dependencies": {
+    "electron-updater": "^6.3.9"
+  },
   "devDependencies": {
     "@capacitor/android": "^8.5.0",
     "@capacitor/app": "^8.1.1",
@@ -59,6 +62,12 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "NnzRP"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "Rehan30g",
+      "repo": "NnzRP",
+      "releaseType": "release"
     }
   },
   "allowScripts": {

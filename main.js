@@ -1,7 +1,8 @@
-const { app, BrowserWindow, shell, Menu, ipcMain, nativeTheme } = require('electron');
+const { app, BrowserWindow, shell, Menu, ipcMain, nativeTheme, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
+const { autoUpdater } = require('electron-updater');
 
 // Remove default menu bar for clean custom header app design
 Menu.setApplicationMenu(null);
@@ -265,6 +266,8 @@ function createWindow() {
 
   // Load local HTML file
   mainWindow.loadFile(path.join(__dirname, 'index.html'));
+
+  return mainWindow;
 }
 
 /* -----------------------------------------------------------------------
@@ -450,8 +453,68 @@ ipcMain.handle('window-is-maximized', () => {
   return win ? win.isMaximized() : false;
 });
 
+/* -----------------------------------------------------------------------
+ * Auto-update (electron-updater, Windows NSIS installs only - the zip/
+ * portable targets have no installed-in-place file to update).
+ *
+ * Checks the SAME shared "latest" GitHub Release both build-apk.yml and
+ * build-windows.yml already publish every build to (see build-windows.yml's
+ * own comment on why they share one release). electron-builder always
+ * writes dist/latest.yml + each installer's .blockmap locally regardless of
+ * --publish (confirmed with a local `npm run build:exe` - files existed
+ * with no GH_TOKEN/publish flag in play at all), so build-windows.yml just
+ * uploads those two alongside the installer instead of switching to
+ * electron-builder's own --publish flow - that would make electron-builder
+ * create its OWN version-tagged release, splitting Windows off from
+ * Android's shared "latest" tag/page. electron-updater's GitHub provider
+ * resolves whichever release GitHub reports as "latest" by publish
+ * recency, which - since this repo only ever publishes to that one release
+ * - is always this one regardless of its literal tag name.
+ *
+ * Silent background download (autoDownload), but NOT a silent install -
+ * this asks before restarting so an update can never yank the app out from
+ * under whatever the user is mid-typing in a roleplay session. Declining
+ * just defers to `autoInstallOnAppQuit`, so it still installs cleanly the
+ * next time the user closes the app on their own.
+ * ---------------------------------------------------------------------- */
+function setupAutoUpdater(mainWindow) {
+  // Unpackaged dev runs (`npm start`) have no packaged update feed to check
+  // (no app-update.yml in an unbuilt tree) and electron-updater logs a noisy
+  // error if asked anyway - skip entirely rather than suppress that error.
+  if (!app.isPackaged) return;
+
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+
+  autoUpdater.on('error', (err) => {
+    console.warn('[auto-update] error:', err?.message || err);
+  });
+
+  autoUpdater.on('update-downloaded', (info) => {
+    dialog.showMessageBox(mainWindow, {
+      type: 'info',
+      title: 'Update Ready',
+      message: `NnzRP ${info.version} has been downloaded.`,
+      detail: 'Restart now to install it, or it will install automatically the next time you close the app.',
+      buttons: ['Restart Now', 'Later'],
+      defaultId: 0,
+      cancelId: 1
+    }).then(({ response }) => {
+      if (response === 0) autoUpdater.quitAndInstall();
+    });
+  });
+
+  // Never blocks/crashes app boot on a missing release, rate limit, or
+  // offline launch - a failed check is silently skipped, same "must never
+  // block startup" rule the MCP tool-cache warm-up (js/app.js) follows.
+  autoUpdater.checkForUpdates().catch((err) => {
+    console.warn('[auto-update] check failed:', err?.message || err);
+  });
+}
+
 app.whenReady().then(() => {
-  createWindow();
+  const mainWindow = createWindow();
+  setupAutoUpdater(mainWindow);
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
