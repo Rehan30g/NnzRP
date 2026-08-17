@@ -1298,12 +1298,26 @@ input[type="color"] {
      sticky bar is the tap target, not just a small icon inside it, so this
      resets the default <button> chrome (border/background/font/text-align)
      rather than just laying out a decorative bar. min-height keeps a proper
-     touch target regardless of how tall the icon+text content happens to be. */
+     touch target regardless of how tall the icon+text content happens to be.
+
+     `width: calc(100% + 2rem)`, NOT `width: 100%` or bare `width: auto` (both
+     tried, both wrong) - this needed a real bug hunt, not a guess. A plain
+     block element (the `.settings-panel > .card` bleed rule elsewhere in this
+     file) auto-stretches to fill the space its negative margins open up, no
+     width needed at all - `<button>` doesn't: measured live, `width: auto` on
+     it collapsed to CONTENT width (~100px, just the icon+label), and
+     `width: 100%` resolved against `.settings-shell`'s own (un-bled) content
+     box, landing ~36px short of the right edge (confirmed by measuring
+     `.settings-panel-head` against `.view-container` in a real mobile-width
+     frame) - buttons don't get the "auto-width block" treatment a `<div>`
+     does even once `display` is overridden to `flex`. `+ 2rem` adds back
+     exactly the `-1rem` bled on each side below (`+ 3rem` in the embedded
+     override, matching its `-1.5rem`). */
   .settings-shell:not(.settings-mobile-home) .settings-panel-head {
     display: flex;
     align-items: center;
     gap: 0.35rem;
-    width: 100%;
+    width: calc(100% + 2rem);
     min-height: 44px;
     position: sticky;
     top: 0;
@@ -1327,6 +1341,7 @@ input[type="color"] {
   }
 
   .settings-shell-embedded:not(.settings-mobile-home) .settings-panel-head {
+    width: calc(100% + 3rem);
     margin: 0 -1.5rem 1rem -1.5rem;
     padding: 0.4rem 1.5rem;
     /* Matches .modal-header's surface so the back bar merges into it rather

@@ -32,7 +32,7 @@
   <!-- CSS Design System (Theming: light/dark tokens, toggle + dropdown components) -->
   <link rel="stylesheet" href="css/variables.css?v=1.2.0">
   <link rel="stylesheet" href="css/base.css?v=1.2.0">
-  <link rel="stylesheet" href="css/components.css?v=1.5.6">
+  <link rel="stylesheet" href="css/components.css?v=1.5.7">
   <link rel="stylesheet" href="css/layout.css?v=1.2.5">
   <link rel="stylesheet" href="css/chat.css?v=1.3.0">
 
@@ -305,8 +305,10 @@
   <!-- Main JavaScript ES Module -->
   <script type="module" src="js/app.js?v=1.2.0"></script>
 
-  <!-- Service worker: web/Android install target only. Electron always loads
-       via file:// and never needs this, so it's skipped entirely there. -->
+  <!-- Service worker: plain browser tab / desktop-PWA install target only.
+       Electron always loads via file:// and never needs this, so it's
+       skipped entirely there - and so is the installed Android APK, see
+       isNativeApk below. -->
   <script>
     // Private-LAN hostname (npm run serve + a phone on the same Wi-Fi, for
     // live-testing edits) never registers the service worker, and actively
@@ -317,12 +319,24 @@
     // refetched) - and once a phone has visited once, restarting the node
     // server changes nothing, since serve.js reads straight off disk on every
     // request and the staleness is entirely client-side cache, not anything
-    // the server controls. The real deployed site (GitHub Pages) and the
-    // Android APK's live server.url are never a private LAN hostname, so this
-    // never touches production PWA/offline behavior.
+    // the server controls.
     const isDevLanHost = /^(localhost|127\.0\.0\.1|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/.test(location.hostname);
+    // The installed Android APK loads this exact page from the REAL GitHub
+    // Pages origin (capacitor.config.json's server.url), not a LAN host, so
+    // the check above alone let it register the service worker in
+    // production - and sw.js's stale-while-revalidate directly fights this
+    // app's own "the APK always shows the latest push, no rebuild needed"
+    // design goal for exactly the reason described above: every launch shows
+    // the CACHED copy first, the fresh one only lands in the cache for NEXT
+    // time, so restarting the app quickly (reported: "tetep di versi lama"
+    // no matter how many times it's restarted) can perpetually outrun the
+    // background revalidation and never actually show a change. The APK
+    // isn't really "a web page that might go offline" the way the PWA/browser
+    // install target is - it's a native shell that assumes connectivity, so
+    // unlike the LAN-host case this isn't a dev-only carve-out.
+    const isNativeApk = !!window.Capacitor?.isNativePlatform?.();
     if (!window.electronAPI && 'serviceWorker' in navigator) {
-      if (isDevLanHost) {
+      if (isDevLanHost || isNativeApk) {
         navigator.serviceWorker.getRegistrations().then((regs) => {
           regs.forEach((reg) => reg.unregister());
         });
