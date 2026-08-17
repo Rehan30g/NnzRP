@@ -719,6 +719,16 @@ input[type="color"] {
   padding: 0.9rem 2rem;
 }
 
+/* Mobile-only Settings navigation (settingsView.js's `.settings-menu` grouped
+   category list + `.settings-panel-head` back header). Desktop keeps the
+   horizontal `.settings-tabbar` and never shows either of these - every rule
+   that turns them on lives in the <=768px media query further down, so the
+   markup is inert at desktop width even though it is always in the DOM. */
+.settings-menu,
+.settings-panel-head {
+  display: none;
+}
+
 /* Accent colour swatch picker (Settings -> Appearance) */
 .swatch-row {
   display: flex;
@@ -1192,15 +1202,19 @@ input[type="color"] {
      works fine since horizontal centering was never sticky-affected. The
      horizontal amount still differs per mounting context exactly like the
      card bleed's does - keep these in sync with .view-container's 1rem and
-     .modal-body's 1.5rem. */
+     .modal-body's 1.5rem.
+
+     SUPERSEDED (the strip itself, not the padding analysis above - that still
+     applies to whatever sticky element sits at the top of the settings route):
+     mobile no longer shows a tab strip at all. It shows the grouped category
+     list (`.settings-menu`) and, once a category is opened, a back header
+     (`.settings-panel-head`) - see the block at the end of this media query.
+     The bar stays in the DOM rather than being conditionally rendered, both
+     because desktop shares the exact same markup and because the two
+     `:has(.settings-tabbar)` rules below still use it as the "this is the
+     settings route" marker (`:has()` matches a display:none element fine). */
   .settings-tabbar {
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    margin: 0 -1rem 1rem -1rem;
-    padding: 0.35rem 1rem;
-    border: none;
-    border-bottom: 1px solid var(--border-light);
-    border-radius: 0;
+    display: none;
   }
 
   /* Companion to `.settings-tabbar`'s comment above: this is what actually
@@ -1231,15 +1245,176 @@ input[type="color"] {
     padding-top: 0 !important;
   }
 
-  .settings-shell-embedded .settings-tabbar {
+  /* ===== Mobile Settings: grouped category list -> drill-in panel =====
+     The phone flow is the standard grouped-list settings menu: a short stack
+     of rounded card blocks, each row an icon + label + live one-line summary
+     of that category's current state + a chevron; tapping one swaps the whole
+     screen for that category's existing `.settings-panel` (unchanged markup,
+     fields and save handler), with a sticky back header above it.
+
+     The "which screen am I on" state is a single class on the shell,
+     `.settings-mobile-home`, toggled by settingsView.js. Every rule reading it
+     lives inside this media query, so the class is completely inert on
+     desktop - the tab bar + always-one-visible-panel layout there is
+     unchanged, and the JS `.hidden` panel state stays the single source of
+     truth for it. */
+  .settings-shell.settings-mobile-home .settings-menu {
+    display: flex;
+    flex-direction: column;
+    gap: 1.1rem;
+    /* .view-container:has(.settings-tabbar) zeroes the scroll container's top
+       padding (for the sticky back header), so the list supplies its own. */
+    padding-top: 1rem;
+  }
+
+  /* Inside a category: the list is gone, and the panels/save bar behave
+     exactly as they always have. On the list itself the panels and the save
+     bar are both meaningless, so both are suppressed - a Save button floating
+     over a menu of categories reads as broken, same reasoning as
+     SELF_SAVING_TABS. */
+  .settings-shell.settings-mobile-home .settings-panel,
+  .settings-shell.settings-mobile-home .settings-savebar {
+    display: none !important;
+  }
+
+  /* .settings-shell reserves 5.5rem for the fixed save bar; with no save bar
+     on the list screen that is just dead scroll space under the last group. */
+  .settings-shell.settings-mobile-home {
+    padding-bottom: 0.5rem;
+  }
+
+  .settings-shell:not(.settings-mobile-home) .settings-panel-head {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    position: sticky;
+    top: 0;
+    z-index: 6;
+    background: var(--bg-surface);
+    border-bottom: 1px solid var(--border-light);
+    /* Same full-bleed offsets as the flattened `.settings-panel > .card`
+       rules above - keep in sync with .view-container's 1rem mobile padding
+       (and .modal-body's 1.5rem in the embedded override below). */
+    margin: 0 -1rem 1rem -1rem;
+    padding: 0.4rem 1rem;
+  }
+
+  .settings-shell-embedded:not(.settings-mobile-home) .settings-panel-head {
     margin: 0 -1.5rem 1rem -1.5rem;
-    padding: 0.35rem 1.5rem;
+    padding: 0.4rem 1.5rem;
+    /* Matches .modal-header's surface so the back bar merges into it rather
+       than reading as a second stacked bar - same call the old embedded tab
+       bar made. */
     background: var(--bg-muted);
   }
 
-  .settings-tab {
-    white-space: nowrap;
+  .settings-back-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
     flex-shrink: 0;
+    padding: 0;
+    border: none;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--text-main);
+    cursor: pointer;
+  }
+
+  .settings-back-btn:active {
+    background: var(--bg-surface-hover);
+  }
+
+  .settings-back-btn svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  .settings-panel-head-title {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-main);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* One rounded block per group, rows divided inside it - the radius belongs
+     to the GROUP, not to each row (`overflow: hidden` is what clips the first
+     and last row's press highlight to the block's corners). Groups are
+     separated by whitespace only, no captions or borders between them. */
+  .settings-menu-group {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+  }
+
+  .settings-menu-row {
+    display: flex;
+    align-items: center;
+    gap: 0.85rem;
+    width: 100%;
+    padding: 0.85rem 1rem;
+    border: none;
+    background: transparent;
+    font-family: inherit;
+    text-align: left;
+    color: var(--text-main);
+    cursor: pointer;
+  }
+
+  .settings-menu-row + .settings-menu-row {
+    border-top: 1px solid var(--border-light);
+  }
+
+  .settings-menu-row:active {
+    background: var(--bg-surface-hover);
+  }
+
+  .settings-menu-icon {
+    display: inline-flex;
+    flex-shrink: 0;
+    color: var(--text-muted);
+  }
+
+  .settings-menu-icon svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  .settings-menu-text {
+    display: flex;
+    flex-direction: column;
+    gap: 0.12rem;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .settings-menu-label {
+    font-size: 0.95rem;
+    font-weight: 600;
+    line-height: 1.3;
+  }
+
+  /* The live state line ("Dark", the active proxy's name, "3 profiles
+     configured"). Single line - a proxy name can be arbitrarily long. */
+  .settings-menu-sub {
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    line-height: 1.35;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .settings-menu-chevron {
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+    color: var(--text-dim);
   }
 
   /* Proxy card's Test Ping / Set Active / Edit row - squeezed 3-across on a

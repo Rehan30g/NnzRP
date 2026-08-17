@@ -41,6 +41,38 @@ const TABS = [
   { id: 'data', label: 'Data' }
 ];
 
+/* Mobile-only "Settings home": the grouped rounded-card list of categories a
+   phone user drills into (see .settings-menu / .settings-panel-head in
+   css/components.css). Desktop keeps the horizontal tab bar and never renders
+   any of this (both blocks are display:none outside the <=768px media query),
+   so this is purely an alternate way of REACHING a panel - the panels
+   themselves, their fields and the single save handler are untouched.
+
+   Ids reference TABS/TAB_ICONS rather than restating labels/icons, so the
+   category list can never drift from the tab bar's. */
+const MOBILE_MENU_GROUPS = [
+  ['appearance', 'generation', 'model'],
+  ['proxies', 'data']
+];
+
+const CHEVRON_SVG = '<svg class="settings-menu-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"></polyline></svg>';
+const BACK_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"></polyline></svg>';
+
+/* Short, glanceable state labels for the menu rows' subtitle line. Deliberately
+   shorter than the full control labels inside the panels (e.g. "Off / Disabled"
+   -> "Reasoning off") - the subtitle has one line on a phone. */
+const THEME_MODE_SHORT = { auto: 'Auto (System)', light: 'Light', dark: 'Dark' };
+const REASONING_SHORT = {
+  off: 'Reasoning off',
+  low: 'Reasoning low',
+  medium: 'Reasoning medium',
+  high: 'Reasoning high',
+  budget: 'Reasoning token budget'
+};
+
+const modelMenuSummary = (s) =>
+  `Temp ${s.temperature ?? 0.85} · ${REASONING_SHORT[s.reasoningEffort] || REASONING_SHORT.off}`;
+
 const FONT_SIZES = [
   { value: 'small', label: 'Small', note: '14px' },
   { value: 'medium', label: 'Medium', note: '15.5px' },
@@ -113,6 +145,36 @@ export class SettingsView {
       </div>
     `;
 
+    /* Live one-line summaries for the mobile grouped-list rows, computed from
+       the same data this render already fetched (no extra IndexedDB reads). */
+    const menuSubtitles = {
+      appearance: THEME_MODE_SHORT[themeMode] || THEME_MODE_SHORT.auto,
+      generation: defaultProxy ? defaultProxy.name : 'No proxy configured',
+      model: modelMenuSummary(settings),
+      proxies: proxies.length
+        ? `${proxies.length} profile${proxies.length === 1 ? '' : 's'} configured`
+        : 'No profiles yet',
+      data: 'Backup, restore & setup wizard'
+    };
+
+    const menuRowHTML = (id) => {
+      const tab = TABS.find(t => t.id === id);
+      if (!tab) return '';
+      const sub = menuSubtitles[id];
+      return `
+        <button type="button" class="settings-menu-row" data-goto="${escapeAttr(id)}">
+          <span class="settings-menu-icon">${TAB_ICONS[id] || ''}</span>
+          <span class="settings-menu-text">
+            <span class="settings-menu-label">${escapeHtml(tab.label)}</span>
+            ${sub ? `<span class="settings-menu-sub" data-menu-sub="${escapeAttr(id)}">${escapeHtml(sub)}</span>` : ''}
+          </span>
+          ${CHEVRON_SVG}
+        </button>
+      `;
+    };
+
+    const initialTabLabel = (TABS.find(t => t.id === initialTab) || TABS[0]).label;
+
     container.innerHTML = `
       <div class="settings-shell${embedded ? ' settings-shell-embedded' : ''}">
         ${embedded ? '' : `
@@ -121,6 +183,20 @@ export class SettingsView {
           <p class="view-header-desc" style="color:var(--text-muted); font-size:0.9rem;">Appearance, generation behaviour, model parameters, API proxies and backups - all in one place.</p>
         </div>
         `}
+
+        <!-- Mobile-only grouped category list (the "Settings home" screen) and
+             the in-panel back header that replaces it once a row is tapped.
+             Both are display:none above 768px - see components.css. -->
+        <div class="settings-menu" id="settings-menu">
+          ${MOBILE_MENU_GROUPS.map(group => `
+            <div class="settings-menu-group">${group.map(menuRowHTML).join('')}</div>
+          `).join('')}
+        </div>
+
+        <div class="settings-panel-head">
+          <button type="button" class="settings-back-btn" id="btn-settings-back" aria-label="Back to settings list">${BACK_SVG}</button>
+          <span class="settings-panel-head-title" id="settings-panel-head-title">${escapeHtml(initialTabLabel)}</span>
+        </div>
 
         <div class="settings-tabbar" role="tablist">
           ${TABS.map(t => `
@@ -412,6 +488,20 @@ export class SettingsView {
     const SELF_SAVING_TABS = ['proxies', 'data'];
     let proxiesMounted = false;
 
+    /* Mobile grouped-list state. `.settings-mobile-home` on the shell means
+       "show the category list, hide every panel + the save bar" - and it is
+       ONLY interpreted inside components.css's <=768px media query, so a
+       desktop viewport is completely unaffected by the class being present.
+       That also keeps the JS `.hidden` panel state (which the desktop tab bar
+       drives) authoritative and untouched, so resizing a phone-width window up
+       to desktop lands on a normally-rendered tab + panel. */
+    const shellEl = container.querySelector('.settings-shell');
+    const headTitleEl = container.querySelector('#settings-panel-head-title');
+    const setMenuSub = (id, text) => {
+      const el = container.querySelector(`[data-menu-sub="${id}"]`);
+      if (el) el.textContent = text;
+    };
+
     const mountProxiesIfNeeded = async () => {
       if (proxiesMounted) return;
       const mount = container.querySelector('#settings-proxies-mount');
@@ -421,6 +511,12 @@ export class SettingsView {
     };
 
     const switchTab = async (tabId) => {
+      // Leaving the mobile category list is implicit in picking a category -
+      // desktop tab clicks run this too, harmlessly (the class does nothing
+      // above 768px).
+      if (shellEl) shellEl.classList.remove('settings-mobile-home');
+      const tabMeta = TABS.find(t => t.id === tabId);
+      if (headTitleEl && tabMeta) headTitleEl.textContent = tabMeta.label;
       tabButtons.forEach(btn => {
         const active = btn.dataset.tab === tabId;
         btn.classList.toggle('active', active);
@@ -435,6 +531,23 @@ export class SettingsView {
       btn.onclick = () => switchTab(btn.dataset.tab);
     });
 
+    container.querySelectorAll('.settings-menu-row').forEach(row => {
+      row.onclick = () => switchTab(row.dataset.goto);
+    });
+
+    const btnSettingsBack = container.querySelector('#btn-settings-back');
+    if (btnSettingsBack) {
+      btnSettingsBack.onclick = () => shellEl.classList.add('settings-mobile-home');
+    }
+
+    /* Land on the category list, EXCEPT when a tab was named explicitly - the
+       #proxies -> #settings redirect (App.parseHash) and this view's own
+       re-renders after preset/backup actions both pass one, and bouncing those
+       back out to the list would lose the user's place. */
+    if (shellEl && !TABS.some(t => t.id === options.tab)) {
+      shellEl.classList.add('settings-mobile-home');
+    }
+
     // Mounting ProxiesView is deferred until its tab is first opened (it does its
     // own IndexedDB read + render), except when we land directly on that tab.
     if (initialTab === 'proxies') await mountProxiesIfNeeded();
@@ -446,6 +559,7 @@ export class SettingsView {
         const mode = btn.dataset.value;
         themeGroup.querySelectorAll('.segmented-option').forEach(b => b.classList.toggle('active', b === btn));
         await setThemeMode(mode);
+        setMenuSub('appearance', THEME_MODE_SHORT[mode] || THEME_MODE_SHORT.auto);
         Toast.success(`Theme set to ${mode === 'auto' ? 'Auto (follows system)' : mode}.`);
       };
     });
@@ -690,6 +804,11 @@ export class SettingsView {
 
       await ProxyStore.saveGlobalSystemPrompt(globalPromptVal);
       await ProxyStore.saveGenerationSettings(updatedSettings);
+
+      // Keep the mobile category list's summary lines truthful without a
+      // re-render (going Back re-shows the same DOM).
+      setMenuSub('model', modelMenuSummary(updatedSettings));
+      setMenuSub('generation', proxyObj ? proxyObj.name : 'No proxy configured');
 
       // "bukan notif" - the confirmation lives on the button, not in a toast.
       flashSaved(container.querySelector('#btn-save-settings'));
