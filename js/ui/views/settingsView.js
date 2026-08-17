@@ -193,10 +193,14 @@ export class SettingsView {
           `).join('')}
         </div>
 
-        <div class="settings-panel-head">
-          <button type="button" class="settings-back-btn" id="btn-settings-back" aria-label="Back to settings list">${BACK_SVG}</button>
+        <!-- The whole bar is the back button (not just a small icon inside it) -
+             a 36px icon on its own is a cramped tap target on a sticky header
+             that spans the full screen width; the icon is now purely decorative
+             (a <span>, not a nested <button>, to avoid a button-inside-a-button). -->
+        <button type="button" class="settings-panel-head" id="btn-settings-back" aria-label="Back to settings list">
+          <span class="settings-back-icon" aria-hidden="true">${BACK_SVG}</span>
           <span class="settings-panel-head-title" id="settings-panel-head-title">${escapeHtml(initialTabLabel)}</span>
-        </div>
+        </button>
 
         <div class="settings-tabbar" role="tablist">
           ${TABS.map(t => `

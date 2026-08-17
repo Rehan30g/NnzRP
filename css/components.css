@@ -1218,17 +1218,28 @@ input[type="color"] {
   }
 
   /* Companion to `.settings-tabbar`'s comment above: this is what actually
-     removes the gap above a STANDALONE `#settings` page's tab bar, now that
-     the bar itself carries no vertical margin. `:has()` scopes it to only
-     the settings route (every other view still gets `.view-container`'s
-     normal 1rem top padding) without needing a route-specific class from
-     JS. */
+     removes the gap above a STANDALONE `#settings` page's tab bar/sticky
+     `.settings-panel-head`, now that neither carries its own vertical margin.
+     `:has()` scopes it to only the settings route (every other view still
+     gets `.view-container`'s normal 1rem top padding) without needing a
+     route-specific class from JS. */
   /* Class, not `#view-container`: the mobile swipe pager (swipeNav.js) renders
      the neighbouring tab into a second `.view-container` element that doesn't
      hold the id yet, and a settings peek has to look identical to the settings
      page it's about to become. Still scoped to the settings route only, and
      still doesn't match `.modal-body` (handled by its own rule below). */
-  .view-container:has(.settings-tabbar) {
+  /* `.view-container.view-container` (the class doubled, not a typo) bumps
+     this to 3 class-equivalents of specificity - it was landing at the SAME
+     specificity as layout.css's `.view-container:not(.chat-mode)` (also 2
+     class-equivalents: :has()/:not() each count as their argument's
+     specificity), both `!important`, so the tie went to whichever stylesheet
+     happens to load later in index.html's <head> (layout.css, after this
+     file) - silently overriding this rule and reopening the exact gap it
+     exists to close. Confirmed by measurement: the sticky header sat ~15px
+     below `.main-header` instead of flush against it. Specificity, not load
+     order, should decide this - hence the doubled class instead of reordering
+     <link> tags (fragile the next time either file's rules change). */
+  .view-container.view-container:has(.settings-tabbar) {
     padding-top: 0 !important;
   }
 
@@ -1283,20 +1294,36 @@ input[type="color"] {
     padding-bottom: 0.5rem;
   }
 
+  /* `.settings-panel-head` IS the back button (see settingsView.js) - the whole
+     sticky bar is the tap target, not just a small icon inside it, so this
+     resets the default <button> chrome (border/background/font/text-align)
+     rather than just laying out a decorative bar. min-height keeps a proper
+     touch target regardless of how tall the icon+text content happens to be. */
   .settings-shell:not(.settings-mobile-home) .settings-panel-head {
     display: flex;
     align-items: center;
     gap: 0.35rem;
+    width: 100%;
+    min-height: 44px;
     position: sticky;
     top: 0;
     z-index: 6;
-    background: var(--bg-surface);
+    border: none;
     border-bottom: 1px solid var(--border-light);
+    background: var(--bg-surface);
+    color: var(--text-main);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
     /* Same full-bleed offsets as the flattened `.settings-panel > .card`
        rules above - keep in sync with .view-container's 1rem mobile padding
        (and .modal-body's 1.5rem in the embedded override below). */
     margin: 0 -1rem 1rem -1rem;
     padding: 0.4rem 1rem;
+  }
+
+  .settings-shell:not(.settings-mobile-home) .settings-panel-head:active {
+    background: var(--bg-surface-hover);
   }
 
   .settings-shell-embedded:not(.settings-mobile-home) .settings-panel-head {
@@ -1308,26 +1335,20 @@ input[type="color"] {
     background: var(--bg-muted);
   }
 
-  .settings-back-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 36px;
-    height: 36px;
-    flex-shrink: 0;
-    padding: 0;
-    border: none;
-    border-radius: var(--radius-md);
-    background: transparent;
-    color: var(--text-main);
-    cursor: pointer;
-  }
-
-  .settings-back-btn:active {
+  .settings-shell-embedded:not(.settings-mobile-home) .settings-panel-head:active {
     background: var(--bg-surface-hover);
   }
 
-  .settings-back-btn svg {
+  /* Purely decorative now (a <span>, not a nested <button> - the whole head
+     bar above is the real interactive element). */
+  .settings-back-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .settings-back-icon svg {
     width: 20px;
     height: 20px;
   }
