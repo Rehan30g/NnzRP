@@ -85,7 +85,21 @@ jobs:
               content always loads live from GitHub Pages, so it never needs
               reinstalling for ordinary app updates - only for native-shell
               changes (icon, permissions, appId, Capacitor/Android SDK version).
-            - **Windows**: run the `Setup .exe` installer (NSIS). This is a
-              fully bundled desktop build, so a new install IS needed whenever
-              the app itself changes - it does not load anything live.
+            - **Windows**: run the `Setup .exe` installer (NSIS) once. After that,
+              the installed app checks this same release for updates on launch
+              and installs newer ones automatically (prompts to restart) - no
+              manual reinstall needed unless a `latest.yml`-covered auto-update
+              itself fails, in which case re-running the Setup installer always
+              works as a fallback.
+
+              **Windows may block the installer** ("Smart App Control blocked an
+              app that may be unsafe", or a SmartScreen warning) - the `.exe`
+              isn't code-signed yet, so Windows can't verify the publisher. If
+              that happens and you still want to install it:
+              1. Settings → Privacy & security → Windows Security → App & browser
+                 control → Smart App Control settings → turn it **Off**.
+              2. Run the installer again.
+              3. You can turn Smart App Control back on afterward if you like -
+                 just know that once it's off, Windows only lets you re-enable it
+                 via a clean reinstall of Windows, not a simple toggle back on.
           files: ${{ steps.apk.outputs.path }}

@@ -69,6 +69,17 @@ jobs:
               manual reinstall needed unless a `latest.yml`-covered auto-update
               itself fails, in which case re-running the Setup installer always
               works as a fallback.
+
+              **Windows may block the installer** ("Smart App Control blocked an
+              app that may be unsafe", or a SmartScreen warning) - the `.exe`
+              isn't code-signed yet, so Windows can't verify the publisher. If
+              that happens and you still want to install it:
+              1. Settings → Privacy & security → Windows Security → App & browser
+                 control → Smart App Control settings → turn it **Off**.
+              2. Run the installer again.
+              3. You can turn Smart App Control back on afterward if you like -
+                 just know that once it's off, Windows only lets you re-enable it
+                 via a clean reinstall of Windows, not a simple toggle back on.
           files: |
             dist/*.exe
             dist/latest.yml
