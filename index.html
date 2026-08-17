@@ -144,6 +144,96 @@
     @keyframes appLoadingFadeIn { from { opacity: 0; } to { opacity: 1; } }
     @keyframes appLoadingRiseIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
     @keyframes appLoadingDotFade { 0%, 60%, 100% { opacity: 0.2; } 30% { opacity: 1; } }
+
+    /* browser-mode (PWA / plain browser tab / the installed Android APK, an
+       otherwise-identical Capacitor WebView shell around this same page -
+       see capacitor.config.json) splash, styled to match main.js's Electron
+       splash window (createSplashWindow) exactly - same dark hero-panel
+       layout, same spinner/progress-sweep language - so the web/Android
+       build reads as the same polished app instead of a plain loading
+       spinner. Electron never shows this: its own native splash window
+       already covers this whole moment, well before this page's own JS runs
+       at all, so `.app-loading-screen-electron` (the pre-existing light
+       card above) stays as its effectively-invisible fallback and is
+       untouched.
+       Also the one place a real update check happens (js/app.js's
+       checkForAppUpdate(), Android-only): it flips `#native-splash-status`
+       to "Checking for updates" via textContent before falling back to the
+       loading text, and reveals `#native-splash-update` if version.json's
+       `latestApkVersion` doesn't match the running APK's own version. */
+    .app-loading-screen-native { display: none; }
+    html.browser-mode .app-loading-screen-electron { display: none; }
+    html.browser-mode .app-loading-screen-native {
+      display: flex;
+      position: fixed; inset: 0; z-index: 20000;
+      background: #0b0b0c; color: #f5f5f5;
+      font-family: 'Inter', system-ui, sans-serif;
+      overflow: hidden;
+      animation: appLoadingFadeIn 0.3s ease-out;
+    }
+    .native-splash-hero {
+      position: relative; flex: none;
+      width: 34%; min-width: 120px; max-width: 240px;
+      overflow: hidden;
+    }
+    .native-splash-hero::before {
+      content: ''; position: absolute; inset: -40px;
+      background-image: url('src/icon.png');
+      background-size: cover; background-position: center;
+      filter: blur(30px) brightness(0.3) saturate(0.65) contrast(1.12);
+    }
+    .native-splash-hero::after {
+      content: ''; position: absolute; inset: 0;
+      background:
+        linear-gradient(to bottom, rgba(11,11,12,0.55) 0%, rgba(11,11,12,0) 34%, rgba(11,11,12,0) 62%, rgba(11,11,12,0.6) 100%),
+        linear-gradient(100deg, rgba(11,11,12,0.32) 0%, rgba(11,11,12,0.06) 42%, rgba(11,11,12,0.9) 84%, #0b0b0c 100%);
+    }
+    .native-splash-hero-logo {
+      position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      width: 25vw; max-width: 92px; min-width: 56px; height: auto; border-radius: 5px;
+      box-shadow: 0 20px 44px -18px rgba(0,0,0,0.95);
+    }
+    .native-splash-panel {
+      position: relative; flex: 1 1 auto; min-width: 0;
+      padding: 36px 28px 30px 28px;
+      display: flex; flex-direction: column; justify-content: center;
+    }
+    .native-splash-title {
+      margin: 0 0 32px 0; font-family: 'Outfit', sans-serif;
+      font-size: clamp(22px, 6vw, 30px); font-weight: 800;
+      line-height: 1.05; letter-spacing: -0.025em; color: #ffffff;
+    }
+    .native-splash-loading { display: flex; align-items: center; gap: 16px; }
+    .native-splash-spinner {
+      flex: none; width: 28px; height: 28px; border-radius: 50%;
+      border: 2.5px solid rgba(255,255,255,0.14); border-top-color: #f0f0f0;
+      animation: spin 0.85s linear infinite;
+    }
+    .native-splash-loading-title { font-size: 14px; font-weight: 700; color: #f2f2f2; letter-spacing: -0.005em; }
+    .native-splash-loading-sub { font-size: 11.5px; color: #8a8a8e; margin-top: 4px; }
+    .native-splash-dot { display: inline-block; opacity: 0.2; animation: appLoadingDotFade 1.4s ease-in-out infinite; }
+    .native-splash-dot:nth-child(2) { animation-delay: 0.2s; }
+    .native-splash-dot:nth-child(3) { animation-delay: 0.4s; }
+    .native-splash-update {
+      margin-top: 22px; padding: 12px 14px;
+      background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.35);
+      border-radius: 10px;
+    }
+    .native-splash-update.hidden { display: none; }
+    .native-splash-update p { margin: 0 0 8px 0; font-size: 12.5px; color: #f5deb3; }
+    .native-splash-update a {
+      display: inline-block; font-size: 12.5px; font-weight: 700;
+      color: #0b0b0c; background: #f0b429; padding: 6px 12px; border-radius: 6px;
+      text-decoration: none;
+    }
+    .native-splash-progress { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(255,255,255,0.07); overflow: hidden; }
+    .native-splash-progress span {
+      position: absolute; top: 0; bottom: 0; width: 34%;
+      background: linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.75) 50%, rgba(255,255,255,0) 100%);
+      animation: sweep 1.5s ease-in-out infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes sweep { 0% { left: -34%; } 100% { left: 100%; } }
   </style>
 </head>
 <body>
@@ -169,7 +259,9 @@
 
   <!-- App Mounting Shell -->
   <div id="app">
-    <div class="app-loading-screen">
+    <!-- Electron only in practice - see the CSS comment above this block's
+         sibling below for why. -->
+    <div class="app-loading-screen app-loading-screen-electron">
       <div class="app-loading-card">
         <div class="app-loading-logo">
           <div class="app-loading-logo-inner">
@@ -180,6 +272,33 @@
         <div class="app-loading-spinner"></div>
         <p class="app-loading-sub">Loading Session &amp; Database<span class="app-loading-dot">.</span><span class="app-loading-dot">.</span><span class="app-loading-dot">.</span></p>
       </div>
+    </div>
+
+    <!-- browser-mode (PWA / plain browser / installed Android APK) - same
+         dark hero-panel splash as Electron's own native splash window, see
+         the CSS block above. js/app.js's checkForAppUpdate() (Android-only)
+         drives #native-splash-status/#native-splash-update while this is on
+         screen; renderShell() below wipes this whole div the instant real
+         content is ready, exactly like the Electron card above. -->
+    <div class="app-loading-screen-native">
+      <div class="native-splash-hero">
+        <img src="src/icon.png" class="native-splash-hero-logo" alt="NnzRP">
+      </div>
+      <div class="native-splash-panel">
+        <h1 class="native-splash-title">NnzRP<br>Roleplay Studio</h1>
+        <div class="native-splash-loading">
+          <div class="native-splash-spinner"></div>
+          <div>
+            <div class="native-splash-loading-title" id="native-splash-status">Loading<span class="native-splash-dot">.</span><span class="native-splash-dot">.</span><span class="native-splash-dot">.</span></div>
+            <div class="native-splash-loading-sub" id="native-splash-sub">Preparing modules &amp; local database</div>
+          </div>
+        </div>
+        <div class="native-splash-update hidden" id="native-splash-update">
+          <p>A newer app version is available.</p>
+          <a id="native-splash-update-link" href="#" target="_blank" rel="noopener">Download update</a>
+        </div>
+      </div>
+      <div class="native-splash-progress"><span></span></div>
     </div>
   </div>
 

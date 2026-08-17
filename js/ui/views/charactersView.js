@@ -107,10 +107,15 @@ export class CharactersView {
     });
 
     container.querySelectorAll('.btn-export-char').forEach(btn => {
-      btn.onclick = (e) => {
+      btn.onclick = async (e) => {
         e.stopPropagation();
         const char = characters.find(c => c.id === btn.dataset.id);
-        if (char) CardImporter.exportToJSON(char);
+        if (!char) return;
+        try {
+          await CardImporter.exportToJSON(char);
+        } catch (err) {
+          Toast.error('Export failed: ' + err.message);
+        }
       };
     });
   }

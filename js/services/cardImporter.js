@@ -1,5 +1,6 @@
 /* js/services/cardImporter.js - Character Card V2 JSON Importer & Exporter */
 import { BackupService } from './backupService.js';
+import { saveTextFile } from '../utils/nativeExport.js';
 
 export class CardImporter {
   /**
@@ -69,7 +70,7 @@ export class CardImporter {
   /**
    * Export Character object to downloadable Character Card V2 JSON
    */
-  static exportToJSON(character) {
+  static async exportToJSON(character) {
     const cardV2 = {
       spec: 'chara_card_v2',
       spec_version: '2.0',
@@ -93,12 +94,7 @@ export class CardImporter {
       }
     };
 
-    const blob = new Blob([JSON.stringify(cardV2, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${character.name.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_card.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+    const filename = `${character.name.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_card.json`;
+    await saveTextFile(filename, JSON.stringify(cardV2, null, 2));
   }
 }

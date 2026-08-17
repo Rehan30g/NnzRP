@@ -1,5 +1,6 @@
 /* js/services/backupService.js - Complete Full Application Data Backup & Restore */
 import { db } from '../storage/db.js';
+import { saveTextFile } from '../utils/nativeExport.js';
 
 export class BackupService {
   /**
@@ -22,17 +23,8 @@ export class BackupService {
     };
 
     const jsonString = JSON.stringify(backupData, null, 2);
-    const blob = new Blob([jsonString], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
     const dateStr = new Date().toISOString().slice(0, 10);
-    
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `nnzrp_full_backup_${dateStr}.json`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    await saveTextFile(`nnzrp_full_backup_${dateStr}.json`, jsonString);
   }
 
   /**

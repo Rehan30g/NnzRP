@@ -27,6 +27,71 @@ const VIEW_TITLES = {
   chat: 'Roleplay Chat'
 };
 
+/** Updates the dark native-app splash's status text (index.html's
+ * `.app-loading-screen-native`, invisible outside browser-mode - see its own
+ * CSS comment). No-ops harmlessly once renderShell() has already wiped #app.
+ * `title`/`sub` are always our own literal strings, never external/user
+ * data, so innerHTML here carries no XSS risk. */
+function setNativeSplashStatus(title, sub) {
+  const statusEl = document.getElementById('native-splash-status');
+  const subEl = document.getElementById('native-splash-sub');
+  if (statusEl) statusEl.innerHTML = `${title}<span class="native-splash-dot">.</span><span class="native-splash-dot">.</span><span class="native-splash-dot">.</span>`;
+  if (subEl) subEl.textContent = sub;
+}
+
+/**
+ * Android-only "is a newer APK available" check, run once at boot while the
+ * dark splash (index.html) is still on screen. Everything else in this app
+ * (the actual web content) is always current by construction - the APK is a
+ * thin Capacitor WebView shell pointed at this live GitHub Pages deploy (see
+ * capacitor.config.json), so a `git push` reaches it on the very next launch
+ * with no update mechanism needed. The NATIVE shell itself is the one thing
+ * that can't self-update that way (adding a plugin, changing a permission,
+ * etc. needs an actual new APK build+install, see CLAUDE.md's Android
+ * section) - this compares the running APK's own version (`@capacitor/app`'s
+ * getInfo(), which is `android/app/build.gradle`'s versionName) against
+ * `version.json` at the site root (bump its `latestApkVersion` by hand
+ * whenever `build-apk.yml` is actually re-run to cut a new release).
+ *
+ * Never blocks app boot on a slow/unreachable/absent network (capped at a
+ * 2s race) or throws - a failed check just silently skips the notice, same
+ * "must never block boot" rule as the MCP tool-cache warm-up below.
+ */
+let pendingUpdateNotice = null;
+async function checkForAppUpdate() {
+  const AppPlugin = window.Capacitor?.Plugins?.App;
+  if (!window.Capacitor?.isNativePlatform?.() || !AppPlugin) return; // Electron / plain browser / PWA
+
+  setNativeSplashStatus('Checking for updates', 'Comparing with the latest release');
+  try {
+    const check = (async () => {
+      const [info, res] = await Promise.all([
+        AppPlugin.getInfo(),
+        fetch('version.json', { cache: 'no-store' })
+      ]);
+      if (!res.ok) return null;
+      return { info, remote: await res.json() };
+    })();
+    const timeout = new Promise((resolve) => setTimeout(resolve, 2000, null));
+    const result = await Promise.race([check, timeout]);
+
+    if (result?.remote?.latestApkVersion && result.remote.latestApkVersion !== result.info.version) {
+      const releaseUrl = result.remote.releaseUrl || 'https://github.com/Rehan30g/NnzRP/releases/tag/latest';
+      pendingUpdateNotice = releaseUrl;
+      const updateEl = document.getElementById('native-splash-update');
+      const linkEl = document.getElementById('native-splash-update-link');
+      if (updateEl && linkEl) {
+        linkEl.href = releaseUrl;
+        updateEl.classList.remove('hidden');
+      }
+    }
+  } catch (err) {
+    console.warn('Update check failed (non-fatal):', err.message);
+  } finally {
+    setNativeSplashStatus('Loading', 'Preparing modules & local database');
+  }
+}
+
 class App {
   constructor() {
     this.currentView = null;
@@ -36,6 +101,12 @@ class App {
 
   async init() {
     console.log('Initializing NnzRP...');
+
+    // Android-only "newer APK available" check, run first so its own status
+    // text is what the dark native splash shows before anything else - see
+    // checkForAppUpdate()'s own comment. No-op (resolves instantly) on
+    // Electron/browser/PWA.
+    await checkForAppUpdate();
 
     // Initialize Database & Sample Seeds
     await initDatabase();
@@ -136,6 +207,13 @@ class App {
     // Restore view from the URL hash (if any)
     const { view, params } = this.parseHash();
     await this.navigate(view, params);
+
+    // checkForAppUpdate() already surfaced this on the splash, but that
+    // screen is only on screen for a moment - this is the user's second
+    // chance to actually notice it once real UI is up.
+    if (pendingUpdateNotice) {
+      Toast.info('A newer app version is available - check GitHub Releases.');
+    }
 
     // First-run setup wizard - shown as an overlay on top of whatever route
     // just rendered above (normally the character library), not a route of
