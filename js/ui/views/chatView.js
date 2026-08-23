@@ -7,6 +7,7 @@ import { PromptBuilder } from '../../services/promptBuilder.js';
 import { ProviderManager } from '../../services/providerManager.js';
 import { MCPToolRegistry } from '../../services/mcpToolRegistry.js';
 import { AgentRunner } from '../../services/agentRunner.js';
+import { ContextCompactor } from '../../services/contextCompactor.js';
 import { getBuiltinTools, BUILTIN_EMBED_HTML_TOOL } from '../../services/builtinTools.js';
 import { supportsVision } from '../../utils/modelVision.js';
 import { readFileAsDataURL, MAX_IMAGE_BYTES, MAX_IMAGES_PER_MESSAGE } from '../../utils/imageUtils.js';
@@ -3047,11 +3048,36 @@ export class ChatView {
       const storedMcpLimit = await MCPStore.getMaxToolIterations();
       const mcpMaxIterations = storedMcpLimit.enabled ? storedMcpLimit.value : undefined;
 
+      // Created up here (not just before AgentRunner.run) so the same
+      // signal also cancels a mid-flight auto-compaction summarization call
+      // when the user hits Stop.
+      activeAbortController = new AbortController();
+      // Captured once: the module-level controller is nulled in `finally`, but
+      // the permission prompt's abort wiring needs this turn's signal for the
+      // whole run (including while a prompt is waiting on the user).
+      const abortSignal = activeAbortController.signal;
+
+      // Auto-compaction: request-time only - never mutates stored history,
+      // returns the original array unchanged on any failure or when under
+      // threshold. Keeps the last messages verbatim, so the "last message
+      // is from the user" invariant checked above still holds afterwards.
+      let historyForPrompt = currentMessages;
+      if (genSettings.autoCompactEnabled !== false) {
+        historyForPrompt = await ContextCompactor.maybeCompact({
+          proxy: proxyObj,
+          character: activeChar,
+          persona: activePersonaObj,
+          globalSystemPrompt: globalPrompt,
+          messages: currentMessages,
+          signal: abortSignal
+        });
+      }
+
       const promptPayload = applyPrefill(genSettings, PromptBuilder.buildPromptPayload({
         character: activeChar,
         persona: activePersonaObj,
         globalSystemPrompt: globalPrompt,
-        messages: currentMessages,
+        messages: historyForPrompt,
         tools: activeTools,
         immersiveRoleplay,
         immersiveIntensity
@@ -3062,7 +3088,7 @@ export class ChatView {
       // a window to tear this view down before generation actually starts -
       // same reasoning as renderMessages()'s guard below, just earlier in the
       // sequence. Nothing to attach a typing indicator to.
-      if (!messagesEl) { isGenerating = false; return; }
+      if (!messagesEl) { activeAbortController = null; isGenerating = false; return; }
       const typingIndicator = document.createElement('div');
       typingIndicator.className = 'message-block assistant';
       typingIndicator.id = 'typing-indicator';
@@ -3078,11 +3104,6 @@ export class ChatView {
       messagesEl.appendChild(typingIndicator);
       scrollToBottom(messagesEl);
 
-      activeAbortController = new AbortController();
-      // Captured once: the module-level controller is nulled in `finally`, but
-      // the permission prompt's abort wiring needs this turn's signal for the
-      // whole run (including while a prompt is waiting on the user).
-      const abortSignal = activeAbortController.signal;
       setGeneratingState(true);
       let liveContent = genSettings.prefillEnabled && genSettings.prefillText ? genSettings.prefillText : '';
       let liveThinking = '';
@@ -3441,21 +3462,40 @@ export class ChatView {
 
     // History up to the message before this assistant message
     const historyBefore = msgs.slice(0, msgIndex);
+
+    // Created up here (not just before AgentRunner.run) so the same signal
+    // also cancels a mid-flight auto-compaction summarization call when the
+    // user hits Stop. See the matching capture in `triggerAIGeneration` -
+    // the permission prompt needs this turn's signal even after the
+    // module-level controller has been cleared.
+    activeAbortController = new AbortController();
+    const abortSignal = activeAbortController.signal;
+
+    // Auto-compaction: request-time only - never mutates stored history,
+    // returns the original array unchanged on any failure or when under
+    // threshold.
+    let historyForPrompt = historyBefore;
+    if (genSettings.autoCompactEnabled !== false) {
+      historyForPrompt = await ContextCompactor.maybeCompact({
+        proxy: activeProxy,
+        character: activeChar,
+        persona: activePersonaObj,
+        globalSystemPrompt: globalPrompt,
+        messages: historyBefore,
+        signal: abortSignal
+      });
+    }
+
     const promptPayload = applyPrefill(genSettings, PromptBuilder.buildPromptPayload({
       character: activeChar,
       persona: activePersonaObj,
       globalSystemPrompt: globalPrompt,
-      messages: historyBefore,
+      messages: historyForPrompt,
       tools: activeTools,
       immersiveRoleplay,
       immersiveIntensity
     }));
 
-    activeAbortController = new AbortController();
-    // See the matching capture in `triggerAIGeneration` - the permission
-    // prompt needs this turn's signal even after the module-level controller
-    // has been cleared.
-    const abortSignal = activeAbortController.signal;
     setGeneratingState(true);
 
     const messagesEl = document.getElementById('messages-container');

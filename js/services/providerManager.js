@@ -19,7 +19,10 @@ function resolveMaxTokens(provider, settings) {
   if (settings.unlimitedTokens) {
     return provider === 'anthropic' ? UNLIMITED_MAX_TOKENS.anthropic : UNLIMITED_MAX_TOKENS.default;
   }
-  return settings.maxTokens ? parseInt(settings.maxTokens) : 1024;
+  // 4096 rather than something tiny - an unset value used to silently truncate
+  // replies (thinking + text share this budget on thinking models) long before
+  // any real provider limit is reached.
+  return settings.maxTokens ? parseInt(settings.maxTokens) : 4096;
 }
 
 function safeParseJSON(str) {
@@ -208,6 +211,70 @@ function toGeminiContents(payload) {
 }
 
 export class ProviderManager {
+  // Transient-failure retry: exponential base 800ms (800, 1600, ...) with a
+  // ~5s total backoff budget across attempts. A numeric `retry-after` response
+  // header (seconds) wins over the computed delay when present.
+  static _RETRY_BACKOFF_BASE_MS = 800;
+  static _RETRY_BACKOFF_BUDGET_MS = 5000;
+
+  /** Only network-level blips and these statuses are worth another attempt; other 4xx (auth/bad request) fail fast. */
+  static _isRetryableStatus(status) {
+    return status === 408 || status === 429 || status >= 500;
+  }
+
+  /** Sleep that rejects immediately if `signal` aborts mid-backoff. */
+  static _sleepAbortable(ms, signal) {
+    return new Promise((resolve, reject) => {
+      if (signal?.aborted) return reject(signal.reason || new DOMException('Aborted', 'AbortError'));
+      const onAbort = () => {
+        clearTimeout(timer);
+        reject(signal.reason || new DOMException('Aborted', 'AbortError'));
+      };
+      const timer = setTimeout(() => {
+        signal?.removeEventListener('abort', onAbort);
+        resolve();
+      }, ms);
+      signal?.addEventListener('abort', onAbort, { once: true });
+    });
+  }
+
+  /**
+   * fetch() with bounded retry for transient failures (TypeError from fetch,
+   * HTTP 408/429/5xx). Returns whatever Response comes back - ok or not - so
+   * callers keep their existing `if (!res.ok) throw ...res.text()` handling
+   * and error format verbatim. Aborts (options.signal / AbortError) propagate
+   * immediately and are never retried.
+   *
+   * For streaming endpoints this is only wrapped around the initial fetch():
+   * once a Response resolves the caller consumes it exactly once - a retry
+   * never restarts a partially-read stream.
+   */
+  static async _fetchWithRetry(url, options, { retries = 2 } = {}) {
+    let backoffSpent = 0;
+    for (let attempt = 0; ; attempt++) {
+      if (options?.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+      let res;
+      try {
+        res = await fetch(url, options);
+      } catch (err) {
+        if (err?.name === 'AbortError' || options?.signal?.aborted || attempt >= retries) throw err;
+        await ProviderManager._sleepAbortable(ProviderManager._RETRY_BACKOFF_BASE_MS * 2 ** attempt, options?.signal);
+        continue;
+      }
+      if (res.ok || !ProviderManager._isRetryableStatus(res.status) || attempt >= retries) return res;
+
+      const retryAfter = parseFloat(res.headers?.get('retry-after'));
+      const remaining = ProviderManager._RETRY_BACKOFF_BUDGET_MS - backoffSpent;
+      if (remaining <= 0) return res;
+      const computed = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : ProviderManager._RETRY_BACKOFF_BASE_MS * 2 ** attempt;
+      const delay = Math.min(computed, remaining);
+      backoffSpent += delay;
+      // Free the failed response's connection before reusing it for a retry.
+      try { await res.body?.cancel(); } catch { /* already consumed */ }
+      await ProviderManager._sleepAbortable(delay, options?.signal);
+    }
+  }
+
   /**
    * Test connection to a proxy provider
    */
@@ -217,15 +284,17 @@ export class ProviderManager {
 
     try {
       if (provider === 'gemini') {
-        const url = `${baseUrl.replace(/\/$/, '')}/v1beta/models?key=${apiKey}`;
-        const res = await fetch(url);
+        // Auth goes in the x-goog-api-key header, not the URL query string,
+        // so the key never lands in proxy/service logs.
+        const url = `${baseUrl.replace(/\/$/, '')}/v1beta/models`;
+        const res = await ProviderManager._fetchWithRetry(url, { headers: { 'x-goog-api-key': apiKey } });
         if (!res.ok) throw new Error(`Gemini API Error (${res.status}): ${await res.text()}`);
         return { success: true, message: 'Google Gemini API Connection Successful!' };
       }
 
       if (provider === 'anthropic') {
         // Anthropic requires specific header
-        const res = await fetch(`${baseUrl.replace(/\/$/, '')}/v1/messages`, {
+        const res = await ProviderManager._fetchWithRetry(`${baseUrl.replace(/\/$/, '')}/v1/messages`, {
           method: 'POST',
           headers: {
             'x-api-key': apiKey,
@@ -248,10 +317,10 @@ export class ProviderManager {
       const headers = { 'Content-Type': 'application/json' };
       if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
 
-      const res = await fetch(endpoint, { headers });
+      const res = await ProviderManager._fetchWithRetry(endpoint, { headers });
       if (!res.ok) {
         // Try simple chat completion if /models endpoint fails
-        const chatRes = await fetch(`${baseUrl.replace(/\/$/, '')}/chat/completions`, {
+        const chatRes = await ProviderManager._fetchWithRetry(`${baseUrl.replace(/\/$/, '')}/chat/completions`, {
           method: 'POST',
           headers,
           body: JSON.stringify({
@@ -291,7 +360,7 @@ export class ProviderManager {
       const systemMsgs = promptPayload.filter(m => m.role === 'system').map(m => m.content).join('\n\n');
       const contents = toGeminiContents(promptPayload);
 
-      const url = `${baseUrl.replace(/\/$/, '')}/v1beta/models/${model}:generateContent?key=${apiKey}`;
+      const url = `${baseUrl.replace(/\/$/, '')}/v1beta/models/${model}:generateContent`;
       const bodyPayload = {
         contents,
         generationConfig: {
@@ -306,9 +375,9 @@ export class ProviderManager {
       const toolsParam = buildGeminiToolsParam(tools);
       if (toolsParam) bodyPayload.tools = toolsParam;
 
-      const res = await fetch(url, {
+      const res = await ProviderManager._fetchWithRetry(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
         body: JSON.stringify(bodyPayload),
         signal
       });
@@ -349,7 +418,7 @@ export class ProviderManager {
       };
       if (toolsParam) bodyPayload.tools = toolsParam;
 
-      const res = await fetch(`${baseUrl.replace(/\/$/, '')}/v1/messages`, {
+      const res = await ProviderManager._fetchWithRetry(`${baseUrl.replace(/\/$/, '')}/v1/messages`, {
         method: 'POST',
         headers: {
           'x-api-key': apiKey,
@@ -416,7 +485,7 @@ export class ProviderManager {
       };
     }
 
-    const res = await fetch(endpoint, {
+    const res = await ProviderManager._fetchWithRetry(endpoint, {
       method: 'POST',
       headers,
       body: JSON.stringify(bodyPayload),
@@ -516,7 +585,7 @@ export class ProviderManager {
       const systemMsgs = promptPayload.filter(m => m.role === 'system').map(m => m.content).join('\n\n');
       const contents = toGeminiContents(promptPayload);
 
-      const url = `${baseUrl.replace(/\/$/, '')}/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${apiKey}`;
+      const url = `${baseUrl.replace(/\/$/, '')}/v1beta/models/${model}:streamGenerateContent?alt=sse`;
       const bodyPayload = {
         contents,
         generationConfig: {
@@ -531,9 +600,11 @@ export class ProviderManager {
       const toolsParam = buildGeminiToolsParam(tools);
       if (toolsParam) bodyPayload.tools = toolsParam;
 
-      const res = await fetch(url, {
+      // Retry only wraps the initial fetch - once a Response resolves the SSE
+      // body is consumed exactly once, never restarted.
+      const res = await ProviderManager._fetchWithRetry(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
         body: JSON.stringify(bodyPayload),
         signal
       });
@@ -546,7 +617,8 @@ export class ProviderManager {
         let payload;
         try {
           payload = JSON.parse(jsonStr);
-        } catch {
+        } catch (err) {
+          console.warn('[ProviderManager] Dropping unparseable SSE chunk', err, jsonStr);
           return;
         }
         const parts = payload?.candidates?.[0]?.content?.parts || [];
@@ -586,7 +658,7 @@ export class ProviderManager {
       };
       if (toolsParam) bodyPayload.tools = toolsParam;
 
-      const res = await fetch(`${baseUrl.replace(/\/$/, '')}/v1/messages`, {
+      const res = await ProviderManager._fetchWithRetry(`${baseUrl.replace(/\/$/, '')}/v1/messages`, {
         method: 'POST',
         headers: {
           'x-api-key': apiKey,
@@ -612,7 +684,8 @@ export class ProviderManager {
         let payload;
         try {
           payload = JSON.parse(jsonStr);
-        } catch {
+        } catch (err) {
+          console.warn('[ProviderManager] Dropping unparseable SSE chunk', err, jsonStr);
           return;
         }
         if (currentEvent === 'content_block_start') {
@@ -677,7 +750,7 @@ export class ProviderManager {
       };
     }
 
-    const res = await fetch(endpoint, {
+    const res = await ProviderManager._fetchWithRetry(endpoint, {
       method: 'POST',
       headers,
       body: JSON.stringify(bodyPayload),
@@ -693,7 +766,8 @@ export class ProviderManager {
       let payload;
       try {
         payload = JSON.parse(jsonStr);
-      } catch {
+      } catch (err) {
+        console.warn('[ProviderManager] Dropping unparseable SSE chunk', err, jsonStr);
         return;
       }
       // OpenRouter/DeepSeek-style reasoning models stream a separate

@@ -15,6 +15,14 @@ import { BUILTIN_VIEW_IMAGE_TOOL, executeBuiltinImageTool, BUILTIN_EMBED_HTML_TO
  */
 export const TOOL_DECLINED_NOTICE = 'Declined by user. The tool was NOT executed and returned no data - continue without it.';
 
+// Tool results larger than this are cut before being fed back to the model -
+// a single huge MCP output would otherwise blow the context window for the
+// rest of the turn. Only the payload copy is capped; the trace entry keeps
+// the full text so the UI history stays complete.
+const TOOL_OUTPUT_LIMIT = 20000;
+
+const DOOM_LOOP_NOTICE = 'Blocked: this exact tool call has already been made twice with identical arguments. Do not repeat it again; use a different approach or answer directly.';
+
 export class AgentRunner {
   /**
    * @param {object} opts
@@ -73,6 +81,11 @@ export class AgentRunner {
     // round's OWN slice of toolTrace attached instead of only the flat aggregate -
     // see the `segments` return value in the JSDoc above.
     const segments = [];
+    // Doom-loop detection: consecutive identical calls (same qualified name +
+    // JSON-equal args) across rounds. The third repeat is refused without
+    // executing; any different call resets the counter.
+    let lastCallKey = null;
+    let repeatCount = 0;
 
     // Single-round (i.e. every tool-less) turn returns its one part byte-for-byte
     // unchanged - the no-MCP path must behave exactly as it did before this loop existed.
@@ -127,6 +140,20 @@ export class AgentRunner {
         // instead of running the remaining calls and only failing on the
         // next provider request.
         if (signal?.aborted) throw new DOMException('Generation aborted by user.', 'AbortError');
+
+        // DOOM-LOOP GATE - checked before onPermissionRequest so the user is
+        // never prompted for a repeat we are about to refuse anyway.
+        const callKey = JSON.stringify([call.name, call.args]);
+        if (callKey === lastCallKey) repeatCount++;
+        else { lastCallKey = callKey; repeatCount = 1; }
+        if (repeatCount >= 3) {
+          const entry = { name: call.name, args: call.args, result: DOOM_LOOP_NOTICE, blocked: true };
+          toolTrace.push(entry);
+          roundTrace.push(entry);
+          callbacks.onToolResult?.(call, DOOM_LOOP_NOTICE, entry);
+          payload = [...payload, { role: 'tool', toolCallId: call.id, toolName: call.name, content: DOOM_LOOP_NOTICE }];
+          continue;
+        }
 
         // PERMISSION GATE - runs BEFORE onToolExecuting so the "tool is
         // running" live spinner never appears while we're actually still
@@ -224,7 +251,15 @@ export class AgentRunner {
         // which the UI needs for its abort-partial save (otherwise a fetched
         // image or embed is lost when the user presses Stop).
         callbacks.onToolResult?.(call, content, entry);
-        payload = [...payload, { role: 'tool', toolCallId: call.id, toolName: call.name, content }];
+        // The model gets the capped copy; `entry` above already carries the
+        // full text for the UI. Covers the successful and error/argsError
+        // paths alike - both funnel through this one push.
+        let payloadContent = content;
+        if (content.length > TOOL_OUTPUT_LIMIT) {
+          payloadContent = content.slice(0, TOOL_OUTPUT_LIMIT)
+            + `\n\n[Tool output truncated: omitted ${content.length - TOOL_OUTPUT_LIMIT} characters]`;
+        }
+        payload = [...payload, { role: 'tool', toolCallId: call.id, toolName: call.name, content: payloadContent }];
         if (fetchedImages && fetchedImages.length) {
           // OpenAI tool-role messages must be plain text (no image content
           // blocks allowed there) and Gemini's functionResponse part has no

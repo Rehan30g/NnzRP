@@ -15,6 +15,7 @@ export const APP_CONFIG = {
     unlimitedTokens: false,
     repetitionPenalty: 1.15,
     streamingEnabled: false,
+    autoCompactEnabled: true,
     prefillEnabled: false,
     prefillText: '',
     reasoningEffort: 'off',

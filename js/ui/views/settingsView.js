@@ -322,6 +322,14 @@ export class SettingsView {
                   <span class="form-hint">Prepends initial assistant response text before completion continues.</span>
                 </div>
               </div>
+              <div style="border-top:1px solid var(--border-light); padding-top:1.1rem;">
+                ${toggleRowHTML({
+                  id: 'setting-autocompact-enabled',
+                  checked: settings.autoCompactEnabled !== false,
+                  title: 'Auto Context Compaction',
+                  description: 'Automatically summarizes older turns into a short continuity summary before generating once the context window is nearly full. Stored chat history is never modified.'
+                })}
+              </div>
             </div>
           </div>
 
@@ -832,6 +840,7 @@ export class SettingsView {
         streamingEnabled: container.querySelector('#setting-streaming-enabled').checked,
         prefillEnabled: container.querySelector('#setting-prefill-enabled').checked,
         prefillText: container.querySelector('#setting-prefill-text').value,
+        autoCompactEnabled: container.querySelector('#setting-autocompact-enabled').checked,
         fontSize: selectedFontSize
       };
 
