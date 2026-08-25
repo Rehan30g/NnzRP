@@ -139,14 +139,15 @@ export class MCPToolRegistry {
    * identically to the builtin view-image tool's fetched images from here on
    * (same trace/persist/feed-back-to-model path).
    */
-  static async executeTool(qualifiedName, args) {
+  static async executeTool(qualifiedName, args, { signal } = {}) {
     const entry = toolIndex.get(qualifiedName);
     if (!entry) throw new Error(`Unknown tool "${qualifiedName}" (not currently registered/enabled).`);
 
     const server = await MCPStore.getById(entry.serverId);
     if (!server || !server.enabled) throw new Error(`MCP server for "${qualifiedName}" is no longer available.`);
 
-    const result = await MCPClient.callTool(server, entry.toolName, args || {});
+    if (signal?.aborted) throw signal.reason || new DOMException('Aborted', 'AbortError');
+    const result = await MCPClient.callTool(server, entry.toolName, args || {}, { signal });
     return this.parseResult(result);
   }
 
