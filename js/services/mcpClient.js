@@ -35,9 +35,17 @@ function jsonRpcPayload(method, params, id) {
   return payload;
 }
 
-async function httpRpc(server, method, params, { isNotification = false, timeoutMs = 10000 } = {}) {
+async function httpRpc(server, method, params, { isNotification = false, timeoutMs = 10000, signal } = {}) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const onExternalAbort = () => controller.abort();
+  if (signal) {
+    if (signal.aborted) {
+      clearTimeout(timeoutId);
+      throw signal.reason || new DOMException('Aborted', 'AbortError');
+    }
+    signal.addEventListener('abort', onExternalAbort, { once: true });
+  }
 
   const headers = { 'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream' };
   if (server.apiKey) headers['Authorization'] = `Bearer ${server.apiKey}`;
@@ -83,6 +91,7 @@ async function httpRpc(server, method, params, { isNotification = false, timeout
     return json.result;
   } finally {
     clearTimeout(timeoutId);
+    if (signal) signal.removeEventListener('abort', onExternalAbort);
   }
 }
 
@@ -152,9 +161,10 @@ export class MCPClient {
   }
 
   /** Executes a tool on the target MCP server via JSON-RPC 2.0 `tools/call`. Throws on failure. */
-  static async callTool(server, toolName, toolArguments = {}) {
+  static async callTool(server, toolName, toolArguments = {}, { signal } = {}) {
     await ensureInitialized(server);
-    const result = await rpc(server, 'tools/call', { name: toolName, arguments: toolArguments });
+    // Tool calls can run long; use a higher timeout but still honor caller abort.
+    const result = await rpc(server, 'tools/call', { name: toolName, arguments: toolArguments }, { signal, timeoutMs: 120000 });
     return result;
   }
 

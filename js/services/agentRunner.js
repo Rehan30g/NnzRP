@@ -221,7 +221,7 @@ export class AgentRunner {
               content = result.text;
               embeddedHtml = { html: result.html, title: result.title };
             } else {
-              const mcpResult = await MCPToolRegistry.executeTool(call.name, call.args);
+              const mcpResult = await MCPToolRegistry.executeTool(call.name, call.args, { signal });
               content = mcpResult.text;
               fetchedImages = mcpResult.images && mcpResult.images.length ? mcpResult.images : null;
             }
