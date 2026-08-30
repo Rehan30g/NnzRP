@@ -1,6 +1,34 @@
 /* js/ui/components/sidebar.js - Collapsible Navigation Sidebar */
 import { ProxyStore } from '../../storage/proxyStore.js';
+import { pluginManager } from '../../plugins/pluginManager.js';
 import { escapeHtml, escapeAttr } from '../../utils/sanitize.js';
+
+// Fallback glyph for a plugin nav item whose manifest supplies no icon.
+const DEFAULT_PLUGIN_ICON_SVG = '<svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"></rect><rect x="14" y="3" width="7" height="7" rx="1.5"></rect><rect x="14" y="14" width="7" height="7" rx="1.5"></rect><rect x="3" y="14" width="7" height="7" rx="1.5"></rect></svg>';
+
+/**
+ * Markup for the plugin-contributed nav items appended after the 5 fixed ones.
+ * Electron-only: `pluginManager.getNavTabs()` is `[]` when unsupported, so this
+ * returns '' on every non-Electron build. `tab.label` is untrusted manifest
+ * text and is escaped; `tab.icon` is an SVG string by contract (same treatment
+ * as every other inline SVG here) and a missing/blank one falls back to the
+ * puzzle-piece glyph above.
+ */
+function pluginNavItemsHTML(currentHash) {
+  if (!pluginManager.isSupported()) return '';
+  return pluginManager.getNavTabs().map(tab => {
+    const route = `plugin:${tab.pluginId}:${tab.id}`;
+    const isActive = currentHash === `#${route}`;
+    const icon = (typeof tab.icon === 'string' && tab.icon.trim().startsWith('<svg'))
+      ? tab.icon
+      : DEFAULT_PLUGIN_ICON_SVG;
+    return `
+        <div class="nav-item nav-item-plugin ${isActive ? 'active' : ''}" data-plugin-route="${escapeAttr(route)}" data-tooltip="${escapeAttr(tab.label)}">
+          ${icon}
+          <span class="nav-label">${escapeHtml(tab.label)}</span>
+        </div>`;
+  }).join('');
+}
 
 export class Sidebar {
   static async render(container, activeView, onNavigate) {
@@ -66,6 +94,7 @@ export class Sidebar {
           <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
           <span class="nav-label">MCP</span>
         </div>
+        ${pluginNavItemsHTML(window.location.hash)}
       </nav>
 
       <div class="sidebar-footer">
@@ -92,8 +121,14 @@ export class Sidebar {
 
     container.querySelectorAll('.nav-item').forEach(item => {
       item.onclick = () => {
-        const view = item.dataset.view;
-        onNavigate(view);
+        if (item.dataset.pluginRoute) {
+          // Plugin routes go through the hash (picked up by app.js's
+          // hashchange listener -> parseHash -> navigate); no change to the
+          // onNavigate(view) contract the 5 built-in items rely on.
+          window.location.hash = `#${item.dataset.pluginRoute}`;
+        } else if (item.dataset.view) {
+          onNavigate(item.dataset.view);
+        }
         document.querySelector('.app-sidebar')?.classList.remove('open');
       };
     });

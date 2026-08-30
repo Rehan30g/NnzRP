@@ -29,6 +29,65 @@ import { escapeHtml, escapeAttr, unescapeHtml } from '../../utils/sanitize.js';
 import { extractThinking } from '../../utils/thinkingParser.js';
 import { replaceMacros } from '../../utils/macroReplacer.js';
 import { highlightCode } from '../../utils/syntaxHighlight.js';
+import { pluginManager } from '../../plugins/pluginManager.js';
+
+/* ---------------------------------------------------------------------------
+ * Plugin surfaces (Electron-only). Every helper here returns '' / [] and every
+ * wiring call is a no-op when `pluginManager.isSupported()` is false (PWA /
+ * browser / Android APK), so plain chat is byte-identical there. `emit()` is
+ * documented safe/no-op-when-unsupported and never throws, so lifecycle emits
+ * below are called unguarded.
+ * ------------------------------------------------------------------------- */
+
+/** DOM-safe compound key for a plugin contribution (id parts are untrusted). */
+function pluginSafeKey(...parts) {
+  return parts.map(p => String(p).replace(/[^a-zA-Z0-9_-]/g, '-')).join('__');
+}
+
+/** Per-message footer action buttons a plugin contributed and whose
+ *  `visible(msg)` is truthy. `icon` is an SVG string by contract (injected
+ *  raw, same as every built-in footer icon); `title` is untrusted -> escaped. */
+function pluginMessageActionButtonsHTML(msg) {
+  if (!pluginManager.isSupported()) return '';
+  let actions;
+  try {
+    actions = pluginManager.getMessageActions().filter(a => {
+      try { return typeof a.visible === 'function' ? !!a.visible(msg) : true; }
+      catch { return false; }
+    });
+  } catch { return ''; }
+  return actions.map(a => `
+    <button class="btn-msg-action btn-plugin-msg-action" data-plugin-id="${escapeAttr(a.pluginId)}" data-action-id="${escapeAttr(a.id)}" data-id="${escapeAttr(msg.id)}" title="${escapeAttr(a.title || '')}">
+      ${typeof a.icon === 'string' ? a.icon : ''}
+    </button>
+  `).join('');
+}
+
+/** Composer-toolbar buttons a plugin contributed. */
+function pluginComposerButtonsHTML() {
+  if (!pluginManager.isSupported()) return '';
+  return pluginManager.getComposerButtons().map(b => `
+    <button type="button" class="btn-icon plugin-composer-btn" data-plugin-id="${escapeAttr(b.pluginId)}" data-btn-id="${escapeAttr(b.id)}" title="${escapeAttr(b.title || '')}" aria-label="${escapeAttr(b.title || '')}">
+      ${typeof b.icon === 'string' ? b.icon : ''}
+    </button>
+  `).join('');
+}
+
+/** Extra right-drawer tab headers a plugin contributed (after Sessions/Options/MCP). */
+function pluginDrawerTabHeadersHTML() {
+  if (!pluginManager.isSupported()) return '';
+  return pluginManager.getChatDrawerTabs().map(t => `
+    <div class="drawer-tab drawer-tab-plugin" data-plugin-tab="${escapeAttr(pluginSafeKey(t.pluginId, t.id))}">${escapeHtml(t.label)}</div>
+  `).join('');
+}
+
+/** Empty drawer body panes for plugin tabs - filled lazily on first open. */
+function pluginDrawerTabPanesHTML() {
+  if (!pluginManager.isSupported()) return '';
+  return pluginManager.getChatDrawerTabs().map(t => `
+    <div class="drawer-body hidden plugin-scope" id="tab-content-plugin-${escapeAttr(pluginSafeKey(t.pluginId, t.id))}"></div>
+  `).join('');
+}
 
 /**
  * Custom fenced-code-block/inline-code renderers, registered once at module
@@ -1167,6 +1226,9 @@ export class ChatView {
 
     let currentChatId = sessions[0].id;
 
+    // Plugin lifecycle: the chat session + character are now resolved.
+    pluginManager.emit('chat-opened', { chatId: currentChatId, character: activeChar });
+
     // Matches the CSS mobile breakpoint (css/chat.css) and the same
     // window.innerWidth<=768 check populateModelSelect() uses below - only
     // used here to word the composer placeholder correctly, since mobile
@@ -1259,6 +1321,7 @@ export class ChatView {
                     placeholder: 'No Proxy',
                     wrapperStyle: 'max-width:260px; width:auto; min-width:150px;'
                   })}
+                  ${pluginComposerButtonsHTML()}
                 </div>
                 <button class="btn-send-icon" id="btn-send-message" title="Send Message" aria-label="Send Message">
                   <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"></path></svg>
@@ -1281,6 +1344,7 @@ export class ChatView {
               <div class="drawer-tab active" id="tab-btn-sessions">Sessions</div>
               <div class="drawer-tab" id="tab-btn-options">Options</div>
               <div class="drawer-tab" id="tab-btn-mcp">MCP (Exp)</div>
+              ${pluginDrawerTabHeadersHTML()}
               <button class="btn-icon" id="btn-close-right-drawer" style="margin-right:0.5rem;" title="Close (Esc)">&times;</button>
             </div>
 
@@ -1432,6 +1496,10 @@ export class ChatView {
                 <div id="drawer-mcp-list" style="display:flex; flex-direction:column; gap:0.6rem;"></div>
               </div>
             </div>
+
+            <!-- Plugin-contributed drawer tab panes (Electron-only) - filled
+                 lazily on first open by each plugin tab's own render(). -->
+            ${pluginDrawerTabPanesHTML()}
           </div>
         </div>
       </div>
@@ -1449,6 +1517,20 @@ export class ChatView {
     const tabOptionsContent = container.querySelector('#tab-content-options');
     const tabMcpContent = container.querySelector('#tab-content-mcp');
 
+    // Plugin-contributed drawer tabs (Electron-only; [] otherwise). Each entry
+    // keeps a `key` ('plugin:<safeKey>') that its header <div> and body pane
+    // are both addressed by, plus a `rendered` guard for lazy first-open mount.
+    const pluginDrawerTabs = (pluginManager.isSupported() ? pluginManager.getChatDrawerTabs() : []).map(t => {
+      const safe = pluginSafeKey(t.pluginId, t.id);
+      return {
+        entry: t,
+        key: `plugin:${safe}`,
+        btnEl: container.querySelector(`.drawer-tab-plugin[data-plugin-tab="${safe}"]`),
+        bodyEl: container.querySelector(`#tab-content-plugin-${safe}`),
+        rendered: false
+      };
+    });
+
     const switchTab = (targetTab) => {
       tabSessionsBtn.classList.toggle('active', targetTab === 'sessions');
       tabOptionsBtn.classList.toggle('active', targetTab === 'options');
@@ -1457,11 +1539,29 @@ export class ChatView {
       tabSessionsContent.classList.toggle('hidden', targetTab !== 'sessions');
       tabOptionsContent.classList.toggle('hidden', targetTab !== 'options');
       tabMcpContent.classList.toggle('hidden', targetTab !== 'mcp');
+
+      pluginDrawerTabs.forEach(pt => {
+        const show = pt.key === targetTab;
+        if (pt.btnEl) pt.btnEl.classList.toggle('active', show);
+        if (pt.bodyEl) pt.bodyEl.classList.toggle('hidden', !show);
+        if (show && !pt.rendered && pt.bodyEl) {
+          pt.rendered = true;
+          try {
+            pt.entry.render(pt.bodyEl, { chatId: currentChatId, character: activeChar });
+          } catch (err) {
+            console.error('[ChatView] plugin drawer tab render failed', err);
+            pt.bodyEl.textContent = 'Plugin gagal dimuat.';
+          }
+        }
+      });
     };
 
     tabSessionsBtn.onclick = () => switchTab('sessions');
     tabOptionsBtn.onclick = () => switchTab('options');
     tabMcpBtn.onclick = () => switchTab('mcp');
+    pluginDrawerTabs.forEach(pt => {
+      if (pt.btnEl) pt.btnEl.onclick = () => switchTab(pt.key);
+    });
 
     const drawerSheetEl = container.querySelector('.chat-right-drawer-content');
     // Mobile (bottom sheet): slide down + fade the backdrop before actually
@@ -1560,6 +1660,11 @@ export class ChatView {
       else closeDrawer();
     };
 
+    // Desktop arrow-key swipe navigation hook - assigned by renderMessages()
+    // once swipe controls exist, nulled on teardown. Lets ArrowLeft/ArrowRight
+    // drive the LAST assistant message's swipes exactly like its buttons do.
+    let keyboardSwipeAction = null;
+
     const handleKeydown = (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === '.') {
         e.preventDefault();
@@ -1570,6 +1675,25 @@ export class ChatView {
       } else if (e.ctrlKey && e.altKey && e.key.toLowerCase() === 'd') {
         e.preventDefault();
         openEmbedDebugModal();
+      } else if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && window.innerWidth > 768) {
+        // Desktop-only keyboard swipe navigation (same <=768 mobile breakpoint
+        // convention as sendInput.onkeydown): Left = previous variation, Right
+        // = next variation / generate a new one (handleSwipeNext already
+        // implements that split). Never fire while the user is typing
+        // (composer, inline editor, any modal field - arrow keys must keep
+        // their caret-navigation meaning there) or with an overlay open.
+        const el = document.activeElement;
+        if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)) return;
+        if (document.querySelector('.modal-overlay, .onboarding-overlay, .dropdown-menu')) return;
+        if (!drawerOverlay.classList.contains('hidden')) return;
+        if (!keyboardSwipeAction) return;
+        e.preventDefault();
+        if (e.key === 'ArrowRight') {
+          keyboardSwipeAction('next'); // self-guards on isGenerating (with a toast)
+        } else if (!isGenerating) {
+          // Switching variations mid-generation would desync the streaming DOM.
+          keyboardSwipeAction('prev');
+        }
       } else if (e.key === 'Escape' && !drawerOverlay.classList.contains('hidden')) {
         closeDrawer();
       }
@@ -1633,8 +1757,10 @@ export class ChatView {
       // second layer) its promise never settles and the tool loop hangs.
       if (activeAbortController) activeAbortController.abort();
       removeToolPermissionPrompt();
+      keyboardSwipeAction = null;
       window.removeEventListener('keydown', handleKeydown);
       window.removeEventListener('message', handleEmbedMessage);
+      pluginManager.emit('chat-closed', { chatId: currentChatId });
     };
 
     // Copy button for fenced code blocks (marked.use({renderer:{code}}) above)
@@ -1865,27 +1991,78 @@ export class ChatView {
       attachFileInput.onchange = async () => {
         const files = Array.from(attachFileInput.files || []);
         attachFileInput.value = '';
-        for (const file of files) {
-          if (pendingAttachedImages.length >= MAX_IMAGES_PER_MESSAGE) {
-            Toast.error(`Maksimal ${MAX_IMAGES_PER_MESSAGE} gambar per pesan.`);
-            break;
-          }
-          if (!file.type.startsWith('image/')) {
-            Toast.error(`"${file.name}" bukan file gambar.`);
-            continue;
-          }
-          if (file.size > MAX_IMAGE_BYTES) {
-            Toast.error(`"${file.name}" terlalu besar (maks ${Math.floor(MAX_IMAGE_BYTES / 1024 / 1024)}MB).`);
-            continue;
-          }
-          try {
-            pendingAttachedImages.push(await readFileAsDataURL(file));
-          } catch {
-            Toast.error(`Gagal membaca file "${file.name}".`);
-          }
-        }
-        refreshAttachPreview();
+        await addAttachedFiles(files);
       };
+    }
+
+    // One validation path for BOTH the file picker and window drag-drop, so
+    // dropped images behave byte-for-byte like picked ones (type/size caps,
+    // MAX_IMAGES_PER_MESSAGE, preview refresh).
+    const addAttachedFiles = async (files) => {
+      for (const file of files) {
+        if (pendingAttachedImages.length >= MAX_IMAGES_PER_MESSAGE) {
+          Toast.error(`Maksimal ${MAX_IMAGES_PER_MESSAGE} gambar per pesan.`);
+          break;
+        }
+        if (!file.type.startsWith('image/')) {
+          Toast.error(`"${file.name}" bukan file gambar.`);
+          continue;
+        }
+        if (file.size > MAX_IMAGE_BYTES) {
+          Toast.error(`"${file.name}" terlalu besar (maks ${Math.floor(MAX_IMAGE_BYTES / 1024 / 1024)}MB).`);
+          continue;
+        }
+        try {
+          pendingAttachedImages.push(await readFileAsDataURL(file));
+        } catch {
+          Toast.error(`Gagal membaca file "${file.name}".`);
+        }
+      }
+      refreshAttachPreview();
+    };
+
+    // Drop an image anywhere on the chat window = attach it. Same gating as
+    // the picker: only when the active model supports vision (a non-vision
+    // model would silently receive images it cannot see). The overlay is
+    // pointer-events:none so the drop always lands on this handler.
+    const chatLayoutEl = container.querySelector('.chat-layout');
+    if (chatLayoutEl) {
+      const dropOverlay = document.createElement('div');
+      dropOverlay.className = 'chat-drop-overlay hidden';
+      dropOverlay.innerHTML = '<div class="chat-drop-overlay-pill">Lepaskan gambar untuk melampirkan</div>';
+      chatLayoutEl.appendChild(dropOverlay);
+
+      const hasFiles = (e) => Array.from(e.dataTransfer?.types || []).includes('Files');
+      let dragDepth = 0; // enter/leave fire per child element - count to a stable depth
+
+      chatLayoutEl.addEventListener('dragenter', (e) => {
+        if (!hasFiles(e)) return;
+        e.preventDefault();
+        dragDepth++;
+        dropOverlay.classList.remove('hidden');
+      });
+      chatLayoutEl.addEventListener('dragover', (e) => {
+        if (!hasFiles(e)) return;
+        e.preventDefault(); // required, or Electron navigates to the dropped file
+        e.dataTransfer.dropEffect = 'copy';
+      });
+      chatLayoutEl.addEventListener('dragleave', (e) => {
+        if (!hasFiles(e)) return;
+        dragDepth = Math.max(0, dragDepth - 1);
+        if (dragDepth === 0) dropOverlay.classList.add('hidden');
+      });
+      chatLayoutEl.addEventListener('drop', async (e) => {
+        if (!hasFiles(e)) return;
+        e.preventDefault();
+        dragDepth = 0;
+        dropOverlay.classList.add('hidden');
+        const proxy = await ProxyStore.getDefault();
+        if (!supportsVision(proxy)) {
+          Toast.error('Model aktif tidak mendukung input gambar.');
+          return;
+        }
+        await addAttachedFiles(Array.from(e.dataTransfer.files || []));
+      });
     }
 
     // Shows/hides the attach button based on the ACTIVE proxy's currently
@@ -2744,6 +2921,7 @@ export class ChatView {
                       <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
                     </button>
                   ` : ''}
+                  ${!isUser ? pluginMessageActionButtonsHTML(m) : ''}
                 </div>
 
                 ${!isUser ? `
@@ -2813,6 +2991,21 @@ export class ChatView {
         btn.onclick = async () => this.handleSwipeNext(btn.dataset.id, currentChatId, activeChar, () => refreshMessageBlock(btn.dataset.id, 'next'));
       });
 
+      // Keyboard swipe hook (see handleKeydown) - always targets the LAST
+      // assistant block currently in the DOM, matching the button UX where a
+      // fresh variation can only be generated there. Blocks without data-id
+      // (the live typing indicator) are excluded by the selector.
+      keyboardSwipeAction = (direction) => {
+        const blocks = messagesEl.querySelectorAll('.message-block.assistant[data-id]');
+        if (!blocks.length) return;
+        const lastId = blocks[blocks.length - 1].dataset.id;
+        if (direction === 'prev') {
+          this.handleSwipePrev(lastId, () => refreshMessageBlock(lastId, 'prev'));
+        } else {
+          this.handleSwipeNext(lastId, currentChatId, activeChar, () => refreshMessageBlock(lastId, 'next'));
+        }
+      };
+
       // Thinking / tool-trace block collapse/expand toggle
       messagesEl.querySelectorAll('.thinking-toggle').forEach(btn => {
         btn.onclick = () => {
@@ -2853,6 +3046,24 @@ export class ChatView {
       // Generate AI response on last user message
       messagesEl.querySelectorAll('.btn-generate-ai-response').forEach(btn => {
         btn.onclick = () => triggerAIGeneration();
+      });
+
+      // Plugin-contributed per-message action buttons (Electron-only; the
+      // selector matches nothing otherwise). Re-read the message from the
+      // store so a swipe that only patched the DOM can't hand a plugin a
+      // stale variation.
+      messagesEl.querySelectorAll('.btn-plugin-msg-action').forEach(btn => {
+        btn.onclick = async () => {
+          const entry = pluginManager.getMessageActions().find(a =>
+            a.pluginId === btn.dataset.pluginId && a.id === btn.dataset.actionId);
+          if (!entry) return;
+          try {
+            const msgObj = await ChatStore.getMessageById(btn.dataset.id);
+            await entry.onClick(msgObj, { chatId: currentChatId, character: activeChar });
+          } catch (err) {
+            Toast.error('Aksi plugin gagal: ' + err.message);
+          }
+        };
       });
 
       // AI-driven step-by-step greeting personalization wizard - only ever
@@ -2989,6 +3200,21 @@ export class ChatView {
     const sendBtn = container.querySelector('#btn-send-message');
     const newSessionBtn = container.querySelector('#btn-new-session');
 
+    // Plugin-contributed composer buttons (Electron-only; the selector matches
+    // nothing otherwise).
+    container.querySelectorAll('.plugin-composer-btn').forEach(btn => {
+      btn.onclick = () => {
+        const entry = pluginManager.getComposerButtons().find(b =>
+          b.pluginId === btn.dataset.pluginId && b.id === btn.dataset.btnId);
+        if (!entry) return;
+        try {
+          entry.onClick({ chatId: currentChatId, character: activeChar, inputEl: container.querySelector('#chat-input') });
+        } catch (err) {
+          Toast.error('Tombol plugin gagal: ' + err.message);
+        }
+      };
+    });
+
     // Grows the composer to fit a long draft instead of scrolling inside a
     // fixed 2-row box, stopping at the CSS max-height (180px desktop / 120px
     // mobile, see .chat-textarea in css/chat.css - read via getComputedStyle
@@ -3104,6 +3330,16 @@ export class ChatView {
       messagesEl.appendChild(typingIndicator);
       scrollToBottom(messagesEl);
 
+      // Plugin hook: marks the turn boundary for plugins that track per-turn
+      // state (e.g. streaming TTS). `sendMessageText` already emits
+      // `user-message-sent` before calling this, but the "Generate AI response"
+      // button (.btn-generate-ai-response) reaches here directly with no other
+      // turn-start signal - without this its streaming gate stayed engaged for
+      // the previous turn. Re-emitting after `user-message-sent` is harmless
+      // (no chunks arrive between them, so the extra resetStreamTurn() is a
+      // no-op).
+      pluginManager.emit('assistant-generation-started', { chatId: targetChatId, character: activeChar });
+
       setGeneratingState(true);
       let liveContent = genSettings.prefillEnabled && genSettings.prefillText ? genSettings.prefillText : '';
       let liveThinking = '';
@@ -3132,6 +3368,13 @@ export class ChatView {
       const scheduleContentRender = createThrottledRenderer(() => {
         typingBodyHost.update(liveSegments, currentRoundText);
         scrollToBottom(messagesEl);
+        // Additive plugin hook: the assistant reply as it streams. Fires from
+        // inside the throttled renderer only (already ~50ms-gated, never per raw
+        // SSE chunk). No persisted message id exists mid-stream in this path, so
+        // `messageId` is null; `fullText` is the joined text so far (same string
+        // the abort-partial save persists). `emit` is a safe no-op when no
+        // plugin listens / plugins are unsupported.
+        pluginManager.emit('assistant-message-chunk', { chatId: targetChatId, character: activeChar, messageId: null, fullText: liveContent });
       });
       const scheduleThinkingRender = createThrottledRenderer(() => {
         syncThinkingBlock(typingInnerEl, liveThinking, { streaming: true });
@@ -3223,7 +3466,8 @@ export class ChatView {
         // (joined by AgentRunner) plus every tool call it made along the way,
         // plus the per-round breakdown so the UI can place an inline marker at
         // each round's actual tool-call boundary instead of one note at the end.
-        await ChatStore.addMessage(targetChatId, 'assistant', finalContent, finalThinking, [finalContent], finalToolTrace, finalSegments, collectToolImages(finalToolTrace), collectToolEmbeds(finalToolTrace));
+        const persistedAssistantMsg = await ChatStore.addMessage(targetChatId, 'assistant', finalContent, finalThinking, [finalContent], finalToolTrace, finalSegments, collectToolImages(finalToolTrace), collectToolEmbeds(finalToolTrace));
+        pluginManager.emit('assistant-message-complete', { chatId: targetChatId, character: activeChar, message: persistedAssistantMsg });
         await renderMessages();
 
         const updatedMessages = await ChatStore.getMessages(targetChatId);
@@ -3232,6 +3476,11 @@ export class ChatView {
           generateAutoTitle(chatObj, updatedMessages);
         }
       } catch (err) {
+        // Additive plugin hook: a generation that dies here (user abort or
+        // hard error) never emits `assistant-message-complete`, so streaming
+        // consumers get no end-of-turn mark without this. Emitted for both
+        // abort and error - either way the turn is over.
+        pluginManager.emit('assistant-generation-ended', { chatId: targetChatId, character: activeChar, aborted: err.name === 'AbortError' });
         typingIndicator.remove();
         if (err.name === 'AbortError') {
           // `liveContent`/`liveToolTrace` already span every round of this turn
@@ -3265,7 +3514,8 @@ export class ChatView {
     };
 
     const sendMessageText = async (text, images = []) => {
-      await ChatStore.addMessage(currentChatId, 'user', text, '', [], [], [], images);
+      const persistedUserMsg = await ChatStore.addMessage(currentChatId, 'user', text, '', [], [], [], images);
+      pluginManager.emit('user-message-sent', { chatId: currentChatId, character: activeChar, message: persistedUserMsg || { role: 'user', content: text, images } });
       await renderMessages();
       await triggerAIGeneration();
     };
@@ -3496,6 +3746,12 @@ export class ChatView {
       immersiveIntensity
     }));
 
+    // Plugin hook: marks the turn boundary for plugins that track per-turn
+    // state (e.g. streaming TTS). Regenerate never fires `user-message-sent`,
+    // so without this a plugin's streaming gate stayed engaged for the OLD
+    // turn and swallowed every chunk of the regenerated one.
+    pluginManager.emit('assistant-generation-started', { chatId, character: activeChar });
+
     setGeneratingState(true);
 
     const messagesEl = document.getElementById('messages-container');
@@ -3569,6 +3825,11 @@ export class ChatView {
     const scheduleContentRender = createThrottledRenderer(() => {
       if (swipeBodyHost) swipeBodyHost.update(liveSegments, currentRoundText);
       scrollToBottom(messagesEl);
+      // Additive plugin hook, mirror of triggerAIGeneration's. Here the message
+      // already exists this turn (a swipe regenerates an existing assistant
+      // message), so `messageId` is passed. Throttled-renderer only, never per
+      // raw SSE chunk; `emit` is a safe no-op when nothing listens.
+      pluginManager.emit('assistant-message-chunk', { chatId, character: activeChar, messageId, fullText: liveContent });
     });
     const scheduleThinkingRender = createThrottledRenderer(() => {
       if (blockInnerEl) syncThinkingBlock(blockInnerEl, liveThinking, { streaming: true });
@@ -3657,8 +3918,15 @@ export class ChatView {
       const updatedSwipes = [...(msg.swipes || [msg.content]), newContent];
       const newIndex = updatedSwipes.length - 1;
       await ChatStore.updateMessageSwipes(messageId, updatedSwipes, newIndex, newThinking, toolTrace, newSegments, collectToolImages(toolTrace), collectToolEmbeds(toolTrace));
+      // updateMessageSwipes() returns nothing - re-read the now-persisted
+      // record for the plugin lifecycle payload.
+      const persistedSwipeMsg = await ChatStore.getMessageById(messageId);
+      pluginManager.emit('assistant-message-complete', { chatId, character: activeChar, message: persistedSwipeMsg });
       onDone();
     } catch (err) {
+      // Additive plugin hook: see the matching emit in triggerAIGeneration's
+      // catch - end-of-turn mark for paths that never emit `complete`.
+      pluginManager.emit('assistant-generation-ended', { chatId, character: activeChar, aborted: err.name === 'AbortError' });
       if (err.name === 'AbortError') {
         if (liveContent.trim()) {
           // No `toolSegments` passed here, same reasoning as the abort-partial
