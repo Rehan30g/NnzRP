@@ -19,10 +19,8 @@ import { ThemeStore } from '../../storage/themeStore.js';
 import { BackupService } from '../../services/backupService.js';
 import { ProxiesView } from './proxiesView.js';
 import { Toast } from '../components/toast.js';
-import { Modal } from '../components/modal.js';
-import { pluginManager } from '../../plugins/pluginManager.js';
 import { dropdownHTML, wireDropdown } from '../components/dropdown.js';
-import { toggleRowHTML, toggleSwitchHTML } from '../components/toggle.js';
+import { toggleRowHTML } from '../components/toggle.js';
 import { ACCENT_PRESETS, setThemeMode, setAccent, applyAccent } from '../theme.js';
 import { showOnboardingWizard } from '../components/onboardingWizard.js';
 import { checkForUpdate, downloadAndInstall, isAndroidNative } from '../../services/androidUpdateService.js';
@@ -33,53 +31,8 @@ const TAB_ICONS = {
   generation: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>',
   model: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"></line><line x1="4" y1="10" x2="4" y2="3"></line><line x1="12" y1="21" x2="12" y2="12"></line><line x1="12" y1="8" x2="12" y2="3"></line><line x1="20" y1="21" x2="20" y2="16"></line><line x1="20" y1="12" x2="20" y2="3"></line><line x1="1" y1="14" x2="7" y2="14"></line><line x1="9" y1="8" x2="15" y2="8"></line><line x1="17" y1="16" x2="23" y2="16"></line></svg>',
   proxies: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path></svg>',
-  data: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg>',
-  plugins: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"></rect><rect x="14" y="3" width="7" height="7" rx="1.5"></rect><rect x="14" y="14" width="7" height="7" rx="1.5"></rect><rect x="3" y="14" width="7" height="7" rx="1.5"></rect></svg>'
+  data: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg>'
 };
-
-/* SVG used for both the fixed "Plugins" tab and any plugin-CONTRIBUTED
-   settings tab (which has no TAB_ICONS entry of its own). */
-const PLUGIN_TAB_ICON = TAB_ICONS.plugins;
-
-/** `plugin:<pluginId>:<tabId>` - the tab id used for a plugin-contributed
- *  settings panel. Kept in one place so the tab bar, the panel `data-panel`,
- *  the mobile menu and the lazy-mount lookup can never disagree. */
-function pluginSettingsTabId(entry) {
-  return `plugin:${entry.pluginId}:${entry.id}`;
-}
-
-/** Card markup for one installed plugin in the Plugins management panel.
- *  Every manifest-derived string (name/version/author/description/error) is
- *  untrusted and escaped. */
-function pluginCardHTML(p, contributedSettingsTabs) {
-  const contributes = contributedSettingsTabs.filter(t => t.pluginId === p.id);
-  return `
-    <div class="card plugin-card">
-      <div class="plugin-card-head">
-        <div class="plugin-card-title">
-          <span class="plugin-card-name">${escapeHtml(p.name || p.id)}</span>
-          <span class="plugin-card-version">v${escapeHtml(p.version || '0.0.0')}</span>
-          ${p.hasError ? '<span class="badge-rose">Error</span>' : ''}
-        </div>
-        ${toggleSwitchHTML({
-          inputClass: 'plugin-enable-toggle',
-          checked: !!p.enabled,
-          ariaLabel: `Aktifkan plugin ${p.name || p.id}`,
-          data: { 'plugin-toggle': p.id }
-        })}
-      </div>
-      ${p.author ? `<div class="plugin-card-author">oleh ${escapeHtml(p.author)}</div>` : ''}
-      ${p.description ? `<p class="plugin-card-desc">${escapeHtml(p.description)}</p>` : ''}
-      ${p.hasError && p.error ? `<div class="plugin-error">${escapeHtml(p.error)}</div>` : ''}
-      ${p.enabled && contributes.length
-        ? `<div class="plugin-card-note">Menambahkan tab pengaturan sendiri: ${contributes.map(t => escapeHtml(t.label)).join(', ')}.</div>`
-        : ''}
-      <div class="plugin-card-actions">
-        <button type="button" class="btn btn-danger btn-sm" data-plugin-remove="${escapeAttr(p.id)}" data-plugin-name="${escapeAttr(p.name || p.id)}">Hapus</button>
-      </div>
-    </div>
-  `;
-}
 
 const TABS = [
   { id: 'appearance', label: 'Appearance' },
@@ -163,27 +116,14 @@ export class SettingsView {
       } catch { /* non-fatal - the card just omits the version line */ }
     }
 
-    /* Electron-only plugin tabs, appended after the 5 fixed ones:
-         - one fixed "Plugins" management tab (install / enable / remove)
-         - one tab per plugin-CONTRIBUTED settings panel (pluginManager.getSettingsTabs())
-       `pluginManager.isSupported()` is `!!window.electronAPI`, so `pluginTabs`
-       is empty on the PWA / browser / Android APK and every branch below is
-       inert there. `allTabs` (never the module `TABS`) drives the tab bar,
-       the mobile menu and initial-tab resolution from here on. */
-    const pluginsSupported = pluginManager.isSupported();
-    const pluginSettingsTabs = pluginsSupported ? pluginManager.getSettingsTabs() : [];
-    const pluginTabs = pluginsSupported
-      ? [
-          { id: 'plugins', label: 'Plugins' },
-          ...pluginSettingsTabs.map(t => ({ id: pluginSettingsTabId(t), label: t.label }))
-        ]
-      : [];
-    const allTabs = TABS.concat(pluginTabs);
+    /* Plugin settings no longer live here at all - both the management UI and
+       every per-plugin settings panel are in the top-level Plugins view
+       (#plugins, pluginsView.js). This page is the 5 fixed tabs, full stop. */
+    const allTabs = TABS;
 
     // Tabs whose controls persist themselves - the shared Save button is a
-    // no-op there and is hidden (same treatment as Proxies/Data). The Plugins
-    // management tab and every plugin-contributed tab are self-saving.
-    const selfSavingTabs = ['proxies', 'data', ...pluginTabs.map(t => t.id)];
+    // no-op there and is hidden (same treatment as Proxies/Data).
+    const selfSavingTabs = ['proxies', 'data'];
 
     const initialTab = allTabs.some(t => t.id === options.tab) ? options.tab : 'appearance';
     // Embedded mode (opened from the chat drawer's "Settings" shortcut, inside
@@ -237,17 +177,14 @@ export class SettingsView {
       proxies: proxies.length
         ? `${proxies.length} profile${proxies.length === 1 ? '' : 's'} configured`
         : 'No profiles yet',
-      data: isAndroidApp ? 'App updates, backup & restore' : 'Backup, restore & setup wizard',
-      plugins: pluginsSupported
-        ? (() => { const n = pluginManager.list().length; return n ? `${n} plugin${n === 1 ? '' : 's'} installed` : 'No plugins installed'; })()
-        : ''
+      data: isAndroidApp ? 'App updates, backup & restore' : 'Backup, restore & setup wizard'
     };
 
     const menuRowHTML = (id) => {
       const tab = allTabs.find(t => t.id === id);
       if (!tab) return '';
       const sub = menuSubtitles[id];
-      const icon = TAB_ICONS[id] || (id === 'plugins' || id.startsWith('plugin:') ? PLUGIN_TAB_ICON : '');
+      const icon = TAB_ICONS[id] || '';
       return `
         <button type="button" class="settings-menu-row" data-goto="${escapeAttr(id)}">
           <span class="settings-menu-icon">${icon}</span>
@@ -262,13 +199,8 @@ export class SettingsView {
 
     const initialTabLabel = (allTabs.find(t => t.id === initialTab) || allTabs[0]).label;
 
-    /* Mobile grouped-list layout: the 5 built-ins keep their two groups; the
-       Electron plugin tabs (management tab + any contributed tabs) get their
-       own third group so they don't crowd the existing ones. Inert when
-       `pluginTabs` is empty. */
-    const menuGroups = pluginTabs.length
-      ? [...MOBILE_MENU_GROUPS, pluginTabs.map(t => t.id)]
-      : MOBILE_MENU_GROUPS;
+    // Mobile grouped-list layout: the 5 built-ins in their two groups.
+    const menuGroups = MOBILE_MENU_GROUPS;
 
     container.innerHTML = `
       <div class="settings-shell${embedded ? ' settings-shell-embedded' : ''}">
@@ -300,7 +232,7 @@ export class SettingsView {
         <div class="settings-tabbar" role="tablist">
           ${allTabs.map(t => `
             <button type="button" class="settings-tab${t.id === initialTab ? ' active' : ''}" data-tab="${escapeAttr(t.id)}" role="tab" aria-selected="${t.id === initialTab}">
-              ${TAB_ICONS[t.id] || (t.id === 'plugins' || t.id.startsWith('plugin:') ? PLUGIN_TAB_ICON : '')}<span>${escapeHtml(t.label)}</span>
+              ${TAB_ICONS[t.id] || ''}<span>${escapeHtml(t.label)}</span>
             </button>
           `).join('')}
         </div>
@@ -594,17 +526,6 @@ export class SettingsView {
           </div>
         </div>
 
-        ${pluginsSupported ? `
-        <!-- ============ PLUGINS (Electron-only management tab) ============ -->
-        <div class="settings-panel${initialTab === 'plugins' ? '' : ' hidden'}" data-panel="plugins" id="settings-plugins-panel">
-          <!-- Populated lazily on first open by SettingsView.renderPluginsPanel(). -->
-        </div>
-        ${pluginSettingsTabs.map(t => `
-        <!-- Plugin-contributed settings panel - mounted lazily via entry.render(). -->
-        <div class="settings-panel plugin-scope${initialTab === pluginSettingsTabId(t) ? '' : ' hidden'}" data-panel="${escapeAttr(pluginSettingsTabId(t))}"></div>
-        `).join('')}
-        ` : ''}
-
         <div class="settings-savebar${selfSavingTabs.includes(initialTab) ? ' hidden' : ''}" id="settings-savebar">
           <div class="settings-savebar-inner">
             <!-- .settings-savebar-hint is display:none on mobile (components.css)
@@ -624,11 +545,9 @@ export class SettingsView {
     const panels = container.querySelectorAll('.settings-panel');
     const savebarEl = container.querySelector('#settings-savebar');
     // Tabs whose controls persist themselves (see `selfSavingTabs` above -
-    // proxies, data, and every Electron plugin tab) - the shared Save button
-    // would be a no-op there, so it's hidden rather than left looking inert.
+    // proxies and data) - the shared Save button would be a no-op there, so
+    // it's hidden rather than left looking inert.
     let proxiesMounted = false;
-    const pluginSettingsMounted = new Set();
-    let pluginsPanelRendered = false;
 
     /* Mobile grouped-list state. `.settings-mobile-home` on the shell means
        "show the category list, hide every panel + the save bar" - and it is
@@ -652,35 +571,6 @@ export class SettingsView {
       await ProxiesView.render(mount);
     };
 
-    // Lazy-mounts the "Plugins" management panel on first open (it reads the
-    // live plugin list). Re-rendered wholesale after install/enable/disable/
-    // uninstall so the tab bar reflects any newly-added/removed plugin tabs.
-    const renderPluginsPanelIfNeeded = () => {
-      if (pluginsPanelRendered) return;
-      const panel = container.querySelector('#settings-plugins-panel');
-      if (!panel) return;
-      pluginsPanelRendered = true;
-      SettingsView.renderPluginsPanel(panel, container);
-    };
-
-    // Lazy-mounts one plugin-contributed settings panel on first open (its
-    // render() may do its own I/O), same pattern as the Proxies tab.
-    const mountPluginSettingsTab = (tabId) => {
-      if (pluginSettingsMounted.has(tabId)) return;
-      const entry = pluginSettingsTabs.find(t => pluginSettingsTabId(t) === tabId);
-      if (!entry) return;
-      let panel = null;
-      panels.forEach(p => { if (p.dataset.panel === tabId) panel = p; });
-      if (!panel) return;
-      pluginSettingsMounted.add(tabId);
-      try {
-        entry.render(panel);
-      } catch (err) {
-        console.error('[SettingsView] plugin settings tab render failed', err);
-        panel.textContent = 'Panel pengaturan plugin gagal dimuat.';
-      }
-    };
-
     const switchTab = async (tabId) => {
       // Leaving the mobile category list is implicit in picking a category -
       // desktop tab clicks run this too, harmlessly (the class does nothing
@@ -696,8 +586,6 @@ export class SettingsView {
       panels.forEach(panel => panel.classList.toggle('hidden', panel.dataset.panel !== tabId));
       if (savebarEl) savebarEl.classList.toggle('hidden', selfSavingTabs.includes(tabId));
       if (tabId === 'proxies') await mountProxiesIfNeeded();
-      if (tabId === 'plugins') renderPluginsPanelIfNeeded();
-      if (tabId.startsWith('plugin:')) mountPluginSettingsTab(tabId);
     };
 
     tabButtons.forEach(btn => {
@@ -724,8 +612,6 @@ export class SettingsView {
     // Mounting ProxiesView is deferred until its tab is first opened (it does its
     // own IndexedDB read + render), except when we land directly on that tab.
     if (initialTab === 'proxies') await mountProxiesIfNeeded();
-    if (initialTab === 'plugins') renderPluginsPanelIfNeeded();
-    if (initialTab.startsWith('plugin:')) mountPluginSettingsTab(initialTab);
 
     /* ---------------- Appearance: theme mode ---------------- */
     const themeGroup = container.querySelector('.theme-mode-group');
@@ -1115,105 +1001,5 @@ export class SettingsView {
         }
       };
     }
-  }
-
-  /**
-   * Builds + wires the "Plugins" management panel (Electron-only). Called
-   * lazily on first open, and again on every mutation. A mutation
-   * (install / enable / disable / uninstall) can change which plugin tabs
-   * exist, so instead of patching this panel in place it re-runs the whole
-   * SettingsView.render() landed back on the Plugins tab - exactly what the
-   * preset save/delete handlers already do for the Generation tab.
-   *
-   * @param {Element} panelEl        the `[data-panel="plugins"]` panel
-   * @param {Element} rootContainer  the SettingsView container (for re-render)
-   */
-  static renderPluginsPanel(panelEl, rootContainer) {
-    const plugins = pluginManager.list();
-    const contributedSettingsTabs = pluginManager.getSettingsTabs();
-
-    panelEl.innerHTML = `
-      <div class="card">
-        <h3 class="settings-section-title">Plugins</h3>
-        <p class="settings-section-desc plugins-panel-intro">
-          Plugin hanya tersedia di aplikasi Desktop. Plugin dapat menambah tab, tombol, dan field
-          tanpa mengubah kode inti aplikasi. Aktifkan hanya plugin dari sumber yang kamu percaya -
-          plugin yang aktif menjalankan kode di dalam aplikasi.
-        </p>
-        <div style="display:flex; gap:0.75rem; flex-wrap:wrap; align-items:center;">
-          <button type="button" class="btn btn-secondary" id="btn-install-plugin">
-            <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
-            Install dari file .zip
-          </button>
-        </div>
-      </div>
-
-      <div class="plugins-panel" id="plugins-list">
-        ${plugins.length
-          ? plugins.map(p => pluginCardHTML(p, contributedSettingsTabs)).join('')
-          : '<div class="card card-muted"><p style="margin:0; color:var(--text-dim); font-size:0.85rem;">Belum ada plugin terpasang.</p></div>'}
-      </div>
-    `;
-
-    const reRender = () => {
-      if (rootContainer) SettingsView.render(rootContainer, { tab: 'plugins' });
-      else SettingsView.renderPluginsPanel(panelEl, rootContainer);
-    };
-
-    const installBtn = panelEl.querySelector('#btn-install-plugin');
-    if (installBtn) {
-      installBtn.onclick = async () => {
-        try {
-          const manifest = await pluginManager.installFromDialog();
-          if (manifest) {
-            Toast.success(`Plugin "${manifest.name || manifest.id || 'baru'}" berhasil dipasang.`);
-            reRender();
-          }
-        } catch (err) {
-          Toast.error('Gagal memasang plugin: ' + err.message);
-        }
-      };
-    }
-
-    panelEl.querySelectorAll('.plugin-enable-toggle[data-plugin-toggle]').forEach(cb => {
-      cb.onchange = async () => {
-        const id = cb.dataset.pluginToggle;
-        try {
-          if (cb.checked) await pluginManager.enable(id);
-          else await pluginManager.disable(id);
-        } catch (err) {
-          Toast.error('Gagal mengubah status plugin: ' + err.message);
-        }
-        reRender();
-      };
-    });
-
-    panelEl.querySelectorAll('[data-plugin-remove]').forEach(btn => {
-      btn.onclick = () => {
-        const id = btn.dataset.pluginRemove;
-        const name = btn.dataset.pluginName || id;
-        Modal.open({
-          title: 'Hapus Plugin',
-          contentHTML: `<p style="margin:0;">Hapus plugin "${escapeHtml(name)}"? File plugin akan dihapus dari disk dan kontribusinya (tab, tombol, field) hilang.</p>`,
-          buttons: [
-            { label: 'Batal', className: 'btn-secondary', onClick: () => Modal.close() },
-            {
-              label: 'Hapus',
-              className: 'btn-danger',
-              onClick: async () => {
-                try {
-                  await pluginManager.uninstall(id);
-                  Toast.success('Plugin dihapus.');
-                } catch (err) {
-                  Toast.error('Gagal menghapus plugin: ' + err.message);
-                }
-                Modal.close();
-                reRender();
-              }
-            }
-          ]
-        });
-      };
-    });
   }
 }

@@ -1,11 +1,46 @@
 /* css/plugins.css - Plugin system (Electron-only) styling
    ======================================================
-   Consumed by the Settings "Plugins" management tab (settingsView.js), the
-   plugin nav items (sidebar.js) and any UI a plugin renders into a container
-   it was handed. Token-only per CLAUDE.md rule 2 - no raw hex here. Every
-   plugin-related surface is entirely absent from the DOM outside Electron
-   (guarded by pluginManager.isSupported()), so none of this ever applies on
-   the PWA / browser / Android APK build. */
+   Consumed by the Plugins view (pluginsView.js: the "Installed" management
+   panel + the per-plugin settings subtabs), the plugin nav items (sidebar.js)
+   and any UI a plugin renders into a container it was handed. Token-only per
+   CLAUDE.md rule 2 - no raw hex here. Every plugin-related surface is entirely
+   absent from the DOM outside Electron (guarded by pluginManager.isSupported()),
+   so none of this ever applies on the PWA / browser / Android APK build. */
+
+/* ---- Plugins view: subtab bar (Installed | <plugin> | <plugin> ...) ---- */
+.plugins-subtabbar {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  padding: 0.35rem;
+  margin-bottom: 1.5rem;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+}
+
+.plugins-subtab {
+  padding: 0.55rem 1.05rem;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-md);
+  font-family: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.plugins-subtab:hover:not(.active) {
+  background: var(--bg-surface-hover);
+  color: var(--text-main);
+}
+
+.plugins-subtab.active {
+  background: var(--accent-primary-soft);
+  color: var(--accent-primary);
+}
 
 /* Convention wrapper a plugin wraps its own injected UI in, so a host
    stylesheet can scope tweaks to plugin-authored markup if ever needed. */

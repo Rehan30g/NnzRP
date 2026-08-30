@@ -46,6 +46,9 @@
      Every element carries `pluginId` (and `pluginName`):
         pluginManager.getNavTabs()        -> [{ pluginId, pluginName, id, label, icon?, render }]
         pluginManager.getSettingsTabs()   -> [{ pluginId, pluginName, id, label, render }]
+        pluginManager.getSettingsForms()  -> unified subtab list for the Plugins view
+                                             ({kind:'schema',...} + {kind:'custom',...})
+        pluginManager.getActiveHost(id)   -> an active plugin's `host` object | null
         pluginManager.getChatDrawerTabs() -> [{ pluginId, pluginName, id, label, render }]
         pluginManager.getComposerButtons()-> [{ pluginId, pluginName, id, icon, title, onClick }]
         pluginManager.getMessageActions() -> [{ pluginId, pluginName, id, icon, title, visible, onClick }]
@@ -91,6 +94,7 @@ class PluginManager {
     /* Live extension-point registries (createHost pushes/splices these). */
     this.navTabs = [];
     this.settingsTabs = [];
+    this.settingsSchemas = [];
     this.chatDrawerTabs = [];
     this.composerButtons = [];
     this.messageActions = [];
@@ -180,6 +184,7 @@ class PluginManager {
         registries: {
           navTabs: this.navTabs,
           settingsTabs: this.settingsTabs,
+          settingsSchemas: this.settingsSchemas,
           chatDrawerTabs: this.chatDrawerTabs,
           composerButtons: this.composerButtons,
           messageActions: this.messageActions,
@@ -244,7 +249,7 @@ class PluginManager {
   /** Belt-and-suspenders: drop every registry element owned by `id`. */
   _removePluginEntries(id) {
     const arrays = [
-      this.navTabs, this.settingsTabs, this.chatDrawerTabs, this.composerButtons,
+      this.navTabs, this.settingsTabs, this.settingsSchemas, this.chatDrawerTabs, this.composerButtons,
       this.messageActions, this.characterFields, this.requestTransforms, this.responseTransforms
     ];
     for (const arr of arrays) {
@@ -394,6 +399,40 @@ class PluginManager {
   getNavTabs() { return this.isSupported() ? this.navTabs : []; }
   getSettingsTabs() { return this.isSupported() ? this.settingsTabs : []; }
   getChatDrawerTabs() { return this.isSupported() ? this.chatDrawerTabs : []; }
+
+  /**
+   * Unified list of plugin settings surfaces for the Plugins view's subtabs -
+   * declarative `registerSettings()` schemas and imperative
+   * `registerSettingsTab({render})` tabs, in registration order. Each entry:
+   *   { pluginId, pluginName, kind: 'schema', schema }
+   *   { pluginId, pluginName, kind: 'custom', id, label, render }
+   */
+  getSettingsForms() {
+    if (!this.isSupported()) return [];
+    const schemas = this.settingsSchemas.map(e => ({
+      pluginId: e.pluginId,
+      pluginName: e.pluginName,
+      kind: 'schema',
+      label: (e.schema && e.schema.title) || e.pluginName,
+      schema: e.schema
+    }));
+    const custom = this.settingsTabs.map(e => ({
+      pluginId: e.pluginId,
+      pluginName: e.pluginName,
+      kind: 'custom',
+      id: e.id,
+      label: e.label || e.pluginName,
+      render: e.render
+    }));
+    return [...schemas, ...custom];
+  }
+
+  /** The live `host` object of an active plugin (or null). Used by the Plugins
+   *  view to run a declarative schema's storage/onChange against it. */
+  getActiveHost(id) {
+    const rec = this._active.get(id);
+    return (rec && rec.host) || null;
+  }
   getComposerButtons() { return this.isSupported() ? this.composerButtons : []; }
   getMessageActions() { return this.isSupported() ? this.messageActions : []; }
   getCharacterFields() { return this.isSupported() ? this.characterFields : []; }
