@@ -35,18 +35,18 @@ function pluginCardHTML(p, hasSettings) {
         ${toggleSwitchHTML({
           inputClass: 'plugin-enable-toggle',
           checked: !!p.enabled,
-          ariaLabel: `Aktifkan plugin ${p.name || p.id}`,
+          ariaLabel: `Enable plugin ${p.name || p.id}`,
           data: { 'plugin-toggle': p.id }
         })}
       </div>
-      ${p.author ? `<div class="plugin-card-author">oleh ${escapeHtml(p.author)}</div>` : ''}
+      ${p.author ? `<div class="plugin-card-author">by ${escapeHtml(p.author)}</div>` : ''}
       ${p.description ? `<p class="plugin-card-desc">${escapeHtml(p.description)}</p>` : ''}
       ${p.hasError && p.error ? `<div class="plugin-error">${escapeHtml(p.error)}</div>` : ''}
       ${p.enabled && hasSettings
-        ? '<div class="plugin-card-note">Punya tab pengaturan sendiri di bar subtab di atas.</div>'
+        ? '<div class="plugin-card-note">Has its own settings subtab above.</div>'
         : ''}
       <div class="plugin-card-actions">
-        <button type="button" class="btn btn-danger btn-sm" data-plugin-remove="${escapeAttr(p.id)}" data-plugin-name="${escapeAttr(p.name || p.id)}">Hapus</button>
+        <button type="button" class="btn btn-danger btn-sm" data-plugin-remove="${escapeAttr(p.id)}" data-plugin-name="${escapeAttr(p.name || p.id)}">Remove</button>
       </div>
     </div>
   `;
@@ -63,7 +63,7 @@ export class PluginsView {
         <div class="view-header-row">
           <div>
             <h2 style="font-size:1.5rem; margin-bottom:0.25rem;">Plugins</h2>
-            <p style="color:var(--text-muted); font-size:0.88rem;">Plugin hanya tersedia di aplikasi Desktop (Electron).</p>
+            <p style="color:var(--text-muted); font-size:0.88rem;">Plugins are only available in the Desktop app (Electron).</p>
           </div>
         </div>`;
       return;
@@ -85,7 +85,7 @@ export class PluginsView {
       <div class="view-header-row">
         <div>
           <h2 style="font-size:1.5rem; margin-bottom:0.25rem;">Plugins</h2>
-          <p style="color:var(--text-muted); font-size:0.88rem;">Plugin menambah tab, tombol, dan field tanpa mengubah kode inti aplikasi. Aktifkan hanya plugin dari sumber yang kamu percaya - plugin yang aktif menjalankan kode di dalam aplikasi.</p>
+          <p style="color:var(--text-muted); font-size:0.88rem;">Plugins add tabs, buttons and fields without changing the app's core code. Only enable plugins from sources you trust - an enabled plugin runs code inside the app.</p>
         </div>
       </div>
 
@@ -109,14 +109,14 @@ export class PluginsView {
           <div style="display:flex; gap:0.75rem; flex-wrap:wrap; align-items:center;">
             <button type="button" class="btn btn-secondary btn-sm" id="btn-install-plugin">
               <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
-              Install dari file .zip
+              Install from .zip file
             </button>
           </div>
         </div>
         <div class="plugins-panel" id="plugins-list">
           ${plugins.length
             ? plugins.map(p => pluginCardHTML(p, withSettings.has(p.id))).join('')
-            : '<div class="card card-muted"><p style="margin:0; color:var(--text-dim); font-size:0.85rem;">Belum ada plugin terpasang.</p></div>'}
+            : '<div class="card card-muted"><p style="margin:0; color:var(--text-dim); font-size:0.85rem;">No plugins installed yet.</p></div>'}
         </div>
       `;
 
@@ -126,11 +126,11 @@ export class PluginsView {
           try {
             const manifest = await pluginManager.installFromDialog();
             if (manifest) {
-              Toast.success(`Plugin "${manifest.name || manifest.id || 'baru'}" berhasil dipasang.`);
+              Toast.success(`Plugin "${manifest.name || manifest.id || 'new'}" installed.`);
               reRender();
             }
           } catch (err) {
-            Toast.error('Gagal memasang plugin: ' + err.message);
+            Toast.error('Failed to install plugin: ' + err.message);
           }
         };
       }
@@ -142,7 +142,7 @@ export class PluginsView {
             if (cb.checked) await pluginManager.enable(id);
             else await pluginManager.disable(id);
           } catch (err) {
-            Toast.error('Gagal mengubah status plugin: ' + err.message);
+            Toast.error('Failed to change plugin status: ' + err.message);
           }
           reRender();
         };
@@ -153,19 +153,19 @@ export class PluginsView {
           const id = btn.dataset.pluginRemove;
           const name = btn.dataset.pluginName || id;
           Modal.open({
-            title: 'Hapus Plugin',
-            contentHTML: `<p style="margin:0;">Hapus plugin "${escapeHtml(name)}"? File plugin akan dihapus dari disk dan kontribusinya (tab, tombol, field) hilang.</p>`,
+            title: 'Remove Plugin',
+            contentHTML: `<p style="margin:0;">Remove plugin "${escapeHtml(name)}"? Its files are deleted from disk and everything it contributes (tabs, buttons, fields) goes away.</p>`,
             buttons: [
-              { label: 'Batal', className: 'btn-secondary', onClick: () => Modal.close() },
+              { label: 'Cancel', className: 'btn-secondary', onClick: () => Modal.close() },
               {
-                label: 'Hapus',
+                label: 'Remove',
                 className: 'btn-danger',
                 onClick: async () => {
                   try {
                     await pluginManager.uninstall(id);
-                    Toast.success('Plugin dihapus.');
+                    Toast.success('Plugin removed.');
                   } catch (err) {
-                    Toast.error('Gagal menghapus plugin: ' + err.message);
+                    Toast.error('Failed to remove plugin: ' + err.message);
                   }
                   Modal.close();
                   activeSub = SUB_INSTALLED;
@@ -182,10 +182,10 @@ export class PluginsView {
       bodyEl.innerHTML = '';
       if (form.kind === 'schema') {
         const host = pluginManager.getActiveHost(form.pluginId);
-        if (!host) { bodyEl.textContent = 'Plugin tidak aktif.'; return; }
+        if (!host) { bodyEl.textContent = 'Plugin is not active.'; return; }
         renderPluginSettingsForm(bodyEl, form.schema, host).catch(err => {
           console.error('[PluginsView] settings form render failed', err);
-          bodyEl.textContent = 'Panel pengaturan plugin gagal dimuat.';
+          bodyEl.textContent = 'Plugin settings panel failed to load.';
         });
       } else {
         // Escape-hatch: the plugin's own registerSettingsTab({ render }).
@@ -193,7 +193,7 @@ export class PluginsView {
           form.render(bodyEl);
         } catch (err) {
           console.error('[PluginsView] plugin settings tab render failed', err);
-          bodyEl.textContent = 'Panel pengaturan plugin gagal dimuat.';
+          bodyEl.textContent = 'Plugin settings panel failed to load.';
         }
       }
     };

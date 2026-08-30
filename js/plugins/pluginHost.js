@@ -214,12 +214,12 @@ export function createHost(pluginId, manifest, deps = {}) {
         let overlay;
         try {
           overlay = Modal.open({
-            title: 'Konfirmasi',
+            title: 'Confirm',
             contentHTML: '<p class="plugin-confirm-text" style="margin:0; color:var(--text-main);"></p>',
             closeOnBackdropClick: true,
             onClose: () => finish(false),
             buttons: [
-              { label: 'Batal', className: 'btn-secondary', onClick: (ov) => { Modal.closeOverlay(ov); finish(false); } },
+              { label: 'Cancel', className: 'btn-secondary', onClick: (ov) => { Modal.closeOverlay(ov); finish(false); } },
               { label: 'OK', className: 'btn-primary', onClick: (ov) => { Modal.closeOverlay(ov); finish(true); } }
             ]
           });
