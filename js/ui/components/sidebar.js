@@ -94,6 +94,17 @@ export class Sidebar {
           <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
           <span class="nav-label">MCP</span>
         </div>
+
+        <!-- Plugin MANAGEMENT (install / enable / uninstall) - a top-level view
+             at #plugins, not a Settings tab. Electron-only: pluginManager
+             .isSupported() is false on the PWA / browser / Android APK, so this
+             item is absent there (and the mobile bottom bar never gains a 6th
+             tab). Plugin-CONTRIBUTED settings panels still live in Settings. -->
+        ${pluginManager.isSupported() ? `
+        <div class="nav-item ${activeView === 'plugins' ? 'active' : ''}" data-view="plugins" data-tooltip="Plugins">
+          ${DEFAULT_PLUGIN_ICON_SVG}
+          <span class="nav-label">Plugins</span>
+        </div>` : ''}
         ${pluginNavItemsHTML(window.location.hash)}
       </nav>
 

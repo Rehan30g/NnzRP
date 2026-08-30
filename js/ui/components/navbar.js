@@ -7,6 +7,7 @@ const VIEW_LABELS = {
   personas: 'User Personas',
   settings: 'Settings',
   mcp: 'Custom MCP (Exp)',
+  plugins: 'Plugins',
   chat: 'Roleplay Chat'
 };
 

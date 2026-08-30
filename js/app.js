@@ -8,6 +8,7 @@ import { ChatView } from './ui/views/chatView.js';
 import { PersonasView } from './ui/views/personasView.js';
 import { SettingsView } from './ui/views/settingsView.js';
 import { MCPView } from './ui/views/mcpView.js';
+import { PluginsView } from './ui/views/pluginsView.js';
 import { MCPToolRegistry } from './services/mcpToolRegistry.js';
 import { pluginManager } from './plugins/pluginManager.js';
 import { CharacterStore } from './storage/characterStore.js';
@@ -26,6 +27,7 @@ const VIEW_TITLES = {
   personas: 'User Personas',
   settings: 'Settings',
   mcp: 'Custom MCP',
+  plugins: 'Plugins',
   chat: 'Roleplay Chat'
 };
 
@@ -489,6 +491,9 @@ class App {
 
       case 'mcp':
         return MCPView.render(container);
+
+      case 'plugins':
+        return PluginsView.render(container);
 
       case 'plugin': {
         const route = pluginManager.resolveNavRoute(params.pluginRoute);
