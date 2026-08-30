@@ -19,7 +19,6 @@ import { ThemeStore } from '../../storage/themeStore.js';
 import { BackupService } from '../../services/backupService.js';
 import { ProxiesView } from './proxiesView.js';
 import { Toast } from '../components/toast.js';
-import { pluginManager } from '../../plugins/pluginManager.js';
 import { dropdownHTML, wireDropdown } from '../components/dropdown.js';
 import { toggleRowHTML } from '../components/toggle.js';
 import { ACCENT_PRESETS, setThemeMode, setAccent, applyAccent } from '../theme.js';
@@ -32,21 +31,8 @@ const TAB_ICONS = {
   generation: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>',
   model: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"></line><line x1="4" y1="10" x2="4" y2="3"></line><line x1="12" y1="21" x2="12" y2="12"></line><line x1="12" y1="8" x2="12" y2="3"></line><line x1="20" y1="21" x2="20" y2="16"></line><line x1="20" y1="12" x2="20" y2="3"></line><line x1="1" y1="14" x2="7" y2="14"></line><line x1="9" y1="8" x2="15" y2="8"></line><line x1="17" y1="16" x2="23" y2="16"></line></svg>',
   proxies: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path></svg>',
-  data: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg>',
-  plugins: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"></rect><rect x="14" y="3" width="7" height="7" rx="1.5"></rect><rect x="14" y="14" width="7" height="7" rx="1.5"></rect><rect x="3" y="14" width="7" height="7" rx="1.5"></rect></svg>'
+  data: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg>'
 };
-
-/* SVG for a plugin-CONTRIBUTED settings tab (which has no TAB_ICONS entry of
-   its own). Plugin MANAGEMENT moved to its own top-level view (pluginsView.js);
-   this is only for the per-plugin settings panels that still live here. */
-const PLUGIN_TAB_ICON = TAB_ICONS.plugins;
-
-/** `plugin:<pluginId>:<tabId>` - the tab id used for a plugin-contributed
- *  settings panel. Kept in one place so the tab bar, the panel `data-panel`,
- *  the mobile menu and the lazy-mount lookup can never disagree. */
-function pluginSettingsTabId(entry) {
-  return `plugin:${entry.pluginId}:${entry.id}`;
-}
 
 const TABS = [
   { id: 'appearance', label: 'Appearance' },
@@ -130,23 +116,14 @@ export class SettingsView {
       } catch { /* non-fatal - the card just omits the version line */ }
     }
 
-    /* Electron-only plugin-CONTRIBUTED settings tabs, one per
-       pluginManager.getSettingsTabs() entry, appended after the 5 fixed tabs.
-       Plugin MANAGEMENT (install / enable / uninstall) is its own top-level
-       view now (#plugins, pluginsView.js) - not a tab here.
-       `pluginManager.isSupported()` is `!!window.electronAPI`, so `pluginTabs`
-       is empty on the PWA / browser / Android APK and every branch below is
-       inert there. `allTabs` (never the module `TABS`) drives the tab bar,
-       the mobile menu and initial-tab resolution from here on. */
-    const pluginsSupported = pluginManager.isSupported();
-    const pluginSettingsTabs = pluginsSupported ? pluginManager.getSettingsTabs() : [];
-    const pluginTabs = pluginSettingsTabs.map(t => ({ id: pluginSettingsTabId(t), label: t.label }));
-    const allTabs = TABS.concat(pluginTabs);
+    /* Plugin settings no longer live here at all - both the management UI and
+       every per-plugin settings panel are in the top-level Plugins view
+       (#plugins, pluginsView.js). This page is the 5 fixed tabs, full stop. */
+    const allTabs = TABS;
 
     // Tabs whose controls persist themselves - the shared Save button is a
-    // no-op there and is hidden (same treatment as Proxies/Data). Every
-    // plugin-contributed tab is self-saving.
-    const selfSavingTabs = ['proxies', 'data', ...pluginTabs.map(t => t.id)];
+    // no-op there and is hidden (same treatment as Proxies/Data).
+    const selfSavingTabs = ['proxies', 'data'];
 
     const initialTab = allTabs.some(t => t.id === options.tab) ? options.tab : 'appearance';
     // Embedded mode (opened from the chat drawer's "Settings" shortcut, inside
@@ -207,7 +184,7 @@ export class SettingsView {
       const tab = allTabs.find(t => t.id === id);
       if (!tab) return '';
       const sub = menuSubtitles[id];
-      const icon = TAB_ICONS[id] || (id.startsWith('plugin:') ? PLUGIN_TAB_ICON : '');
+      const icon = TAB_ICONS[id] || '';
       return `
         <button type="button" class="settings-menu-row" data-goto="${escapeAttr(id)}">
           <span class="settings-menu-icon">${icon}</span>
@@ -222,13 +199,8 @@ export class SettingsView {
 
     const initialTabLabel = (allTabs.find(t => t.id === initialTab) || allTabs[0]).label;
 
-    /* Mobile grouped-list layout: the 5 built-ins keep their two groups; the
-       Electron plugin tabs (management tab + any contributed tabs) get their
-       own third group so they don't crowd the existing ones. Inert when
-       `pluginTabs` is empty. */
-    const menuGroups = pluginTabs.length
-      ? [...MOBILE_MENU_GROUPS, pluginTabs.map(t => t.id)]
-      : MOBILE_MENU_GROUPS;
+    // Mobile grouped-list layout: the 5 built-ins in their two groups.
+    const menuGroups = MOBILE_MENU_GROUPS;
 
     container.innerHTML = `
       <div class="settings-shell${embedded ? ' settings-shell-embedded' : ''}">
@@ -260,7 +232,7 @@ export class SettingsView {
         <div class="settings-tabbar" role="tablist">
           ${allTabs.map(t => `
             <button type="button" class="settings-tab${t.id === initialTab ? ' active' : ''}" data-tab="${escapeAttr(t.id)}" role="tab" aria-selected="${t.id === initialTab}">
-              ${TAB_ICONS[t.id] || (t.id.startsWith('plugin:') ? PLUGIN_TAB_ICON : '')}<span>${escapeHtml(t.label)}</span>
+              ${TAB_ICONS[t.id] || ''}<span>${escapeHtml(t.label)}</span>
             </button>
           `).join('')}
         </div>
@@ -554,12 +526,6 @@ export class SettingsView {
           </div>
         </div>
 
-        ${pluginsSupported ? pluginSettingsTabs.map(t => `
-        <!-- Plugin-contributed settings panel (Electron-only) - mounted lazily
-             via entry.render(). Plugin management is at #plugins, not here. -->
-        <div class="settings-panel plugin-scope${initialTab === pluginSettingsTabId(t) ? '' : ' hidden'}" data-panel="${escapeAttr(pluginSettingsTabId(t))}"></div>
-        `).join('') : ''}
-
         <div class="settings-savebar${selfSavingTabs.includes(initialTab) ? ' hidden' : ''}" id="settings-savebar">
           <div class="settings-savebar-inner">
             <!-- .settings-savebar-hint is display:none on mobile (components.css)
@@ -579,10 +545,9 @@ export class SettingsView {
     const panels = container.querySelectorAll('.settings-panel');
     const savebarEl = container.querySelector('#settings-savebar');
     // Tabs whose controls persist themselves (see `selfSavingTabs` above -
-    // proxies, data, and every Electron plugin tab) - the shared Save button
-    // would be a no-op there, so it's hidden rather than left looking inert.
+    // proxies and data) - the shared Save button would be a no-op there, so
+    // it's hidden rather than left looking inert.
     let proxiesMounted = false;
-    const pluginSettingsMounted = new Set();
 
     /* Mobile grouped-list state. `.settings-mobile-home` on the shell means
        "show the category list, hide every panel + the save bar" - and it is
@@ -606,24 +571,6 @@ export class SettingsView {
       await ProxiesView.render(mount);
     };
 
-    // Lazy-mounts one plugin-contributed settings panel on first open (its
-    // render() may do its own I/O), same pattern as the Proxies tab.
-    const mountPluginSettingsTab = (tabId) => {
-      if (pluginSettingsMounted.has(tabId)) return;
-      const entry = pluginSettingsTabs.find(t => pluginSettingsTabId(t) === tabId);
-      if (!entry) return;
-      let panel = null;
-      panels.forEach(p => { if (p.dataset.panel === tabId) panel = p; });
-      if (!panel) return;
-      pluginSettingsMounted.add(tabId);
-      try {
-        entry.render(panel);
-      } catch (err) {
-        console.error('[SettingsView] plugin settings tab render failed', err);
-        panel.textContent = 'Panel pengaturan plugin gagal dimuat.';
-      }
-    };
-
     const switchTab = async (tabId) => {
       // Leaving the mobile category list is implicit in picking a category -
       // desktop tab clicks run this too, harmlessly (the class does nothing
@@ -639,7 +586,6 @@ export class SettingsView {
       panels.forEach(panel => panel.classList.toggle('hidden', panel.dataset.panel !== tabId));
       if (savebarEl) savebarEl.classList.toggle('hidden', selfSavingTabs.includes(tabId));
       if (tabId === 'proxies') await mountProxiesIfNeeded();
-      if (tabId.startsWith('plugin:')) mountPluginSettingsTab(tabId);
     };
 
     tabButtons.forEach(btn => {
@@ -666,7 +612,6 @@ export class SettingsView {
     // Mounting ProxiesView is deferred until its tab is first opened (it does its
     // own IndexedDB read + render), except when we land directly on that tab.
     if (initialTab === 'proxies') await mountProxiesIfNeeded();
-    if (initialTab.startsWith('plugin:')) mountPluginSettingsTab(initialTab);
 
     /* ---------------- Appearance: theme mode ---------------- */
     const themeGroup = container.querySelector('.theme-mode-group');

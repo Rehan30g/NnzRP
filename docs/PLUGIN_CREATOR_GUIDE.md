@@ -149,13 +149,58 @@ Adds a left-sidebar nav item after the 5 built-ins. Route is
 container element when the user navigates to it. `icon` is an SVG string
 (injected raw, like the built-in nav icons).
 
-#### `host.ui.registerSettingsTab({ id, label, render })`
+#### `host.ui.registerSettings(schema)` — the easy path
 
-Adds a tab to the Settings page (desktop tab bar **and** the mobile settings
-menu). `render(containerEl)` mounts lazily on first open. The tab is treated as
-self-saving — the sticky Save bar is hidden for it, so persist changes yourself
-(typically via `host.storage`). Installing/enabling/disabling any plugin
-re-renders the Settings "Plugins" tab so contributed tabs appear/disappear.
+Describe your settings declaratively; the host renders the form, wires it to
+`host.storage`, and shows it as a **subtab in the Plugins view** (`#plugins`).
+You write no DOM (except an optional `custom` slot).
+
+```js
+host.ui.registerSettings({
+  title: 'My Plugin',                       // subtab label (default: plugin name)
+  sections: [
+    {
+      title: 'Server',                       // optional group heading
+      description: 'One-line note above the group.',  // optional
+      fields: [
+        { key: 'serverUrl', type: 'text', label: 'Server URL',
+          default: 'http://localhost:8000', placeholder: '…', help: '…' },
+        { key: 'autoplay', type: 'toggle', label: 'Play automatically',
+          default: true, help: '…' },
+        { key: 'mode', type: 'select', label: 'Mode', default: 'a',
+          options: [{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }] },
+        { key: 'count', type: 'number', label: 'Count', default: 3, min: 1, max: 9 },
+        { key: 'note', type: 'textarea', label: 'Note', rows: 4 }
+      ]
+    }
+  ],
+  actions: [                                  // optional buttons under the form
+    { id: 'test', label: 'Test connection', style: 'secondary',
+      onClick: async (ctx) => { /* ctx.get('serverUrl'), host.ui.toast… */ } }
+  ],
+  custom: (el, ctx) => { /* escape-hatch DOM slot, rendered after the sections */ },
+  onChange: (key, value, values) => { /* fires AFTER the field persists */ }
+});
+```
+
+- **Field types**: `text` · `textarea` · `number` · `toggle` · `select`.
+- **Persistence is automatic**: each field's value lives at
+  `host.storage[field.key]`, read back with `field.default` as the fallback.
+  On change the host persists it, then calls `onChange`. (So a field's `key`
+  can match a key you already read elsewhere via `host.storage.get`.)
+- **`ctx`** (passed to `actions[].onClick`, `custom`, and available for reads):
+  `{ values, get(key), set(key, value), refresh(), host }`. `set` persists +
+  updates the on-screen control + fires `onChange`; `refresh()` re-renders the
+  whole form.
+- **`custom(el, ctx)`** is for UI a flat field can't express (a dynamic list, a
+  file upload). It owns `el` completely.
+
+#### `host.ui.registerSettingsTab({ id, label, render })` — the escape hatch
+
+Full DOM control. `render(containerEl)` mounts into a **subtab in the Plugins
+view** (same place `registerSettings` lands — nothing is injected into the app
+Settings page). Persist changes yourself (typically via `host.storage`). Use
+`registerSettings` instead unless you genuinely need to hand-build everything.
 
 #### `host.ui.registerChatDrawerTab({ id, label, render })`
 
@@ -555,30 +600,22 @@ call is plugin-id-scoped, `realpath`-contained to `userData/plugins/<id>/` (or
 const ICON = '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="9"/></svg>';
 
 export async function activate(host) {
-  // A settings tab that reads/writes plugin storage.
-  host.ui.registerSettingsTab({
-    id: 'main',
-    label: 'Hello',
-    render: async (container) => {
-      container.textContent = '';
-      const saved = (await host.storage.get('note')) || '';
-
-      const input = document.createElement('input');
-      input.className = 'input';
-      input.value = saved;
-      input.placeholder = 'Type something — saved on blur';
-      input.style.cssText = 'width:100%;padding:0.5rem 0.65rem;background:var(--bg-surface);color:var(--text-main);border:1px solid var(--border-light);border-radius:var(--radius-md);font:inherit;';
-      input.addEventListener('change', () => {
-        host.storage.set('note', input.value);
-        host.ui.toast.success('Saved');
-      });
-
-      const wrap = document.createElement('div');
-      wrap.className = 'plugin-scope';
-      wrap.style.cssText = 'display:flex;flex-direction:column;gap:0.6rem;max-width:480px;color:var(--text-main);';
-      wrap.append(input);
-      container.append(wrap);
-    }
+  // Declarative settings — no DOM. Shows as a "Hello" subtab in the Plugins
+  // view; `note` / `loud` auto-persist to host.storage.
+  host.ui.registerSettings({
+    title: 'Hello',
+    sections: [{
+      fields: [
+        { key: 'note', type: 'text', label: 'Note', placeholder: 'Type something' },
+        { key: 'loud', type: 'toggle', label: 'Shout it', default: false }
+      ]
+    }],
+    actions: [
+      { id: 'greet', label: 'Greet', onClick: (ctx) => {
+        const n = ctx.get('note') || 'world';
+        host.ui.toast.success(ctx.get('loud') ? `HELLO ${n.toUpperCase()}!` : `Hello ${n}`);
+      } }
+    ]
   });
 
   // A per-message button.

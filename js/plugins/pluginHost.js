@@ -124,6 +124,46 @@ export function createHost(pluginId, manifest, deps = {}) {
     registerSettingsTab({ id, label, render } = {}) {
       return registerInto(registries.settingsTabs, { id, label, render: guard(render) });
     },
+    /**
+     * DECLARATIVE settings - the easy path. The plugin describes its fields and
+     * the host renders + persists them (each field's value lives at
+     * `host.storage[field.key]`), shown as a subtab in the Plugins view. No DOM
+     * code. `registerSettingsTab` above stays as the power-user escape hatch.
+     *
+     * schema = {
+     *   title?: string,                       // subtab label (default: plugin name)
+     *   sections: [{ title?, description?, fields: [{
+     *     key, type: 'text'|'textarea'|'number'|'toggle'|'select',
+     *     label, help?, default?, placeholder?, options?: [{value,label}],
+     *     min?, max?, step?, rows?
+     *   }] }],
+     *   actions?: [{ id, label, style?: 'secondary'|'primary'|'danger',
+     *                onClick: (ctx) => void|Promise }],
+     *   custom?: (el, ctx) => void,           // escape-hatch DOM slot, after the sections
+     *   onChange?: (key, value, values) => void   // after a field persists
+     * }
+     * ctx = { values, get(key), set(key,value), refresh(), host }
+     */
+    registerSettings(schema) {
+      const s = (schema && typeof schema === 'object') ? schema : {};
+      const sections = Array.isArray(s.sections) ? s.sections : [];
+      const normSections = sections.map((sec) => ({
+        title: typeof sec?.title === 'string' ? sec.title : '',
+        description: typeof sec?.description === 'string' ? sec.description : '',
+        fields: (Array.isArray(sec?.fields) ? sec.fields : [])
+          .filter((f) => f && typeof f.key === 'string' && typeof f.type === 'string')
+      }));
+      const normalized = {
+        title: typeof s.title === 'string' && s.title.trim() ? s.title : pluginName,
+        sections: normSections,
+        actions: (Array.isArray(s.actions) ? s.actions : [])
+          .filter((a) => a && typeof a.onClick === 'function')
+          .map((a) => ({ id: a.id, label: a.label, style: a.style, onClick: guard(a.onClick) })),
+        custom: typeof s.custom === 'function' ? guard(s.custom) : null,
+        onChange: typeof s.onChange === 'function' ? guard(s.onChange) : null
+      };
+      return registerInto(registries.settingsSchemas, { schema: normalized });
+    },
     registerChatDrawerTab({ id, label, render } = {}) {
       return registerInto(registries.chatDrawerTabs, { id, label, render: guard(render) });
     },
