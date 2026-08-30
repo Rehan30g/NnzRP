@@ -3,8 +3,103 @@ import { CharacterStore } from '../../storage/characterStore.js';
 import { CardImporter } from '../../services/cardImporter.js';
 import { Modal } from '../components/modal.js';
 import { Toast } from '../components/toast.js';
+import { pluginManager } from '../../plugins/pluginManager.js';
 import { renderAvatarPickerHTML, wireAvatarPicker } from '../components/avatarPicker.js';
+import { dropdownHTML, wireDropdown } from '../components/dropdown.js';
+import { toggleRowHTML } from '../components/toggle.js';
 import { escapeHtml, escapeAttr } from '../../utils/sanitize.js';
+
+/** Stable, DOM-safe id for one plugin character field input. */
+function pluginFieldId(pluginId, key) {
+  return 'plugin-field-' + String(`${pluginId}-${key}`).replace(/[^a-zA-Z0-9_-]/g, '-');
+}
+
+/**
+ * Groups the flat `pluginManager.getCharacterFields()` list by contributing
+ * plugin, preserving first-seen order. Returns `[]` outside Electron
+ * (getCharacterFields() is empty there).
+ */
+function groupPluginCharacterFields() {
+  if (!pluginManager.isSupported()) return [];
+  const groups = [];
+  for (const f of pluginManager.getCharacterFields()) {
+    let g = groups.find(x => x.pluginId === f.pluginId);
+    if (!g) {
+      g = { pluginId: f.pluginId, pluginName: f.pluginName || f.pluginId, fields: [] };
+      groups.push(g);
+    }
+    g.fields.push(f);
+  }
+  return groups;
+}
+
+/**
+ * Form section markup for the plugin-contributed character fields. All
+ * manifest-supplied text (plugin name, field label/help/placeholder, select
+ * option labels) is untrusted and escaped. Current values come from
+ * `character.pluginData[pluginId][key]`.
+ */
+function pluginFieldSectionsHTML(groups, character) {
+  if (!groups.length) return '';
+  const pd = (character && character.pluginData && typeof character.pluginData === 'object') ? character.pluginData : {};
+  return groups.map(g => {
+    // Raw stored value (may be `false`, `0`, `''` - all meaningful for a
+    // toggle) vs. the string-coerced form used by text/select inputs.
+    const rawCur = (key) => (pd[g.pluginId] ? pd[g.pluginId][key] : undefined);
+    const isUnset = (v) => v === undefined || v === null || v === '';
+    const cur = (key) => {
+      const v = rawCur(key);
+      return isUnset(v) ? '' : v;
+    };
+    return `
+      <div class="plugin-scope" style="border-top:1px solid var(--border-light); margin-top:1rem; padding-top:1rem;">
+        <div class="form-label" style="font-weight:700; margin-bottom:0.75rem;">${escapeHtml(g.pluginName)}</div>
+        ${g.fields.map(f => {
+          const id = pluginFieldId(g.pluginId, f.key);
+          const help = f.help ? `<span class="form-hint">${escapeHtml(f.help)}</span>` : '';
+          if (f.type === 'toggle') {
+            const v = rawCur(f.key);
+            // No stored value yet -> honour the field's declared default
+            // (a plugin toggle that should start ON must say so).
+            const checked = isUnset(v) ? !!f.default : (v === true || v === 'true');
+            return toggleRowHTML({
+              id,
+              checked,
+              title: escapeHtml(f.label || f.key),
+              description: f.help ? escapeHtml(f.help) : ''
+            });
+          }
+          if (f.type === 'select') {
+            const options = (f.options || []).map(o => (typeof o === 'string'
+              ? { value: o, label: o }
+              : { value: o.value, label: o.label ?? o.value }));
+            const selVal = cur(f.key) || (f.default != null ? String(f.default) : '');
+            return `
+              <div class="form-group">
+                <label class="form-label">${escapeHtml(f.label || f.key)}</label>
+                ${dropdownHTML({ id, options, value: String(selVal), placeholder: f.placeholder || 'Select...' })}
+                ${help}
+              </div>`;
+          }
+          if (f.type === 'textarea') {
+            return `
+              <div class="form-group">
+                <label class="form-label">${escapeHtml(f.label || f.key)}</label>
+                <textarea class="textarea" id="${escapeAttr(id)}" placeholder="${escapeAttr(f.placeholder || '')}">${escapeHtml(cur(f.key) || (f.default != null ? String(f.default) : ''))}</textarea>
+                ${help}
+              </div>`;
+          }
+          return `
+            <div class="form-group">
+              <label class="form-label">${escapeHtml(f.label || f.key)}</label>
+              <input class="input" id="${escapeAttr(id)}" value="${escapeAttr(cur(f.key) || (f.default != null ? String(f.default) : ''))}" placeholder="${escapeAttr(f.placeholder || '')}">
+              ${help}
+            </div>`;
+        }).join('')}
+      </div>
+    `;
+  }).join('');
+}
 
 export class CharactersView {
   static async render(container, onStartChat) {
@@ -122,6 +217,7 @@ export class CharactersView {
 
   static openCharacterModal(character = null, onSaved) {
     const isEdit = !!character;
+    const pluginFieldGroups = groupPluginCharacterFields();
     const charData = character || {
       name: '',
       tagline: '',
@@ -179,6 +275,8 @@ export class CharactersView {
           <label class="form-label">Tags (comma separated)</label>
           <input class="input" id="char-tags" value="${escapeAttr((charData.tags || []).join(', '))}" placeholder="Cyberpunk, Action, Sci-Fi">
         </div>
+
+        ${pluginFieldSectionsHTML(pluginFieldGroups, character)}
       </form>
     `;
 
@@ -230,6 +328,25 @@ export class CharactersView {
               tags: document.getElementById('char-tags').value.split(',').map(t => t.trim()).filter(Boolean)
             };
 
+            // Collect plugin-contributed fields into pluginData[pluginId][key],
+            // merging onto whatever other plugins already stored so nothing
+            // else's data is wiped. `updatedData` already spreads charData, so
+            // charData.pluginData carries through untouched for plugins with no
+            // field on this form.
+            if (pluginFieldGroups.length) {
+              const existing = (charData.pluginData && typeof charData.pluginData === 'object') ? charData.pluginData : {};
+              const pluginData = { ...existing };
+              for (const g of pluginFieldGroups) {
+                pluginData[g.pluginId] = { ...(existing[g.pluginId] || {}) };
+                for (const f of g.fields) {
+                  const el = document.getElementById(pluginFieldId(g.pluginId, f.key));
+                  if (!el) continue;
+                  pluginData[g.pluginId][f.key] = f.type === 'toggle' ? !!el.checked : el.value;
+                }
+              }
+              updatedData.pluginData = pluginData;
+            }
+
             await CharacterStore.save(updatedData);
             Toast.success('Character saved successfully.');
             Modal.close();
@@ -240,6 +357,14 @@ export class CharactersView {
     });
 
     wireAvatarPicker(overlay, 'char-avatar');
+
+    // Activate custom dropdowns for any plugin `select` fields (scoped to the
+    // modal overlay, same as wireAvatarPicker above).
+    for (const g of pluginFieldGroups) {
+      for (const f of g.fields) {
+        if (f.type === 'select') wireDropdown(overlay, pluginFieldId(g.pluginId, f.key));
+      }
+    }
   }
 }
 

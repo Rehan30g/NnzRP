@@ -6,6 +6,7 @@
   "scripts": {
     "start": "electron .",
     "build:exe": "electron-builder --win nsis zip portable --publish=never",
+    "build:plugin": "node scripts/build-plugin.mjs",
     "serve": "node serve.js"
   },
   "keywords": [
@@ -21,6 +22,7 @@
     "url": "https://github.com/Rehan30g/NnzRP.git"
   },
   "dependencies": {
+    "adm-zip": "^0.5.18",
     "electron-updater": "^6.3.9"
   },
   "devDependencies": {
@@ -48,6 +50,12 @@
       "css/**/*",
       "js/**/*",
       "src/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "plugins",
+        "to": "bundled-plugins"
+      }
     ],
     "win": {
       "target": [

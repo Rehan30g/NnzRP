@@ -9,6 +9,7 @@ import { PersonasView } from './ui/views/personasView.js';
 import { SettingsView } from './ui/views/settingsView.js';
 import { MCPView } from './ui/views/mcpView.js';
 import { MCPToolRegistry } from './services/mcpToolRegistry.js';
+import { pluginManager } from './plugins/pluginManager.js';
 import { CharacterStore } from './storage/characterStore.js';
 import { initTheme } from './ui/theme.js';
 import { Toast } from './ui/components/toast.js';
@@ -95,6 +96,7 @@ async function checkForAppUpdate() {
 class App {
   constructor() {
     this.currentView = null;
+    this.currentPluginRoute = null;
     this.activeCharacterId = null;
     this._titleRequestId = 0;
   }
@@ -116,6 +118,19 @@ class App {
     // before first paint; this only corrects a divergence (e.g. after a backup
     // restore, or if localStorage was cleared). Never blocks on network I/O.
     await initTheme().catch(err => console.warn('Theme init failed:', err.message));
+
+    // Electron-only plugin system: discover installed plugins and register the
+    // enabled ones' contributions (nav/settings/chat-drawer tabs, buttons,
+    // character fields). `isSupported()` is `!!window.electronAPI`, so on the
+    // PWA / plain browser / Android APK this is skipped entirely and every
+    // plugin surface stays absent. Must not block boot on a bad plugin.
+    if (pluginManager.isSupported()) {
+      try {
+        await pluginManager.init();
+      } catch (e) {
+        console.error('plugin init failed', e);
+      }
+    }
 
     // Warm up enabled MCP servers (populates the tool cache and, for stdio
     // servers, spawns their child process) so the first chat message doesn't
@@ -226,6 +241,12 @@ class App {
   parseHash() {
     const raw = window.location.hash.replace(/^#\/?/, '');
     if (!raw) return { view: 'characters', params: {} };
+    // Plugin route: `#plugin:<pluginId>:<tabId>` -> the pluginRoute passed on
+    // is everything after `plugin:` (i.e. `<pluginId>:<tabId>`), resolved by
+    // pluginManager.resolveNavRoute() at render time.
+    if (raw.startsWith('plugin:')) {
+      return { view: 'plugin', params: { pluginRoute: raw.slice('plugin:'.length) } };
+    }
     const [view, ...rest] = raw.split('/');
     if (view === 'chat' && rest[0]) {
       let characterId = rest[0];
@@ -250,7 +271,11 @@ class App {
   updateHash(viewName, params) {
     const target = viewName === 'chat' && params.characterId
       ? `#chat/${encodeURIComponent(params.characterId)}`
-      : (viewName === 'settings' && params.tab ? `#settings/${params.tab}` : `#${viewName}`);
+      : viewName === 'settings' && params.tab
+        ? `#settings/${params.tab}`
+        : viewName === 'plugin' && params.pluginRoute
+          ? `#plugin:${params.pluginRoute}`
+          : `#${viewName}`;
     if (window.location.hash !== target) {
       window.location.hash = target;
     }
@@ -278,6 +303,11 @@ class App {
       } catch {
         /* fall back to the generic "Roleplay Chat" label */
       }
+    }
+
+    if (viewName === 'plugin') {
+      const route = params.pluginRoute ? pluginManager.resolveNavRoute(params.pluginRoute) : null;
+      context = (route && route.label) ? route.label : 'Plugin';
     }
 
     if (requestId !== this._titleRequestId) return; // superseded by a newer navigation
@@ -312,6 +342,7 @@ class App {
     // Proxies tab rather than silently no-op.
     const sameView = this.currentView === viewName
       && (viewName !== 'chat' || this.activeCharacterId === targetCharId)
+      && (viewName !== 'plugin' || this.currentPluginRoute === params.pluginRoute)
       && !params.tab;
     if (sameView) {
       // Defensive: a swipe should never commit onto the tab it started from,
@@ -332,14 +363,22 @@ class App {
     ChatView.teardown();
 
     this.currentView = viewName;
+    this.currentPluginRoute = viewName === 'plugin' ? (params.pluginRoute || null) : null;
     if (params.characterId) {
       this.activeCharacterId = params.characterId;
     }
-    this.updateHash(viewName, params.characterId ? params : { characterId: this.activeCharacterId });
+    const hashParams = params.characterId ? params
+      : viewName === 'plugin' ? params
+      : { characterId: this.activeCharacterId };
+    this.updateHash(viewName, hashParams);
 
     // Window/titlebar text follows the route. Fire-and-forget: it needs an async
     // character lookup for the chat route, and nothing below depends on it.
     this.applyWindowTitle(viewName, params);
+
+    // Let enabled plugins react to route changes (Electron-only; emit() is a
+    // safe no-op when unsupported and never throws).
+    pluginManager.emit('navigate', { view: viewName, params });
 
     const sidebarContainer = document.getElementById('app-sidebar');
     const headerContainer = document.getElementById('main-header');
@@ -450,6 +489,18 @@ class App {
 
       case 'mcp':
         return MCPView.render(container);
+
+      case 'plugin': {
+        const route = pluginManager.resolveNavRoute(params.pluginRoute);
+        if (route && typeof route.render === 'function') {
+          container.innerHTML = '';
+          return route.render(container);
+        }
+        // Unknown/removed plugin route - fall back to the character library.
+        return CharactersView.render(container, (charId) => {
+          this.navigate('chat', { characterId: charId });
+        });
+      }
 
       default:
         return CharactersView.render(container, (charId) => {

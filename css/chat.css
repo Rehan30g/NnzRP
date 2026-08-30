@@ -1582,7 +1582,34 @@
      the chat-model-select pill rules / .btn-send-icon above) - only the
      sizing deltas below are mobile-specific: a slightly tighter
      radius/padding than desktop's wider box. */
-  .chat-input-wrapper {
+/* Drag-and-drop image attach overlay (chatView.js) - covers the whole chat
+   view while a file drag is in progress; pointer-events:none so the drop
+   always lands on .chat-layout's own handler underneath. */
+.chat-drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--accent-primary-soft) 55%, transparent);
+  border: 2px dashed var(--accent-primary);
+  border-radius: var(--radius-lg);
+  pointer-events: none;
+}
+
+.chat-drop-overlay-pill {
+  padding: 0.7rem 1.4rem;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-full);
+  box-shadow: var(--shadow-md);
+  color: var(--text-main);
+  font-size: 0.94rem;
+  font-weight: 600;
+}
+
+.chat-input-wrapper {
     padding: 0.75rem 1rem;
     border-radius: 1.5rem;
   }
