@@ -59,8 +59,8 @@ Any co-located server implementing that contract works; it does not have to be
 | Play automatically | on | Play the voice as soon as a character reply finishes. |
 | Play sentence by sentence | on | Read the reply in sentence batches (up to ~600 chars/request), each `/tts` response streamed straight into gapless playback while the next batch synthesises. First audio comes out almost instantly. Turn off to synthesise the whole reply as one request (still streamed). |
 | Read while the response is still streaming | on | Start reading each sentence — or, in dialogue mode, each quote — as soon as it is finished, without waiting for the full reply. Needs "Play automatically" + "Play sentence by sentence" on. Turn off to go back to the old behaviour (read only after the reply is done). |
-| Read mode | `Whole reply text` | `Whole reply text` or `Only dialogue inside quotes` (falls back to the whole reply when it contains no quotes). Fenced code blocks (<code>```&nbsp;...&nbsp;```</code>) are stripped and never read in either mode. Dialogue mode is read live while streaming too — each quote is spoken the moment its closing `"` arrives. |
-| Dialogue mode: also read narration outside the quotes | off | Only applies when Read mode is `Only dialogue inside quotes`. Off: read just the quoted dialogue. On: read the whole reply, narration included. |
+| Read mode | `Whole reply text` | `Whole reply text` or `Only dialogue inside quotes`. In dialogue mode a reply with no `"..."` quotes is skipped (silent) unless "also read narration" is on. Fenced code blocks (<code>```&nbsp;...&nbsp;```</code>) are stripped and never read in either mode. Dialogue mode is read live while streaming too — each quote is spoken the moment its closing `"` arrives. |
+| Dialogue mode: also read narration outside the quotes | off | Only applies when Read mode is `Only dialogue inside quotes`. Off: read **only** the quoted dialogue — narration / `**bold**` action text is not read, a quote-less reply stays silent. On: read the whole reply, narration included. |
 | Stop audio when a new reply arrives | on | Stop the old playback before the new one starts. |
 | Default voice | `alba` | Used when a character has not picked a voice. |
 | **Enable multi-voice** *(experimental)* | off | Detect `Name:` speaker prefixes and give each speaker their own voice — see below. |
@@ -174,10 +174,11 @@ the per-language defaults; the rest are English.
 2. Take the text from `message.content`. Fenced code blocks (<code>```&nbsp;...&nbsp;```</code>)
    are removed first in every mode — a closed block is dropped, an unclosed
    trailing fence hides everything after it. `dialogue` mode (with "read
-   narration" off) then joins every span between quotes (straight & curly) with
-   newlines, strips markdown markers (`* _ ~ \` # >`) per span, and caps at
-   `MAX_TTS_CHARS`; with "read narration" on, or when the reply has no quotes at
-   all, it reads the whole reply like `full` mode. `full` mode strips markdown,
+   narration" **off**) then joins every span between quotes (straight & curly)
+   with newlines, strips markdown markers (`* _ ~ \` # >`) per span, and caps at
+   `MAX_TTS_CHARS` — narration and `**bold**` action text are **not** read, and a
+   reply with no quotes is left **silent**. Turn "read narration" **on** to read
+   the whole reply like `full` mode instead. `full` mode strips markdown,
    collapses whitespace, drops `---` lines, and caps at `MAX_TTS_CHARS`.
 3. If **Play sentence by sentence** is on: `splitIntoChunks()` splits into
    sentences (soft cap ~280 chars, very short fragments merged), enqueued onto
@@ -215,9 +216,8 @@ is not muted — the plugin starts reading each sentence **as soon as the model
 finishes typing it**, without waiting for the full reply. This works in dialogue
 mode too: `extractStreamText()` there yields only the text of quotes that have
 already been **closed**, which still grows monotonically, so each quote is read
-one chunk after its closing `"` lands. A reply that turns out to contain no
-quotes at all falls back to a whole-message `speak()` on completion instead of
-staying silent.
+one chunk after its closing `"` lands. In dialogue mode with "read narration"
+off, a reply with no quotes at all is left **silent** — narration is never read.
 
 - **Data source**: `chatView.js` emits `assistant-message-chunk`
   `{ chatId, character, messageId, fullText }` from inside its streaming renderer,

@@ -1,7 +1,7 @@
 {
   "id": "com.nnzrp.pocket-tts",
   "name": "Pocket TTS Voice",
-  "version": "1.10.0",
+  "version": "1.10.1",
   "description": "Reads every character reply aloud through a Pocket TTS server with gapless realtime streaming playback. Skips fenced code blocks, can read only the dialogue inside quotes, and has an experimental multi-voice mode that auto-detects \"Name:\" speakers and gives each their own voice. The server runs separately; this plugin is a pure HTTP client.",
   "author": "NnzRP",
   "engineApi": "1.0",

@@ -649,9 +649,11 @@ function extractText(message) {
   const raw = (message && typeof message.content === 'string') ? message.content : '';
   if (!raw) return '';
   if (cfg.readMode === 'dialogue' && !cfg.dialoguePlainText) {
-    const dialogue = extractDialogue(raw);
-    if (dialogue) return capText(dialogue);
-    // no quotes at all — fall back to reading the whole reply
+    // Strictly quotes-only. A reply with no "..." dialogue is left SILENT -
+    // the "also read narration outside the quotes" toggle is OFF, so narration
+    // (incl. **bold** action text) must never be read. It used to fall back to
+    // reading the whole reply here; that was the reported bug.
+    return capText(extractDialogue(raw));
   }
   return extractFullText(raw);
 }
@@ -868,9 +870,9 @@ function splitBySpeaker(text, initialSpeaker) {
 // The active read-mode transform for one already-code-stripped segment.
 function applyReadMode(text) {
   if (cfg.readMode === 'dialogue' && !cfg.dialoguePlainText) {
-    const d = extractDialogue(text);
-    if (d) return capText(d);
-    return capText(stripMarkdown(text));   // no quotes in this segment -> read it whole
+    // Quotes-only: a segment with no "..." dialogue contributes nothing
+    // (narration stays silent while the "also read narration" toggle is OFF).
+    return capText(extractDialogue(text));
   }
   return capText(stripMarkdown(text));
 }
@@ -1681,8 +1683,8 @@ function buildSettingsSchema() {
           { key: 'autoplay', type: 'toggle', label: 'Play automatically when a character reply finishes', default: DEFAULTS.autoplay, help: 'When off, voice only plays via the button on each message.' },
           { key: 'streamChunks', type: 'toggle', label: 'Play sentence by sentence (start sooner)', default: DEFAULTS.streamChunks, help: 'The reply is read in sentence batches and each /tts response is streamed straight into playback, gaplessly. Turn off to synthesise the whole reply as one request.' },
           { key: 'speakWhileStreaming', type: 'toggle', label: 'Read while the response is still streaming', default: DEFAULTS.speakWhileStreaming, help: 'Start reading each sentence (or each closed quote, in dialogue mode) as soon as it is finished, without waiting for the whole reply. Needs "Play automatically" + "Play sentence by sentence" on.' },
-          { key: 'readMode', type: 'select', label: 'Read mode', default: DEFAULTS.readMode, options: [{ value: 'full', label: 'Whole reply text' }, { value: 'dialogue', label: 'Only dialogue inside quotes' }], help: 'Fenced code blocks (``` ... ```) are never read aloud in either mode. Dialogue mode falls back to the whole reply when it contains no quotes.' },
-          { key: 'dialoguePlainText', type: 'toggle', label: 'Dialogue mode: also read narration outside the quotes', default: DEFAULTS.dialoguePlainText, help: 'Only applies when Read mode is "Only dialogue inside quotes". Off (default): read just the quoted dialogue. On: read the whole reply, narration included.' },
+          { key: 'readMode', type: 'select', label: 'Read mode', default: DEFAULTS.readMode, options: [{ value: 'full', label: 'Whole reply text' }, { value: 'dialogue', label: 'Only dialogue inside quotes' }], help: 'Fenced code blocks (``` ... ```) are never read aloud in either mode. In dialogue mode, a reply with no "..." quotes is skipped (silent) unless you turn on "also read narration" below.' },
+          { key: 'dialoguePlainText', type: 'toggle', label: 'Dialogue mode: also read narration outside the quotes', default: DEFAULTS.dialoguePlainText, help: 'Only applies when Read mode is "Only dialogue inside quotes". Off (default): read ONLY the quoted dialogue — narration and **bold** action text are not read, and a reply with no quotes stays silent. On: read the whole reply, narration included.' },
           { key: 'stopOnNew', type: 'toggle', label: 'Stop the currently playing audio when a new reply arrives', default: DEFAULTS.stopOnNew },
           { key: 'defaultVoice', type: 'select', label: 'Default voice', default: DEFAULTS.defaultVoice, options: BUILTIN_VOICES.map((v) => ({ value: v, label: v })), help: BUILTIN_VOICES.length + ' built-in Pocket TTS voices. Used when a character has not picked its own.' }
         ]
@@ -2029,17 +2031,16 @@ export async function activate(pluginHost) {
 
           const finalFull = extractStreamText((message && message.content) || '');
 
-          // Dialogue mode, narration off, but the finished reply had NO quotes
-          // at all — nothing was ever queued. Match the non-streaming fallback
-          // (extractText reads the whole reply when there are no quotes) instead
-          // of leaving the turn silent. Safe from double-audio: nothing played.
+          // Dialogue mode, narration off, and the finished reply had NO quotes
+          // at all — nothing to read. The "also read narration outside the
+          // quotes" toggle is OFF, so we deliberately stay SILENT rather than
+          // fall back to reading the whole reply (that fallback was the
+          // reported "still reads the **narration**" bug).
           if (!finalFull && streamSpokenLen === 0 && !streamBlobs.length
               && cfg.readMode === 'dialogue' && !cfg.dialoguePlainText) {
             streamActive = false;
             streamTurnEnded = true;
             endPlayback();
-            const ch = await freshCharacter(character);
-            if (cfg.autoplay && voiceEnabledFor(ch)) await speak(message, ch);
             return;
           }
 
