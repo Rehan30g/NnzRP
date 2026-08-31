@@ -21,7 +21,8 @@ export const APP_CONFIG = {
     reasoningEffort: 'off',
     reasoningMaxTokens: 2048,
     mcpMaxToolIterations: 6,
-    showContextGaugeInChat: false
+    showContextGaugeInChat: false,
+    includeToolHistory: true
   },
   DEFAULT_GLOBAL_SYSTEM_PROMPT: `# ROLEPLAY ENGINE — SYSTEM INSTRUCTIONS
 

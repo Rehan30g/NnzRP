@@ -2,6 +2,45 @@
 import { LorebookEngine } from './lorebookEngine.js';
 import { replaceMacros } from '../utils/macroReplacer.js';
 
+// Token-lean caps for the past-tool-call recap folded into history (see
+// buildToolHistoryNote). The full raw tool output still lives on the stored
+// message for the UI - only this trimmed copy ever re-enters the model's
+// context on later turns.
+const TOOL_HISTORY_ARGS_CHARS = 180;
+const TOOL_HISTORY_RESULT_CHARS = 300;
+const TOOL_HISTORY_MAX_CALLS = 8;   // per assistant message
+
+function clip(str, max) {
+  const s = String(str == null ? '' : str).replace(/\s+/g, ' ').trim();
+  return s.length > max ? s.slice(0, max).trim() + '…' : s;
+}
+
+// One compact line per past tool call: `name(args) -> result`, heavily
+// truncated. Declined/blocked calls show why instead of a result. Returns ''
+// when there is nothing worth adding, so callers can append unconditionally.
+function buildToolHistoryNote(toolTrace) {
+  if (!Array.isArray(toolTrace) || !toolTrace.length) return '';
+  const lines = [];
+  for (const t of toolTrace.slice(0, TOOL_HISTORY_MAX_CALLS)) {
+    if (!t || !t.name) continue;
+    let args = '';
+    try {
+      args = typeof t.args === 'string' ? t.args : JSON.stringify(t.args ?? {});
+    } catch (e) {
+      args = String(t.args ?? '');
+    }
+    let outcome;
+    if (t.declined) outcome = '(declined by user)';
+    else if (t.blocked) outcome = '(blocked: repeated call)';
+    else outcome = clip(t.result, TOOL_HISTORY_RESULT_CHARS) || '(no output)';
+    lines.push(`- ${t.name}(${clip(args, TOOL_HISTORY_ARGS_CHARS)}) -> ${outcome}`);
+  }
+  if (toolTrace.length > TOOL_HISTORY_MAX_CALLS) {
+    lines.push(`- (+${toolTrace.length - TOOL_HISTORY_MAX_CALLS} more tool call(s))`);
+  }
+  return lines.length ? `\n\n[Tools you used in this reply]\n${lines.join('\n')}` : '';
+}
+
 export class PromptBuilder {
   /**
    * Assembles final prompt payload messages for AI completions
@@ -13,6 +52,11 @@ export class PromptBuilder {
     const globalSystemPrompt = options.globalSystemPrompt || '';
     const messages = options.messages || [];
     const tools = options.tools || [];
+    // Default ON: fold a heavily-truncated recap of each past assistant
+    // message's tool calls back into that message's content, so the character
+    // still "knows" what it looked up on earlier turns without re-sending the
+    // full raw tool results. Only `false` disables it.
+    const includeToolHistory = options.includeToolHistory !== false;
 
     const userName = persona?.name || 'User';
     const charName = character?.name || 'Character';
@@ -93,6 +137,13 @@ export class PromptBuilder {
         role: msg.role === 'user' ? 'user' : 'assistant',
         content: replaceMacros(msg.content, userName, charName)
       };
+      // Compact past-tool-call recap, appended to the assistant turn that made
+      // the calls. `msg.toolTrace` already mirrors the ACTIVE swipe variation,
+      // so swiping restores the right recap for free.
+      if (includeToolHistory && entry.role === 'assistant' && Array.isArray(msg.toolTrace) && msg.toolTrace.length) {
+        const note = buildToolHistoryNote(msg.toolTrace);
+        if (note) entry.content = (entry.content || '') + note;
+      }
       // Only a user message can carry image attachments (composer upload) -
       // passed through as-is (already base64 data: URLs, nothing to macro-
       // replace) for providerManager.js's translators to turn into each

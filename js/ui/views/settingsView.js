@@ -343,6 +343,14 @@ export class SettingsView {
                   description: 'Automatically summarizes older turns into a short continuity summary before generating once the context window is nearly full. Stored chat history is never modified.'
                 })}
               </div>
+              <div style="border-top:1px solid var(--border-light); padding-top:1.1rem;">
+                ${toggleRowHTML({
+                  id: 'setting-tool-history-enabled',
+                  checked: settings.includeToolHistory !== false,
+                  title: 'Remember Tool Calls Across Turns',
+                  description: 'Folds a heavily truncated recap (tool name, args, short result) of each past reply\'s tool calls back into context, so the character stays aware of what it looked up earlier. Full raw results are never re-sent — kept token-light on purpose.'
+                })}
+              </div>
             </div>
           </div>
 
@@ -854,6 +862,7 @@ export class SettingsView {
         prefillEnabled: container.querySelector('#setting-prefill-enabled').checked,
         prefillText: container.querySelector('#setting-prefill-text').value,
         autoCompactEnabled: container.querySelector('#setting-autocompact-enabled').checked,
+        includeToolHistory: container.querySelector('#setting-tool-history-enabled').checked,
         fontSize: selectedFontSize
       };
 
