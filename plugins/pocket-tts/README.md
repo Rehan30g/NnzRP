@@ -63,7 +63,10 @@ Any co-located server implementing that contract works; it does not have to be
 | Dialogue mode: also read narration outside the quotes | off | Only applies when Read mode is `Only dialogue inside quotes`. Off: read just the quoted dialogue. On: read the whole reply, narration included. |
 | Stop audio when a new reply arrives | on | Stop the old playback before the new one starts. |
 | Default voice | `alba` | Used when a character has not picked a voice. |
+| **Enable multi-voice** *(experimental)* | off | Detect `Name:` speaker prefixes and give each speaker their own voice — see below. |
+| **Narrator / unattributed voice** | *(character's own)* | Voice for text with no `Name:` prefix when multi-voice is on. |
 | Voice clone | - | **Upload .wav** button — the file is stored in the plugin data directory (`plugin-data/com.nnzrp.pocket-tts/<slug>.wav`) and then appears as a `Clone: ...` option in the per-character voice dropdown. Each entry has a Delete button. |
+| Speaker voices *(multi-voice)* | - | One row per auto-detected speaker: name + a voice picker (Auto / built-in / clone) + remove. Plus an "add manually" box and "clear all". |
 | Test connection | - | `GET /health`, green (healthy) / red (not connected). |
 
 Every change is saved immediately (`host.storage`, namespaced to the plugin).
@@ -257,6 +260,45 @@ staying silent.
   there are no chunks), `streamActive` stays `false` and
   `assistant-message-complete` runs `speak()` as usual — the old behaviour is
   unchanged.
+
+## Multi-voice (experimental)
+
+Turn on **Enable multi-voice** in the Voice tab. When on, a reply written as a
+script gets **one voice per speaker**:
+
+```
+The warehouse was empty when they arrived.
+
+Mr. Wolf: "...you delete your copy. Deal?"
+
+Alice: "And if I say no?"
+```
+
+→ narration in the narrator voice, `Mr. Wolf`'s line in his voice, `Alice`'s in
+hers.
+
+- **Speaker detection**: a `Name:` prefix at the **start of a line**, where the
+  name is 1–4 Title-Case (or ALL-CAPS) words, optionally wrapped in `**bold**`,
+  and the `:` is followed by a quote or a letter. `Mr. Wolf:`, `ALICE:`,
+  `**The Narrator:**` all match; prose colons like `Here's the thing:` and URLs
+  (`https://…`) do not. A speaker's turn runs until the next `Name:` line or a
+  **blank line** (which reverts to narration — one paragraph per turn).
+- **Auto-detected roster**: every speaker seen is saved to a persisted roster
+  (`host.storage` key `speakers`) and listed in the Voice tab. It survives across
+  sessions; **Clear all speakers** wipes it.
+- **Voice assignment**, in order: an explicit pin in the **Speaker voices** list
+  (`host.storage` key `voiceMap`, keyed by the normalised name — `mr wolf`) →
+  otherwise a **stable auto voice** (the name hashed into the 26 built-ins, so
+  the same speaker always sounds the same even before you pin them). You can also
+  **add a speaker by hand** before it appears.
+- **Narration** (no `Name:` prefix) uses the **Narrator / unattributed voice**
+  setting, or the character's own voice when that is left blank.
+- Works both for whole-message playback (`speakMultiVoice()`) and **live while
+  streaming** (`enqueueMultiVoiceStream()`): whole lines are read as they land,
+  and a partial trailing line is held back until its `Name:` prefix has fully
+  arrived so a name is never cut across chunks. Read mode (whole / dialogue-only)
+  and the replay cache both apply per segment. Off = byte-for-byte the old
+  single-voice behaviour.
 
 ## Build
 

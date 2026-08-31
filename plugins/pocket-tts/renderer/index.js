@@ -37,6 +37,14 @@
 //     now also works while the reply is still streaming — each quote is spoken
 //     the moment its closing " arrives — and has a toggle for whether to also
 //     read the narration outside the quotes (cfg.dialoguePlainText).
+//  7. Multi-voice (experimental, cfg.multiVoiceEnabled, default OFF): a reply
+//     written as a script — `Mr. Wolf: "..."` / `Alice: "..."` lines — is split
+//     into per-speaker segments, each spoken in that speaker's own voice.
+//     Speakers are auto-collected into a persisted roster during the
+//     conversation; the Voice tab pins a voice per speaker (or adds one by
+//     hand). Unpinned speakers get a stable name-hashed built-in voice.
+//     Narration (no "Name:" prefix) uses cfg.narratorVoice or the character's
+//     own voice. Works for whole-message playback AND live while streaming.
 //
 // Host API version targeted: 1.0
 
@@ -80,7 +88,11 @@ const DEFAULTS = {
   stopOnNew: true,
   streamChunks: true,    // split into sentences and pipeline synth/playback
   speakWhileStreaming: true, // start reading each sentence while the reply is still streaming in
-  defaultVoice: 'alba'
+  defaultVoice: 'alba',
+  // ----- multi-voice (experimental) -----
+  multiVoiceEnabled: false,  // detect "Name:" speaker prefixes -> one voice per speaker
+  narratorVoice: '',         // voice for text with no "Name:" prefix ('' = the character's own voice)
+  voiceMap: {}               // { speakerKey -> voiceValue } explicit pins (voiceValue like a character voiceId)
 };
 
 let host = null;
@@ -143,6 +155,19 @@ let streamSpokenLen = 0;
 let streamVoiceDesc = null;
 let streamBlobs = [];
 let streamEpoch = 0;
+// Multi-voice streaming: the fresh character snapshot for this turn, and the
+// speaker that was "in effect" at the current streamSpokenLen offset (so a
+// chunk that continues a speaker's paragraph mid-line keeps their voice).
+let streamChar = null;
+let streamSpeaker = null;
+
+// ----- multi-voice speaker roster (auto-detected during the conversation) -----
+// [{ key, name, count, firstSeen, lastSeen }], persisted to host.storage
+// 'speakers'. `voiceMap` (in cfg) holds the explicit voice pins keyed the same.
+let speakers = [];
+let speakersSaveTimer = null;
+// Ref to the live settings custom slot so a brand-new speaker can refresh it.
+let lastCustomSlot = null;
 
 // Plugin-owned "Stop voice" button. chatView renders composer buttons exactly
 // once (no live refresh), so a registerComposerButton toggle could never be
@@ -171,6 +196,12 @@ function normalizeCfg(raw) {
   out.readMode = out.readMode === 'dialogue' ? 'dialogue' : 'full';
   out.dialoguePlainText = out.dialoguePlainText === true;
   if (typeof out.defaultVoice !== 'string' || !out.defaultVoice.trim()) out.defaultVoice = DEFAULTS.defaultVoice;
+  out.multiVoiceEnabled = out.multiVoiceEnabled === true;
+  out.narratorVoice = typeof out.narratorVoice === 'string' ? out.narratorVoice.trim() : '';
+  // Always a FRESH object — DEFAULTS.voiceMap is a shared reference and must
+  // never be mutated in place.
+  out.voiceMap = (out.voiceMap && typeof out.voiceMap === 'object' && !Array.isArray(out.voiceMap))
+    ? { ...out.voiceMap } : {};
   return out;
 }
 
@@ -764,6 +795,242 @@ function cacheSignature(voiceDesc, text) {
   ].join('|');
 }
 
+// ---------------------------------------------------------------- multi-voice
+//
+// Experimental: a reply written as a script — `Mr. Wolf: "..."` / `Alice: "..."`
+// lines — is split into per-speaker segments, each spoken in that speaker's own
+// voice. Speakers are auto-collected into a persisted roster during the
+// conversation; the Voice settings tab lets you pin a voice per speaker or add
+// one by hand. An unpinned speaker gets a stable auto voice (name hashed into
+// the built-in pool). Text with no `Name:` prefix is "narration" and uses the
+// narratorVoice (or the character's own voice when that is blank).
+
+// A "Name:" speaker prefix at the START of a line. Deliberately strict to avoid
+// matching prose colons ("Here's the thing: ..."): every word must be
+// Title-Case or ALL-CAPS, 1-4 words, first word >= 2 chars, optional wrapping
+// **bold**/_italics_, and the ":" must be followed by a quote / letter / digit
+// (never "://" or "::"). Group 1 = the speaker name.
+const SPEAKER_PREFIX_RE =
+  /^[>\s]*(?:\*\*|\*|__|_)?\s*([\p{Lu}][\p{L}\p{M}.'’\-]+(?:[ \t][\p{Lu}][\p{L}\p{M}.'’\-]*){0,3})\s*(?:\*\*|\*|__|_)?\s*:\s*(?:\*\*|\*|__|_)?[ \t]*(?=["“”'‘’(*_]|\p{L}|\p{N})(?![:/])/u;
+
+// Same name shape as above but WITHOUT the trailing ": <dialogue>" — matches a
+// speaker name still being typed (`Mr. Wo`, `Mr. Wolf`, `Mr. Wolf:`). Used by
+// the streaming path to hold back a partial line that might still become a
+// "Name:" prefix, so a name is never cut in half across chunks.
+const SPEAKER_NAME_PARTIAL_RE =
+  /^[>\s]*(?:\*\*|\*|__|_)?\s*\p{Lu}[\p{L}\p{M}.'’\-]*(?:[ \t][\p{Lu}][\p{L}\p{M}.'’\-]*){0,3}\s*(?:\*\*|\*|__|_)?\s*:?\s*$/u;
+
+// Canonical key for a speaker name: lowercase, periods dropped, spaces
+// collapsed — so "Mr. Wolf", "Mr Wolf" and "MR. WOLF" all map to one entry.
+function speakerKey(name) {
+  return String(name || '')
+    .replace(/[*_]/g, '')
+    .replace(/\./g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+// Ordered speaker segments. Returns { segments: [{ speaker, text }], endSpeaker }.
+// Rules: a "Name:" line starts that speaker's turn; a BLANK line ends the
+// current speaker's turn and reverts to narration (script-format convention —
+// a turn is one paragraph); a leading run before any "Name:" line (or a whole
+// reply with none) is narration (speaker=null). `initialSpeaker` seeds the
+// state so the streaming path can continue a speaker across chunk boundaries;
+// `endSpeaker` is the state to carry into the next chunk.
+function splitBySpeaker(text, initialSpeaker) {
+  const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n');
+  const segments = [];
+  let cur = initialSpeaker || null;
+  let buf = [];
+  const flush = () => {
+    const t = buf.join('\n').trim();
+    if (t) segments.push({ speaker: cur, text: t });
+    buf = [];
+  };
+  for (const line of lines) {
+    const m = line.match(SPEAKER_PREFIX_RE);
+    if (m) {
+      flush();
+      cur = m[1].replace(/[*_]/g, '').trim().replace(/[.:\s]+$/, '');
+      buf.push(line.slice(m[0].length));
+    } else if (cur && line.trim() === '') {
+      flush();
+      cur = null;
+    } else {
+      buf.push(line);
+    }
+  }
+  flush();
+  return { segments, endSpeaker: cur };
+}
+
+// The active read-mode transform for one already-code-stripped segment.
+function applyReadMode(text) {
+  if (cfg.readMode === 'dialogue' && !cfg.dialoguePlainText) {
+    const d = extractDialogue(text);
+    if (d) return capText(d);
+    return capText(stripMarkdown(text));   // no quotes in this segment -> read it whole
+  }
+  return capText(stripMarkdown(text));
+}
+
+// A voiceValue string (''=default, a built-in name, an http/hf URL, or
+// 'clone:<slug>') -> the { kind, ... } descriptor the fetch layer wants.
+function voiceValueToDescriptor(v) {
+  const s = typeof v === 'string' ? v.trim() : '';
+  if (!s) return { kind: 'default' };
+  if (isRemoteVoiceUrl(s)) return { kind: 'url', url: s };
+  if (s.startsWith('clone:')) {
+    const slug = s.slice(6).trim();
+    if (slug && clones.some((c) => c.slug === slug)) return { kind: 'clone', slug };
+    return { kind: 'default' };
+  }
+  return { kind: 'builtin', name: s };
+}
+
+// Stable auto voice for an unpinned speaker: hash the key into the built-in pool.
+function autoVoiceFor(key) {
+  const n = parseInt(textHash(String(key || '')), 36);
+  const idx = (Number.isFinite(n) ? n : 0) % BUILTIN_VOICES.length;
+  return BUILTIN_VOICES[idx];
+}
+
+function voiceForSpeaker(speaker, character) {
+  if (!speaker) {
+    return cfg.narratorVoice ? voiceValueToDescriptor(cfg.narratorVoice) : resolveVoice(character);
+  }
+  const key = speakerKey(speaker);
+  const pinned = cfg.voiceMap && cfg.voiceMap[key];
+  if (pinned) return voiceValueToDescriptor(pinned);
+  return { kind: 'builtin', name: autoVoiceFor(key) };
+}
+
+// Whole message -> [{ speaker, text, voiceDesc }] ready to chunk + enqueue.
+// Also feeds every seen speaker into the roster.
+function buildSpeechUnits(rawContent, character) {
+  const raw = (typeof rawContent === 'string') ? rawContent : '';
+  if (!raw) return [];
+  const { segments } = splitBySpeaker(stripCodeBlocks(raw), null);
+  const units = [];
+  let total = 0;
+  for (const seg of segments) {
+    if (seg.speaker) noteSpeaker(seg.speaker);
+    let t = applyReadMode(seg.text);
+    if (!t) continue;
+    if (total + t.length > MAX_TTS_CHARS) t = t.slice(0, Math.max(0, MAX_TTS_CHARS - total)).trim();
+    if (!t) break;
+    total += t.length;
+    units.push({ speaker: seg.speaker || null, text: t, voiceDesc: voiceForSpeaker(seg.speaker, character) });
+  }
+  return units;
+}
+
+// Replay-cache signature for a multi-voice message: every unit's voice + text.
+function speechSignature(units) {
+  return [
+    'mv1',
+    cfg.readMode,
+    (cfg.readMode === 'dialogue' && cfg.dialoguePlainText) ? 'dp1' : 'dp0',
+    cfg.streamChunks ? 's1' : 's0',
+    (units || []).map((u) => voiceDescKey(u.voiceDesc) + ':' + u.text.length + '.' + textHash(u.text)).join('|')
+  ].join('~');
+}
+
+// Streaming: enqueue `text` (a just-completed slice) as multi-voice units,
+// continuing whatever speaker was last in effect. Updates streamSpeaker.
+function enqueueMultiVoiceStream(text, character) {
+  const { segments, endSpeaker } = splitBySpeaker(text, streamSpeaker);
+  for (const seg of segments) {
+    if (seg.speaker) noteSpeaker(seg.speaker);
+    const t = applyReadMode(seg.text);
+    if (!t) continue;
+    const vd = voiceForSpeaker(seg.speaker, character);
+    for (const c of splitIntoChunks(t)) {
+      enqueueUtterance(c, vd, streamTurnId, { epoch: streamEpoch, bag: streamBlobs });
+    }
+  }
+  streamSpeaker = endSpeaker;
+}
+
+// ---------------------------------------------------------------- speaker roster
+
+async function loadSpeakers() {
+  try {
+    const v = await host.storage.get('speakers');
+    speakers = Array.isArray(v)
+      ? v.filter((s) => s && typeof s.key === 'string' && s.key && typeof s.name === 'string')
+      : [];
+  } catch (e) {
+    speakers = [];
+    if (host) host.log('failed to read speakers', e);
+  }
+  return speakers;
+}
+
+function scheduleSpeakersSave() {
+  if (speakersSaveTimer) return;
+  speakersSaveTimer = setTimeout(() => { speakersSaveTimer = null; saveSpeakersNow(); }, 1200);
+}
+
+async function saveSpeakersNow() {
+  try {
+    await host.storage.set('speakers', speakers.map((s) => ({
+      key: s.key,
+      name: s.name,
+      count: s.count || 1,
+      firstSeen: s.firstSeen || Date.now(),
+      lastSeen: s.lastSeen || Date.now()
+    })));
+  } catch (e) {
+    if (host) host.log('failed to save speakers', e);
+  }
+}
+
+function noteSpeaker(name) {
+  const key = speakerKey(name);
+  if (!key || key.length > 60) return;
+  const s = speakers.find((x) => x.key === key);
+  if (s) {
+    s.count = (s.count || 0) + 1;
+    s.lastSeen = Date.now();
+  } else {
+    speakers.push({ key, name: String(name).trim().slice(0, 60), count: 1, firstSeen: Date.now(), lastSeen: Date.now() });
+    refreshCustomSlotIfOpen();
+  }
+  scheduleSpeakersSave();
+}
+
+async function setSpeakerVoice(key, val) {
+  const next = { ...(cfg.voiceMap || {}) };
+  if (val) next[key] = val; else delete next[key];
+  cfg.voiceMap = next;
+  try { await host.storage.set('voiceMap', next); } catch (e) { host.log('save voiceMap failed', e); }
+}
+
+async function removeSpeaker(key) {
+  speakers = speakers.filter((s) => s.key !== key);
+  const next = { ...(cfg.voiceMap || {}) };
+  delete next[key];
+  cfg.voiceMap = next;
+  scheduleSpeakersSave();
+  try { await host.storage.set('voiceMap', next); } catch (e) { /* ignore */ }
+}
+
+async function clearSpeakers() {
+  speakers = [];
+  cfg.voiceMap = {};
+  scheduleSpeakersSave();
+  try { await host.storage.set('voiceMap', {}); } catch (e) { /* ignore */ }
+}
+
+function refreshCustomSlotIfOpen() {
+  const s = lastCustomSlot;
+  if (s && s.speakerEl && s.speakerEl.isConnected) {
+    try { renderSpeakerVoices(s.speakerEl, s.ctx); } catch (e) { /* ignore */ }
+  }
+}
+
 function cacheTotalBytes() {
   let t = 0;
   for (const v of audioCache.values()) t += v.bytes || 0;
@@ -1123,11 +1390,56 @@ async function runConsumer() {
 
 // ---------------------------------------------------------------- speak
 
+// Multi-voice twin of speak(): one whole message, split into per-speaker units,
+// each unit's chunks enqueued with that speaker's own voice. Kept a separate
+// function so the single-voice path below is byte-for-byte unchanged.
+async function speakMultiVoice(message, character) {
+  const raw = (message && typeof message.content === 'string') ? message.content : '';
+  const units = buildSpeechUnits(raw, character);
+  if (!units.length) return;
+
+  if (cfg.stopOnNew) stopAudio();
+
+  const msgId = (message && message.id != null) ? String(message.id) : '';
+  const myEpoch = ++playEpoch;
+  utterQueue = [];
+  activeAbort = new AbortController();
+  currentMessageId = msgId || null;
+  showStopButton();
+  if (myEpoch !== playEpoch) return;
+
+  const sig = speechSignature(units);
+
+  const hit = cacheGet(msgId, sig);
+  if (hit && hit.length) {
+    host.log('TTS multi-voice | cache hit (' + hit.length + ' clip)');
+    try { await playCachedSequence(hit, myEpoch); }
+    finally { if (myEpoch === playEpoch) endPlayback(); }
+    return;
+  }
+
+  host.log('TTS multi-voice ->', units.map((u) => (u.speaker || 'narration') + '=' + describeVoice(u.voiceDesc)).join(' | '));
+
+  const bag = [];
+  for (const u of units) {
+    const chunks = cfg.streamChunks ? splitIntoChunks(u.text) : [u.text];
+    for (const c of chunks) enqueueUtterance(c, u.voiceDesc, myEpoch, { epoch: myEpoch, bag });
+  }
+  enqueueFinalize(myEpoch, async () => {
+    await drainPlayer(myEpoch);
+    if (myEpoch !== playEpoch) return;
+    if (bag.length && bag.indexOf(null) === -1) cachePut(msgId, sig, bag);
+    endPlayback();
+  });
+}
+
 // Whole-message playback: manual replay button, and the autoplay fallback when
 // the streaming path did not engage. Feeds every chunk through the shared queue
 // under one fresh epoch; a trailing finalize marker writes the replay cache
 // once they've all synthesised + played.
 async function speak(message, character) {
+  if (cfg.multiVoiceEnabled) return speakMultiVoice(message, character);
+
   const text = extractText(message);
   if (!text) return;
 
@@ -1198,6 +1510,8 @@ function resetStreamTurn() {
   streamVoiceDesc = null;
   streamBlobs = [];
   streamEpoch = 0;
+  streamChar = null;
+  streamSpeaker = null;
 }
 
 // Index (exclusive) up to which `s` is made only of finished sentences: the
@@ -1266,15 +1580,47 @@ async function onAssistantChunk(payload) {
     streamSpokenLen = 0;
     streamBlobs = [];
     streamVoiceDesc = resolveVoice(ch);
+    streamChar = ch;
+    streamSpeaker = null;
     currentMessageId = (p.messageId != null) ? String(p.messageId) : null;
     streamActive = true;
     showStopButton();
-    host.log('TTS streaming voice ->', describeVoice(streamVoiceDesc));
+    host.log('TTS streaming voice ->', cfg.multiVoiceEnabled ? 'multi-voice' : describeVoice(streamVoiceDesc));
   }
 
   if (streamStoppedByUser || streamAbandoned) return;
   if (!streamActive) return;
   if (streamEpoch !== playEpoch) { streamActive = false; return; }
+
+  // ---- multi-voice: work on the raw (code-stripped) text so "Name:" prefixes
+  //      stay visible. Consume whole lines freely; within the trailing partial
+  //      line, sentence-split only once its "Name:" prefix (if any) has fully
+  //      arrived — never mid-name. ----
+  if (cfg.multiVoiceEnabled) {
+    const raw = stripCodeBlocks(p.fullText || '');
+    if (raw.length <= streamSpokenLen) return;
+    const pending = raw.slice(streamSpokenLen);
+
+    let cut = pending.lastIndexOf('\n') + 1;      // whole lines are always safe (0 if none yet)
+    const tail = pending.slice(cut);
+    const pm = tail.match(SPEAKER_PREFIX_RE);
+    if (pm) {
+      // Prefix complete — sentence-split only the part AFTER it.
+      const afterPrefix = tail.slice(pm[0].length);
+      const extra = lastSafeBoundary(afterPrefix);
+      if (extra > 0) cut += pm[0].length + extra;
+    } else if (!SPEAKER_NAME_PARTIAL_RE.test(tail)) {
+      // Not a name-in-progress — ordinary prose, sentence-split it.
+      const extra = lastSafeBoundary(tail);
+      if (extra > 0) cut += extra;
+    }
+    // else: a name is still being typed on this line — wait for the rest.
+
+    if (cut <= 0) return;
+    enqueueMultiVoiceStream(pending.slice(0, cut), streamChar);
+    streamSpokenLen += cut;
+    return;
+  }
 
   const full = extractStreamText(p.fullText || '');
   if (full.length <= streamSpokenLen) return;
@@ -1340,12 +1686,23 @@ function buildSettingsSchema() {
           { key: 'stopOnNew', type: 'toggle', label: 'Stop the currently playing audio when a new reply arrives', default: DEFAULTS.stopOnNew },
           { key: 'defaultVoice', type: 'select', label: 'Default voice', default: DEFAULTS.defaultVoice, options: BUILTIN_VOICES.map((v) => ({ value: v, label: v })), help: BUILTIN_VOICES.length + ' built-in Pocket TTS voices. Used when a character has not picked its own.' }
         ]
+      },
+      {
+        title: 'Multi-voice (experimental)',
+        description:
+          'Detect "Name:" speaker prefixes in a reply (e.g. Mr. Wolf: "...you delete your copy. Deal?") and give each speaker their own voice. ' +
+          'Speakers are collected automatically as the conversation goes; pin a voice per speaker (or add one by hand) in the list below the clone library. ' +
+          'An unpinned speaker gets a stable auto voice. Text with no "Name:" prefix is narration.',
+        fields: [
+          { key: 'multiVoiceEnabled', type: 'toggle', label: 'Enable multi-voice', default: DEFAULTS.multiVoiceEnabled, help: 'Off = the whole reply is read in the character\'s single voice, exactly as before.' },
+          { key: 'narratorVoice', type: 'select', label: 'Narrator / unattributed voice', default: DEFAULTS.narratorVoice, options: [{ value: '', label: '(use the character\'s own voice)' }].concat(BUILTIN_VOICES.map((v) => ({ value: v, label: v }))).concat(clones.map((c) => ({ value: 'clone:' + c.slug, label: 'Clone: ' + c.name }))), help: 'Voice for text that has no "Name:" prefix, when multi-voice is on.' }
+        ]
       }
     ],
     actions: [
       { id: 'test', label: 'Test connection', onClick: testConnection }
     ],
-    custom: renderCloneLibrary,
+    custom: renderCustomSlot,
     onChange: (key, value) => {
       cfg[key] = key === 'serverUrl'
         ? (String(value || '').trim().replace(/\/+$/, '') || DEFAULTS.serverUrl)
@@ -1364,6 +1721,103 @@ async function testConnection(ctx) {
   } catch (e) {
     host.ui.toast.error('Cannot connect to ' + base + '. Start it with: pocket-tts serve');
   }
+}
+
+// The schema's single `custom` slot hosts two independent sub-panels: the
+// voice-clone library and (for multi-voice) the speaker->voice map.
+function renderCustomSlot(slot, ctx) {
+  slot.innerHTML = '';
+  const cloneEl = el('div');
+  slot.appendChild(cloneEl);
+  renderCloneLibrary(cloneEl, ctx);
+  const speakerEl = el('div');
+  slot.appendChild(speakerEl);
+  lastCustomSlot = { speakerEl, ctx };
+  renderSpeakerVoices(speakerEl, ctx);
+}
+
+// The speaker->voice map editor: one row per detected speaker (name + voice
+// picker + remove), an "add manually" row, and "clear all". Re-renders itself
+// in place after a change. `noteSpeaker()` refreshes it live via
+// `refreshCustomSlotIfOpen()` when a brand-new speaker appears mid-chat.
+function renderSpeakerVoices(box, ctx) {
+  box.innerHTML = '';
+  const wrap = el('div', { style: 'display:flex;flex-direction:column;gap:0.55rem;border-top:1px solid var(--border-light);padding-top:1rem;margin-top:1rem;' });
+  wrap.appendChild(el('div', {
+    textContent: 'Speaker voices' + (cfg.multiVoiceEnabled ? '' : '  (multi-voice is off)'),
+    style: 'font-size:0.9rem;font-weight:700;color:var(--text-main);'
+  }));
+  wrap.appendChild(el('div', {
+    textContent: 'Auto-detected from "Name:" lines during the conversation. Pick a voice to pin it; "Auto" hashes the name to a stable built-in voice. You can also add a speaker before it appears.',
+    style: HELP_STYLE
+  }));
+
+  const optionList = (autoLabel) =>
+    [{ v: '', label: autoLabel }]
+      .concat(BUILTIN_VOICES.map((n) => ({ v: n, label: n })))
+      .concat(clones.map((c) => ({ v: 'clone:' + c.slug, label: 'Clone: ' + c.name })));
+
+  const selStyle = 'font:inherit;padding:0.25rem 0.4rem;border:1px solid var(--border-light);border-radius:var(--radius-sm);background:var(--bg-app,var(--bg-surface));color:var(--text-main);max-width:170px;';
+  const inputStyle = 'flex:1;min-width:0;font:inherit;padding:0.35rem 0.5rem;border:1px solid var(--border-light);border-radius:var(--radius-sm);background:var(--bg-app,var(--bg-surface));color:var(--text-main);';
+
+  const sorted = speakers.slice().sort((a, b) =>
+    (b.count || 0) - (a.count || 0) || String(a.name).localeCompare(String(b.name)));
+
+  if (!sorted.length) {
+    wrap.appendChild(el('div', { textContent: 'No speakers detected yet.', style: HELP_STYLE }));
+  }
+  for (const sp of sorted) {
+    const key = sp.key;
+    const row = el('div', {
+      style: 'display:flex;align-items:center;gap:0.5rem;padding:0.35rem 0.5rem;border:1px solid var(--border-light);border-radius:var(--radius-md);background:var(--bg-surface);'
+    });
+    row.appendChild(el('span', {
+      textContent: sp.name,
+      title: sp.name + '  (' + (sp.count || 1) + '×)',
+      style: 'flex:1;min-width:0;font-size:0.85rem;color:var(--text-main);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'
+    }));
+    const sel = el('select', { style: selStyle });
+    for (const o of optionList('Auto (' + autoVoiceFor(key) + ')')) {
+      sel.appendChild(el('option', { value: o.v, textContent: o.label }));
+    }
+    sel.value = (cfg.voiceMap && cfg.voiceMap[key]) || '';
+    sel.addEventListener('change', () => { setSpeakerVoice(key, sel.value); });
+    row.appendChild(sel);
+    const del = el('button', {
+      type: 'button', textContent: '×', title: 'Remove this speaker',
+      style: BTN_STYLE + 'color:var(--accent-rose);padding:0.15rem 0.55rem;line-height:1;font-size:1rem;'
+    });
+    del.addEventListener('click', () => { removeSpeaker(key); renderSpeakerVoices(box, ctx); });
+    row.appendChild(del);
+    wrap.appendChild(row);
+  }
+
+  const addRow = el('div', { style: 'display:flex;gap:0.5rem;align-items:center;margin-top:0.15rem;' });
+  const nameInput = el('input', { type: 'text', placeholder: 'Add a speaker name…', style: inputStyle });
+  const addBtn = el('button', { type: 'button', textContent: 'Add', style: BTN_STYLE });
+  const doAdd = () => {
+    const n = nameInput.value.trim();
+    if (!n) return;
+    noteSpeaker(n);
+    nameInput.value = '';
+    renderSpeakerVoices(box, ctx);
+  };
+  addBtn.addEventListener('click', doAdd);
+  nameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); doAdd(); } });
+  addRow.appendChild(nameInput);
+  addRow.appendChild(addBtn);
+  wrap.appendChild(addRow);
+
+  if (sorted.length) {
+    const clearBtn = el('button', {
+      type: 'button', textContent: 'Clear all speakers',
+      style: BTN_STYLE + 'color:var(--accent-rose);align-self:flex-start;'
+    });
+    clearBtn.addEventListener('click', () => { clearSpeakers(); renderSpeakerVoices(box, ctx); });
+    wrap.appendChild(clearBtn);
+  }
+
+  box.appendChild(wrap);
 }
 
 // Escape-hatch DOM slot for the schema: the voice-clone library (file upload +
@@ -1465,6 +1919,7 @@ export async function activate(pluginHost) {
 
   cfg = await loadConfig();
   await loadClones();
+  await loadSpeakers();
 
   registerCharFields();
 
@@ -1548,6 +2003,30 @@ export async function activate(pluginHost) {
       // ---- streaming path owned (or attempted) this turn ----
       if (streamGateEvaluated && (streamActive || streamAbandoned || streamStoppedByUser)) {
         if (streamActive && !streamAbandoned && !streamStoppedByUser && streamEpoch === playEpoch) {
+          // ---- multi-voice: flush the unread tail, cache under a speech
+          //      signature that a later speakMultiVoice() replay will match. ----
+          if (cfg.multiVoiceEnabled) {
+            const chMV = streamChar || character;
+            const rawContentMV = (message && message.content) || '';
+            const finalRawMV = stripCodeBlocks(rawContentMV);
+            const tailMV = finalRawMV.slice(streamSpokenLen);
+            const msgIdMV = (message && message.id != null) ? String(message.id) : '';
+            if (msgIdMV) currentMessageId = msgIdMV;
+            if (tailMV.trim()) enqueueMultiVoiceStream(tailMV, chMV);
+            streamSpokenLen = finalRawMV.length;
+            const sigMV = speechSignature(buildSpeechUnits(rawContentMV, chMV));
+            const bagMV = streamBlobs;
+            const epMV = streamEpoch;
+            enqueueFinalize(epMV, async () => {
+              await drainPlayer(epMV);
+              if (msgIdMV && bagMV.length && bagMV.indexOf(null) === -1 && !streamAbandoned) cachePut(msgIdMV, sigMV, bagMV);
+              endPlayback();
+            });
+            streamActive = false;
+            streamTurnEnded = true;
+            return;
+          }
+
           const finalFull = extractStreamText((message && message.content) || '');
 
           // Dialogue mode, narration off, but the finished reply had NO quotes
@@ -1615,6 +2094,8 @@ export function deactivate() {
   resetStreamTurn();
   utterQueue = [];
   clearAudioCache();
+  if (speakersSaveTimer) { clearTimeout(speakersSaveTimer); speakersSaveTimer = null; saveSpeakersNow(); }
+  lastCustomSlot = null;
   if (stopBtnEl) {
     try { stopBtnEl.remove(); } catch (e) { /* ignore */ }
     stopBtnEl = null;
