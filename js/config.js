@@ -22,7 +22,8 @@ export const APP_CONFIG = {
     reasoningMaxTokens: 2048,
     mcpMaxToolIterations: 6,
     showContextGaugeInChat: false,
-    includeToolHistory: true
+    includeToolHistory: true,
+    toolImageMemory: 1
   },
   DEFAULT_GLOBAL_SYSTEM_PROMPT: `# ROLEPLAY ENGINE — SYSTEM INSTRUCTIONS
 

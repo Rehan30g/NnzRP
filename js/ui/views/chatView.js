@@ -1483,6 +1483,14 @@ export class ChatView {
                     ariaLabel: 'Enable the builtin embed HTML tool'
                   })}
                 </div>
+                <div style="border-top:1px solid var(--border-light); padding-top:0.9rem;">
+                  ${toggleRowHTML({
+                    id: 'drawer-mcp-wait-tool-toggle',
+                    title: 'Wait / Pause Tool',
+                    description: 'Gives the character a "wait" tool for in-scene pacing - it can pause its own reply for up to 30 seconds. Harmless (a local pause) but OFF by default. Auto-allows once on.',
+                    ariaLabel: 'Enable the builtin wait tool'
+                  })}
+                </div>
               </div>
 
               <div id="drawer-mcp-servers-section">
@@ -2126,7 +2134,8 @@ export class ChatView {
         persona: activePersonaObj,
         globalSystemPrompt: globalPrompt,
         messages: msgs,
-        includeToolHistory: genSettings.includeToolHistory !== false
+        includeToolHistory: genSettings.includeToolHistory !== false,
+        toolImageMemory: genSettings.toolImageMemory
       });
 
       let tokens = 0;
@@ -2651,6 +2660,17 @@ export class ChatView {
       mcpEmbedHtmlToggle.onchange = async (e) => {
         await MCPStore.setEmbedHtmlEnabled(e.target.checked);
         Toast.info(`Embed HTML ${e.target.checked ? 'diaktifkan' : 'dinonaktifkan'}.`);
+      };
+    }
+
+    // Wait/Pause tool (drawer copy - mirrors mcpView.js). Its own opt-in,
+    // default OFF - see MCPStore.getWaitToolEnabled().
+    const mcpWaitToolToggle = container.querySelector('#drawer-mcp-wait-tool-toggle');
+    if (mcpWaitToolToggle) {
+      mcpWaitToolToggle.checked = await MCPStore.getWaitToolEnabled();
+      mcpWaitToolToggle.onchange = async (e) => {
+        await MCPStore.setWaitToolEnabled(e.target.checked);
+        Toast.info(`Wait tool ${e.target.checked ? 'diaktifkan' : 'dinonaktifkan'}.`);
       };
     }
 
@@ -3308,7 +3328,8 @@ export class ChatView {
         tools: activeTools,
         immersiveRoleplay,
         immersiveIntensity,
-        includeToolHistory: genSettings.includeToolHistory !== false
+        includeToolHistory: genSettings.includeToolHistory !== false,
+        toolImageMemory: genSettings.toolImageMemory
       }));
 
       const messagesEl = container.querySelector('#messages-container');
@@ -3746,7 +3767,8 @@ export class ChatView {
       tools: activeTools,
       immersiveRoleplay,
       immersiveIntensity,
-      includeToolHistory: genSettings.includeToolHistory !== false
+      includeToolHistory: genSettings.includeToolHistory !== false,
+      toolImageMemory: genSettings.toolImageMemory
     }));
 
     // Plugin hook: marks the turn boundary for plugins that track per-turn

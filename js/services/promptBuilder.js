@@ -57,6 +57,14 @@ export class PromptBuilder {
     // still "knows" what it looked up on earlier turns without re-sending the
     // full raw tool results. Only `false` disables it.
     const includeToolHistory = options.includeToolHistory !== false;
+    // Bounded image memory: how many of the most-recent assistant messages
+    // whose tools fetched an image get that image re-fed into context (as a
+    // synthetic user turn - providers ignore images on an assistant turn).
+    // 0 = off (drop tool-fetched images from history, the original behavior).
+    // Composer-uploaded images on `user` messages are unaffected by this.
+    const toolImageMemory = Number.isFinite(options.toolImageMemory)
+      ? Math.max(0, Math.floor(options.toolImageMemory))
+      : 1;
 
     const userName = persona?.name || 'User';
     const charName = character?.name || 'Character';
@@ -132,6 +140,10 @@ export class PromptBuilder {
     // recommendation once a session gets long, rather than silently
     // truncating history out from under them.
     const historyPayload = [];
+    // Synthetic user turns created to re-feed a tool-fetched image; pruned to
+    // the last `toolImageMemory` of them after the loop.
+    const toolImageTurns = [];
+
     for (const msg of messages) {
       const entry = {
         role: msg.role === 'user' ? 'user' : 'assistant',
@@ -144,12 +156,40 @@ export class PromptBuilder {
         const note = buildToolHistoryNote(msg.toolTrace);
         if (note) entry.content = (entry.content || '') + note;
       }
-      // Only a user message can carry image attachments (composer upload) -
-      // passed through as-is (already base64 data: URLs, nothing to macro-
-      // replace) for providerManager.js's translators to turn into each
-      // provider's own multimodal content blocks.
-      if (Array.isArray(msg.images) && msg.images.length) entry.images = msg.images;
-      historyPayload.push(entry);
+
+      const hasImages = Array.isArray(msg.images) && msg.images.length;
+      if (hasImages && entry.role === 'user') {
+        // Composer upload - passed through as-is (already base64 data: URLs)
+        // for providerManager.js's translators. Always re-sent every turn,
+        // unchanged by bounded image memory.
+        entry.images = msg.images;
+        historyPayload.push(entry);
+      } else if (hasImages && toolImageMemory > 0) {
+        // Tool-fetched image sitting on an assistant message. Every provider
+        // translator ignores images on a non-user turn, so re-feed them as a
+        // synthetic user turn right after - the merge step below folds it into
+        // the next real user message, keeping strict user/assistant alternation.
+        historyPayload.push(entry);
+        const imgTurn = {
+          role: 'user',
+          content: '[Reference: image(s) the character looked at earlier in this scene, still visible to you.]',
+          images: msg.images.slice()
+        };
+        historyPayload.push(imgTurn);
+        toolImageTurns.push(imgTurn);
+      } else {
+        // toolImageMemory === 0, or no images: drop any tool image (old behavior).
+        historyPayload.push(entry);
+      }
+    }
+
+    // Keep only the most recent `toolImageMemory` re-fed image turns; splice
+    // the older ones back out entirely (image bytes are the expensive part).
+    if (toolImageTurns.length > toolImageMemory) {
+      const drop = new Set(toolImageTurns.slice(0, toolImageTurns.length - toolImageMemory));
+      for (let i = historyPayload.length - 1; i >= 0; i--) {
+        if (drop.has(historyPayload[i])) historyPayload.splice(i, 1);
+      }
     }
 
     // Merge consecutive same-role turns into one (e.g. ChatStore.createCompactedChat's

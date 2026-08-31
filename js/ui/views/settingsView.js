@@ -350,6 +350,20 @@ export class SettingsView {
                   title: 'Remember Tool Calls Across Turns',
                   description: 'Folds a heavily truncated recap (tool name, args, short result) of each past reply\'s tool calls back into context, so the character stays aware of what it looked up earlier. Full raw results are never re-sent — kept token-light on purpose.'
                 })}
+                <div class="form-group" style="margin-top:1rem; margin-bottom:0;">
+                  <label class="form-label">Bounded Image Memory</label>
+                  ${dropdownHTML({
+                    id: 'setting-tool-image-memory',
+                    options: [
+                      { value: '0', label: 'Off — drop fetched images after their turn' },
+                      { value: '1', label: 'Keep the last 1 fetched image' },
+                      { value: '2', label: 'Keep the last 2 fetched images' },
+                      { value: '3', label: 'Keep the last 3 fetched images' }
+                    ],
+                    value: String(settings.toolImageMemory ?? 1)
+                  })}
+                  <span class="form-hint">When a character pulls an image with a tool, providers only "see" it that turn. This re-feeds the most recent one(s) as a reference on later turns so it stays aware of what it looked at. Each kept image costs real tokens every turn — keep it low.</span>
+                </div>
               </div>
             </div>
           </div>
@@ -718,6 +732,7 @@ export class SettingsView {
     /* ---------------- Dropdowns ---------------- */
     wireDropdown(container, 'setting-active-proxy');
     wireDropdown(container, 'setting-reasoning-effort');
+    wireDropdown(container, 'setting-tool-image-memory');
 
     const promptTextarea = container.querySelector('#global-system-prompt');
 
@@ -863,6 +878,7 @@ export class SettingsView {
         prefillText: container.querySelector('#setting-prefill-text').value,
         autoCompactEnabled: container.querySelector('#setting-autocompact-enabled').checked,
         includeToolHistory: container.querySelector('#setting-tool-history-enabled').checked,
+        toolImageMemory: parseInt(container.querySelector('#setting-tool-image-memory').value, 10) || 0,
         fontSize: selectedFontSize
       };
 

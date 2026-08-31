@@ -85,6 +85,14 @@ export class MCPView {
             ariaLabel: 'Enable the builtin embed HTML tool'
           })}
         </div>
+        <div style="border-top:1px solid var(--border-light); padding-top:1rem;">
+          ${toggleRowHTML({
+            id: 'mcp-wait-tool-toggle',
+            title: 'Wait / Pause Tool',
+            description: 'Gives the character a "wait" tool for in-scene pacing - it can pause its own reply for up to 30 seconds (a deliberate silence, a beat, a short passage of time). Harmless (a local pause, nothing else) but OFF by default so enabling MCP does not silently add a tool to every chat. Auto-allows once on.',
+            ariaLabel: 'Enable the builtin wait tool'
+          })}
+        </div>
       </div>
 
       <div id="mcp-servers-section">
@@ -257,6 +265,15 @@ export class MCPView {
       embedHtmlToggle.onchange = async (e) => {
         await MCPStore.setEmbedHtmlEnabled(e.target.checked);
         Toast.info(`Embed HTML ${e.target.checked ? 'diaktifkan' : 'dinonaktifkan'}.`);
+      };
+    }
+
+    const waitToolToggle = container.querySelector('#mcp-wait-tool-toggle');
+    if (waitToolToggle) {
+      waitToolToggle.checked = await MCPStore.getWaitToolEnabled();
+      waitToolToggle.onchange = async (e) => {
+        await MCPStore.setWaitToolEnabled(e.target.checked);
+        Toast.info(`Wait tool ${e.target.checked ? 'diaktifkan' : 'dinonaktifkan'}.`);
       };
     }
 

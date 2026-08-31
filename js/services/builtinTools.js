@@ -21,6 +21,12 @@ import { MAX_IMAGE_BYTES, readFileAsDataURL } from '../utils/imageUtils.js';
 
 export const BUILTIN_VIEW_IMAGE_TOOL = 'builtin__view_image_url';
 export const BUILTIN_EMBED_HTML_TOOL = 'builtin__embed_html';
+export const BUILTIN_WAIT_TOOL = 'builtin__wait';
+
+// The wait tool never blocks longer than this, whatever the model asks for.
+// A real pause in the tool loop is fine for pacing but must stay short: the
+// user is watching a "generating" indicator the whole time and can only Stop.
+const WAIT_MAX_SECONDS = 30;
 
 // Hard cap on how much HTML a single embed call may carry - not meant to be a
 // meaningful sandbox boundary itself (the iframe sandbox attribute is what
@@ -69,10 +75,24 @@ const EMBED_HTML_DESCRIPTOR = {
   isBuiltin: true
 };
 
+const WAIT_DESCRIPTOR = {
+  qualifiedName: BUILTIN_WAIT_TOOL,
+  description: `Pause for a set number of seconds before you continue. Use it purely for in-scene pacing - a deliberate silence, letting a beat land, a character waiting for something, a short passage of time - not for anything functional. The pause really happens before your next output, so keep it short and use it sparingly. Maximum ${WAIT_MAX_SECONDS} seconds; anything longer is clamped down to ${WAIT_MAX_SECONDS}.`,
+  inputSchema: {
+    type: 'object',
+    properties: {
+      seconds: { type: 'number', description: `How long to wait, in seconds (0-${WAIT_MAX_SECONDS}). Values above ${WAIT_MAX_SECONDS} are clamped to ${WAIT_MAX_SECONDS}; negatives/invalid become 0.` },
+      reason: { type: 'string', description: 'Optional short note on why (for your own continuity - not shown to the user).' }
+    },
+    required: ['seconds']
+  },
+  isBuiltin: true
+};
+
 /**
- * Both builtin tools share the MCP global master switch as their outermost
- * kill switch (no point offering either one if the user turned tool-use off
- * entirely app-wide). Beyond that:
+ * All three builtin tools share the MCP global master switch as their
+ * outermost kill switch (no point offering any of them if the user turned
+ * tool-use off entirely app-wide). Beyond that:
  *   - the view-image tool is only offered when there's actually a
  *     vision-capable model active (no point letting the model "call" this if
  *     it can't process the result);
@@ -80,6 +100,10 @@ const EMBED_HTML_DESCRIPTOR = {
  *     (MCPStore.getEmbedHtmlEnabled, default OFF) is on. It does NOT need a
  *     vision-capable model - it never sends anything back to the model, it
  *     only renders in the UI - so it is deliberately not gated on supportsVision.
+ *   - the wait tool is likewise its own opt-in (MCPStore.getWaitToolEnabled,
+ *     default OFF) so that turning MCP on does not silently add a tool - and
+ *     therefore flip a no-tools chat off its byte-for-byte passthrough path -
+ *     for every user. No vision / no UI side effect.
  */
 export async function getBuiltinTools(proxy) {
   const globalEnabled = await MCPStore.getGlobalEnabled();
@@ -88,6 +112,7 @@ export async function getBuiltinTools(proxy) {
   const tools = [];
   if (supportsVision(proxy)) tools.push(VIEW_IMAGE_DESCRIPTOR);
   if (await MCPStore.getEmbedHtmlEnabled()) tools.push(EMBED_HTML_DESCRIPTOR);
+  if (await MCPStore.getWaitToolEnabled()) tools.push(WAIT_DESCRIPTOR);
   return tools;
 }
 
@@ -188,4 +213,36 @@ export async function executeBuiltinEmbedHtmlTool(args, context = {}) {
     html: safeHtml,
     title
   };
+}
+
+/**
+ * Sleeps for `args.seconds` (clamped to 0..WAIT_MAX_SECONDS) and resolves with
+ * a short confirmation string. `context.signal` (AgentRunner's abort signal):
+ * a user Stop mid-wait rejects with an AbortError immediately - AgentRunner's
+ * tool loop already treats a thrown AbortError from a signalled run as "user
+ * stopped, exit now", same as any other awaited step. No network, no state.
+ */
+export async function executeBuiltinWaitTool(args, context = {}) {
+  let seconds = Number(args?.seconds);
+  if (!Number.isFinite(seconds) || seconds < 0) seconds = 0;
+  if (seconds > WAIT_MAX_SECONDS) seconds = WAIT_MAX_SECONDS;
+  const ms = Math.round(seconds * 1000);
+
+  const signal = context.signal;
+  if (signal?.aborted) throw new DOMException('Generation aborted by user.', 'AbortError');
+
+  if (ms > 0) {
+    await new Promise((resolve, reject) => {
+      const done = () => { cleanup(); resolve(); };
+      const onAbort = () => { cleanup(); reject(new DOMException('Generation aborted by user.', 'AbortError')); };
+      const timer = setTimeout(done, ms);
+      function cleanup() {
+        clearTimeout(timer);
+        if (signal) signal.removeEventListener('abort', onAbort);
+      }
+      if (signal) signal.addEventListener('abort', onAbort);
+    });
+  }
+
+  return { text: `Waited ${seconds} second${seconds === 1 ? '' : 's'}.` };
 }

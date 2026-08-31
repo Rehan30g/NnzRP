@@ -197,6 +197,23 @@ export class MCPStore {
   }
 
   /**
+   * Global opt-in toggle for the builtin "wait" tool (js/services/builtinTools.js)
+   * - lets the model pause the tool loop for up to 30s of in-scene pacing.
+   * Harmless (no network, no script exec, no UI side effect), but still an
+   * explicit opt-in so that flipping the MCP master switch on does not add a
+   * tool to every chat and knock a no-tools session off its byte-for-byte
+   * passthrough path. Same fail-safe boolean pattern - unset/corrupted => OFF.
+   */
+  static async getWaitToolEnabled() {
+    const record = await db.get('settings', 'mcpWaitToolEnabled');
+    return record && typeof record.value === 'boolean' ? record.value : false;
+  }
+
+  static async setWaitToolEnabled(enabled) {
+    await db.put('settings', { key: 'mcpWaitToolEnabled', value: !!enabled });
+  }
+
+  /**
    * Permission for the builtin "Embed HTML" tool - same pattern/safety
    * guarantee as getBuiltinToolPermission()/setBuiltinToolPermission() above
    * (the view-image tool), just its own storage key: it isn't owned by any

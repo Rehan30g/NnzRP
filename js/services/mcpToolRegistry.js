@@ -3,7 +3,7 @@
  * back to the correct server. */
 import { MCPStore } from '../storage/mcpStore.js';
 import { MCPClient, isTransportUnsupportedHere } from './mcpClient.js';
-import { BUILTIN_VIEW_IMAGE_TOOL, BUILTIN_EMBED_HTML_TOOL } from './builtinTools.js';
+import { BUILTIN_VIEW_IMAGE_TOOL, BUILTIN_EMBED_HTML_TOOL, BUILTIN_WAIT_TOOL } from './builtinTools.js';
 
 const TOOL_CACHE_TTL_MS = 60000;
 const toolCache = new Map(); // serverId -> { tools, fetchedAt }
@@ -109,6 +109,10 @@ export class MCPToolRegistry {
     // feature on at all, prompting again on every single call read as
     // redundant friction rather than added safety, so every call auto-allows.
     if (qualifiedName === BUILTIN_EMBED_HTML_TOOL) return 'allow';
+    // Same reasoning: the wait tool sits behind its own opt-in toggle
+    // (MCPStore.getWaitToolEnabled, default OFF) and is otherwise harmless
+    // (a bounded local sleep) - prompting per call would be pure friction.
+    if (qualifiedName === BUILTIN_WAIT_TOOL) return 'allow';
     const entry = toolIndex.get(qualifiedName);
     if (!entry) return 'ask';
     return MCPStore.getToolPermission(entry.serverId, entry.toolName);
@@ -124,6 +128,10 @@ export class MCPToolRegistry {
       await MCPStore.setEmbedHtmlToolPermission(permission);
       return true;
     }
+    // The wait tool always auto-allows (see getToolPermission) - nothing to
+    // persist, but accept the call so an "Always Allow" click is a no-op, not
+    // a thrown "unknown tool".
+    if (qualifiedName === BUILTIN_WAIT_TOOL) return true;
     const entry = toolIndex.get(qualifiedName);
     if (!entry) return false;
     await MCPStore.setToolPermission(entry.serverId, entry.toolName, permission);
