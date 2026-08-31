@@ -2,45 +2,6 @@
 import { LorebookEngine } from './lorebookEngine.js';
 import { replaceMacros } from '../utils/macroReplacer.js';
 
-// Token-lean caps for the past-tool-call recap folded into history (see
-// buildToolHistoryNote). The full raw tool output still lives on the stored
-// message for the UI - only this trimmed copy ever re-enters the model's
-// context on later turns.
-const TOOL_HISTORY_ARGS_CHARS = 180;
-const TOOL_HISTORY_RESULT_CHARS = 300;
-const TOOL_HISTORY_MAX_CALLS = 8;   // per assistant message
-
-function clip(str, max) {
-  const s = String(str == null ? '' : str).replace(/\s+/g, ' ').trim();
-  return s.length > max ? s.slice(0, max).trim() + '…' : s;
-}
-
-// One compact line per past tool call: `name(args) -> result`, heavily
-// truncated. Declined/blocked calls show why instead of a result. Returns ''
-// when there is nothing worth adding, so callers can append unconditionally.
-function buildToolHistoryNote(toolTrace) {
-  if (!Array.isArray(toolTrace) || !toolTrace.length) return '';
-  const lines = [];
-  for (const t of toolTrace.slice(0, TOOL_HISTORY_MAX_CALLS)) {
-    if (!t || !t.name) continue;
-    let args = '';
-    try {
-      args = typeof t.args === 'string' ? t.args : JSON.stringify(t.args ?? {});
-    } catch (e) {
-      args = String(t.args ?? '');
-    }
-    let outcome;
-    if (t.declined) outcome = '(declined by user)';
-    else if (t.blocked) outcome = '(blocked: repeated call)';
-    else outcome = clip(t.result, TOOL_HISTORY_RESULT_CHARS) || '(no output)';
-    lines.push(`- ${t.name}(${clip(args, TOOL_HISTORY_ARGS_CHARS)}) -> ${outcome}`);
-  }
-  if (toolTrace.length > TOOL_HISTORY_MAX_CALLS) {
-    lines.push(`- (+${toolTrace.length - TOOL_HISTORY_MAX_CALLS} more tool call(s))`);
-  }
-  return lines.length ? `\n\n[Tools you used in this reply]\n${lines.join('\n')}` : '';
-}
-
 export class PromptBuilder {
   /**
    * Assembles final prompt payload messages for AI completions
@@ -52,19 +13,6 @@ export class PromptBuilder {
     const globalSystemPrompt = options.globalSystemPrompt || '';
     const messages = options.messages || [];
     const tools = options.tools || [];
-    // Default ON: fold a heavily-truncated recap of each past assistant
-    // message's tool calls back into that message's content, so the character
-    // still "knows" what it looked up on earlier turns without re-sending the
-    // full raw tool results. Only `false` disables it.
-    const includeToolHistory = options.includeToolHistory !== false;
-    // Bounded image memory: how many of the most-recent assistant messages
-    // whose tools fetched an image get that image re-fed into context (as a
-    // synthetic user turn - providers ignore images on an assistant turn).
-    // 0 = off (drop tool-fetched images from history, the original behavior).
-    // Composer-uploaded images on `user` messages are unaffected by this.
-    const toolImageMemory = Number.isFinite(options.toolImageMemory)
-      ? Math.max(0, Math.floor(options.toolImageMemory))
-      : 1;
 
     const userName = persona?.name || 'User';
     const charName = character?.name || 'Character';
@@ -140,56 +88,17 @@ export class PromptBuilder {
     // recommendation once a session gets long, rather than silently
     // truncating history out from under them.
     const historyPayload = [];
-    // Synthetic user turns created to re-feed a tool-fetched image; pruned to
-    // the last `toolImageMemory` of them after the loop.
-    const toolImageTurns = [];
-
     for (const msg of messages) {
       const entry = {
         role: msg.role === 'user' ? 'user' : 'assistant',
         content: replaceMacros(msg.content, userName, charName)
       };
-      // Compact past-tool-call recap, appended to the assistant turn that made
-      // the calls. `msg.toolTrace` already mirrors the ACTIVE swipe variation,
-      // so swiping restores the right recap for free.
-      if (includeToolHistory && entry.role === 'assistant' && Array.isArray(msg.toolTrace) && msg.toolTrace.length) {
-        const note = buildToolHistoryNote(msg.toolTrace);
-        if (note) entry.content = (entry.content || '') + note;
-      }
-
-      const hasImages = Array.isArray(msg.images) && msg.images.length;
-      if (hasImages && entry.role === 'user') {
-        // Composer upload - passed through as-is (already base64 data: URLs)
-        // for providerManager.js's translators. Always re-sent every turn,
-        // unchanged by bounded image memory.
-        entry.images = msg.images;
-        historyPayload.push(entry);
-      } else if (hasImages && toolImageMemory > 0) {
-        // Tool-fetched image sitting on an assistant message. Every provider
-        // translator ignores images on a non-user turn, so re-feed them as a
-        // synthetic user turn right after - the merge step below folds it into
-        // the next real user message, keeping strict user/assistant alternation.
-        historyPayload.push(entry);
-        const imgTurn = {
-          role: 'user',
-          content: '[Reference: image(s) the character looked at earlier in this scene, still visible to you.]',
-          images: msg.images.slice()
-        };
-        historyPayload.push(imgTurn);
-        toolImageTurns.push(imgTurn);
-      } else {
-        // toolImageMemory === 0, or no images: drop any tool image (old behavior).
-        historyPayload.push(entry);
-      }
-    }
-
-    // Keep only the most recent `toolImageMemory` re-fed image turns; splice
-    // the older ones back out entirely (image bytes are the expensive part).
-    if (toolImageTurns.length > toolImageMemory) {
-      const drop = new Set(toolImageTurns.slice(0, toolImageTurns.length - toolImageMemory));
-      for (let i = historyPayload.length - 1; i >= 0; i--) {
-        if (drop.has(historyPayload[i])) historyPayload.splice(i, 1);
-      }
+      // Only a user message can carry image attachments (composer upload) -
+      // passed through as-is (already base64 data: URLs, nothing to macro-
+      // replace) for providerManager.js's translators to turn into each
+      // provider's own multimodal content blocks.
+      if (Array.isArray(msg.images) && msg.images.length) entry.images = msg.images;
+      historyPayload.push(entry);
     }
 
     // Merge consecutive same-role turns into one (e.g. ChatStore.createCompactedChat's

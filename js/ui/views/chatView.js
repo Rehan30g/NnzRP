@@ -2133,9 +2133,7 @@ export class ChatView {
         character: activeChar,
         persona: activePersonaObj,
         globalSystemPrompt: globalPrompt,
-        messages: msgs,
-        includeToolHistory: genSettings.includeToolHistory !== false,
-        toolImageMemory: genSettings.toolImageMemory
+        messages: msgs
       });
 
       let tokens = 0;
@@ -3327,9 +3325,7 @@ export class ChatView {
         messages: historyForPrompt,
         tools: activeTools,
         immersiveRoleplay,
-        immersiveIntensity,
-        includeToolHistory: genSettings.includeToolHistory !== false,
-        toolImageMemory: genSettings.toolImageMemory
+        immersiveIntensity
       }));
 
       const messagesEl = container.querySelector('#messages-container');
@@ -3766,9 +3762,7 @@ export class ChatView {
       messages: historyForPrompt,
       tools: activeTools,
       immersiveRoleplay,
-      immersiveIntensity,
-      includeToolHistory: genSettings.includeToolHistory !== false,
-      toolImageMemory: genSettings.toolImageMemory
+      immersiveIntensity
     }));
 
     // Plugin hook: marks the turn boundary for plugins that track per-turn
