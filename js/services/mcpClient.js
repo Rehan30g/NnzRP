@@ -95,10 +95,12 @@ async function httpRpc(server, method, params, { isNotification = false, timeout
   }
 }
 
-async function commandRpc(server, method, params, { isNotification = false } = {}) {
+async function commandRpc(server, method, params, { isNotification = false, signal } = {}) {
   if (!window.electronAPI?.mcp) {
     throw new Error(UNSUPPORTED_TRANSPORT_REASON);
   }
+  if (signal?.aborted) throw signal.reason || new DOMException('Aborted', 'AbortError');
+
   const startInfo = await window.electronAPI.mcp.start({ id: server.id, command: server.command, args: server.args || [], env: server.env || {} });
   // A FRESH process (the previous one crashed and main.js dropped it) has not
   // seen the initialize handshake, but `initializedServers` still remembers the
@@ -109,7 +111,25 @@ async function commandRpc(server, method, params, { isNotification = false } = {
     initializedServers.delete(server.id);
     await ensureInitialized(server);
   }
-  return window.electronAPI.mcp.request(server.id, method, params || {}, isNotification);
+
+  const requestPromise = window.electronAPI.mcp.request(server.id, method, params || {}, isNotification);
+  if (isNotification || !signal) return requestPromise;
+
+  // The stdio child process can't cancel an in-flight tool call, but a user
+  // Stop (or a run abort) MUST unblock the renderer immediately instead of
+  // hanging until main.js's own request timeout (up to 180s for tools/call).
+  // Without this, a browser-automation MCP whose `click`/`navigate` wedges
+  // leaves the chat "stuck loading" and the Stop button does nothing. Race the
+  // pending request against the abort signal; main.js still cleans up its own
+  // pending entry when its timer fires.
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(signal.reason || new DOMException('Aborted', 'AbortError'));
+    signal.addEventListener('abort', onAbort, { once: true });
+    requestPromise.then(
+      (v) => { signal.removeEventListener('abort', onAbort); resolve(v); },
+      (e) => { signal.removeEventListener('abort', onAbort); reject(e); }
+    );
+  });
 }
 
 async function rpc(server, method, params, opts) {

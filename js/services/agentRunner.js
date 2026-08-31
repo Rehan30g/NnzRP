@@ -4,7 +4,7 @@
  * feature's single prompt-only "pretend you have tools" call. */
 import { ProviderManager } from './providerManager.js';
 import { MCPToolRegistry } from './mcpToolRegistry.js';
-import { BUILTIN_VIEW_IMAGE_TOOL, executeBuiltinImageTool, BUILTIN_EMBED_HTML_TOOL, executeBuiltinEmbedHtmlTool } from './builtinTools.js';
+import { BUILTIN_VIEW_IMAGE_TOOL, executeBuiltinImageTool, BUILTIN_EMBED_HTML_TOOL, executeBuiltinEmbedHtmlTool, BUILTIN_WAIT_TOOL, executeBuiltinWaitTool } from './builtinTools.js';
 
 /**
  * What both the persisted tool trace AND the model itself are told when the
@@ -220,12 +220,21 @@ export class AgentRunner {
               const result = await executeBuiltinEmbedHtmlTool(call.args, { characterAvatar });
               content = result.text;
               embeddedHtml = { html: result.html, title: result.title };
+            } else if (call.name === BUILTIN_WAIT_TOOL) {
+              // Real pause, capped at 30s inside the tool; `signal` lets a
+              // user Stop mid-wait bail out immediately (throws AbortError).
+              const result = await executeBuiltinWaitTool(call.args, { signal });
+              content = result.text;
             } else {
               const mcpResult = await MCPToolRegistry.executeTool(call.name, call.args, { signal });
               content = mcpResult.text;
               fetchedImages = mcpResult.images && mcpResult.images.length ? mcpResult.images : null;
             }
           } catch (err) {
+            // A user Stop that lands mid-tool (the wait tool's sleep, or an
+            // MCP call honouring `signal`) must abort the whole run, not just
+            // fail this one call and loop on to another provider request.
+            if (err?.name === 'AbortError' && signal?.aborted) throw err;
             content = `Error: ${err.message}`;
           }
         }
