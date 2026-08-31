@@ -1528,6 +1528,43 @@ function lastSafeBoundary(s) {
   return idx;
 }
 
+// Multi-voice streaming boundary: index (exclusive) up to which `s` ends on a
+// point that is safe to speak now — a just-CLOSED `"..."` (so a whole quote
+// goes to one speaker's voice), or a sentence terminator that is NOT inside an
+// open quote, or a newline; trailing whitespace consumed. 0 if none. Unlike
+// `lastSafeBoundary` this never cuts in the middle of an open quote, which is
+// what made multi-voice "not stream" in dialogue mode (a mid-quote fragment
+// has no closed `"..."` for extractDialogue to pick up).
+function lastMultiVoiceBoundary(s) {
+  const str = String(s || '');
+  let idx = 0;
+  let open = false;                       // currently inside a "..."
+  for (let i = 0; i < str.length; i++) {
+    const c = str[i];
+    if (c === '"') {
+      open = !open;
+      if (!open) {                        // a quote just closed
+        let j = i + 1;
+        while (j < str.length && (str[j] === ' ' || str[j] === '\t')) j++;
+        idx = j;
+      }
+    } else if (c === '\n') {
+      idx = i + 1;
+      open = false;                       // a line break abandons any dangling quote
+    } else if (!open && (c === '.' || c === '!' || c === '?' || c === '…')) {
+      let j = i + 1;
+      while (j < str.length && '.!?…\'’)]'.indexOf(str[j]) !== -1) j++;
+      if (j >= str.length) {
+        idx = str.length;
+      } else if (str[j] === ' ' || str[j] === '\t') {
+        while (j < str.length && (str[j] === ' ' || str[j] === '\t')) j++;
+        idx = j;
+      }
+    }
+  }
+  return idx;
+}
+
 // From the not-yet-spoken tail, pull the sentences whose end boundary is
 // certain, leaving any half-typed final sentence for the next chunk. Returns
 // the merged chunk list + how many chars of `pending` they consumed.
@@ -1596,8 +1633,9 @@ async function onAssistantChunk(payload) {
 
   // ---- multi-voice: work on the raw (code-stripped) text so "Name:" prefixes
   //      stay visible. Consume whole lines freely; within the trailing partial
-  //      line, sentence-split only once its "Name:" prefix (if any) has fully
-  //      arrived — never mid-name. ----
+  //      line, advance only to the last CLOSED-quote / outside-quote-sentence
+  //      boundary (never mid-name, never mid-quote) so each speaker's whole
+  //      quote streams to their voice as soon as it closes. ----
   if (cfg.multiVoiceEnabled) {
     const raw = stripCodeBlocks(p.fullText || '');
     if (raw.length <= streamSpokenLen) return;
@@ -1605,16 +1643,13 @@ async function onAssistantChunk(payload) {
 
     let cut = pending.lastIndexOf('\n') + 1;      // whole lines are always safe (0 if none yet)
     const tail = pending.slice(cut);
-    const pm = tail.match(SPEAKER_PREFIX_RE);
-    if (pm) {
-      // Prefix complete — sentence-split only the part AFTER it.
-      const afterPrefix = tail.slice(pm[0].length);
-      const extra = lastSafeBoundary(afterPrefix);
-      if (extra > 0) cut += pm[0].length + extra;
-    } else if (!SPEAKER_NAME_PARTIAL_RE.test(tail)) {
-      // Not a name-in-progress — ordinary prose, sentence-split it.
-      const extra = lastSafeBoundary(tail);
-      if (extra > 0) cut += extra;
+    if (!SPEAKER_NAME_PARTIAL_RE.test(tail)) {
+      // Not a "Name:" still being typed — skip a complete prefix if present,
+      // then advance to the last quote/sentence boundary in what remains.
+      const pm = tail.match(SPEAKER_PREFIX_RE);
+      const base = pm ? pm[0].length : 0;
+      const extra = lastMultiVoiceBoundary(tail.slice(base));
+      if (extra > 0) cut += base + extra;
     }
     // else: a name is still being typed on this line — wait for the rest.
 

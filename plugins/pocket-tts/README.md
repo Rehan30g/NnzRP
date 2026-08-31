@@ -294,11 +294,15 @@ hers.
 - **Narration** (no `Name:` prefix) uses the **Narrator / unattributed voice**
   setting, or the character's own voice when that is left blank.
 - Works both for whole-message playback (`speakMultiVoice()`) and **live while
-  streaming** (`enqueueMultiVoiceStream()`): whole lines are read as they land,
-  and a partial trailing line is held back until its `Name:` prefix has fully
-  arrived so a name is never cut across chunks. Read mode (whole / dialogue-only)
-  and the replay cache both apply per segment. Off = byte-for-byte the old
-  single-voice behaviour.
+  streaming** (`enqueueMultiVoiceStream()`). Streaming is **quote-aware**
+  (`lastMultiVoiceBoundary()`): whole lines are read as they land, and within the
+  trailing partial line it advances only to the last **closed `"..."`** or a
+  sentence terminator that is **outside** any quote — so each speaker's whole
+  quote streams to their voice the moment its closing `"` arrives, and a name /
+  an open quote is never cut across chunks. A quote that is still open when the
+  reply finishes is flushed on `assistant-message-complete`. Read mode
+  (whole / dialogue-only) and the replay cache both apply per segment.
+  Off = byte-for-byte the old single-voice behaviour.
 
 ## Build
 
