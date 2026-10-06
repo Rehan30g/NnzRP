@@ -4,10 +4,10 @@
 
 # NnzRP
 
-### Roleplay with AI characters who can actually go look things up.
+### Roleplay with AI characters who can actually go look things up :3
 
-A roleplay app that runs entirely on your device. Bring your own API key, pick your characters, and start chatting.<br>
-No account, no server in the middle, no tracking.
+A roleplay app that lives entirely on your device. Bring your own API key, pick your characters, and get the scene going.<br>
+No account, no server in the middle, nobody reading over your shoulder.
 
 <br>
 
@@ -17,23 +17,23 @@ No account, no server in the middle, no tracking.
 
 <br>
 
-<img src="src/screenshot_chat.png" width="900" alt="A character browsing the web in the middle of a roleplay">
+<img src="src/screenshot_chat.png" width="900" alt="A wolf character browsing the web in the middle of a roleplay">
 
 </div>
 
 ---
 
-## 👋 What is this?
+## 🐾 What is this?
 
-NnzRP is a place to chat and roleplay with AI characters, using whichever AI provider you already have a key for. Your characters, chats, and keys stay on your own device.
+NnzRP is a cozy little den for chatting and roleplaying with AI characters, using whichever AI provider you already have a key for. Wolves, dragons, a very tired fox bartender, whoever. Your characters, chats, and keys stay on your own device.
 
-What makes it a bit different: characters can use real tools while staying in the scene. Ask one to check a website and they'll actually open it, read it, and react to what they found, all inside the story.
+The fun part: characters can use real tools without leaving the scene. Ask one to check a website and they'll actually open it, read it, and react to what they found, all in character.
 
 ---
 
 ## 🛠️ Characters that can use tools
 
-In the screenshot above, Mr. Wolf is handed a GitHub link. He doesn't stop the scene to say "calling a tool now". He just pulls out his phone:
+In the screenshot above, Mr. Wolf gets handed a GitHub link. He doesn't stop the scene to announce "calling a tool now". He just pulls out his phone, which is honestly impressive with claws:
 
 > *He pulls out a phone anyway, one clawed thumb scrolling.*
 >
@@ -45,13 +45,13 @@ In the screenshot above, Mr. Wolf is handed a GitHub link. He doesn't stop the s
 >
 > **Mr. Wolf:** "Huh. A roleplay thing. Client-side, bring-your-own-key..."
 
-He really did read the page. Here's how that works for you:
+He really did read the page. No bluffing, no made-up summary. Here's what that means for you:
 
-- **Several steps in one reply.** A character can use a few tools in a row before answering, so they can look around properly instead of guessing.
-- **One clean message.** What they say before, during, and after looking something up all ends up in a single reply, like a person telling you what they did.
-- **Small markers in the text.** A little tag shows exactly where in the reply a tool was used. Tap the "Tools Used" chip if you want the full details.
-- **You stay in control.** Every tool asks for your permission first. You can allow it once, always allow it, or block it. There's also one switch to turn all tools off.
-- **Optional "stay in character" nudge.** Turn on Immersive Roleplay and characters will reach for tools on their own when the scene calls for it, not only when you ask.
+- **Several steps in one reply.** A character can sniff around with a few tools in a row before answering, instead of guessing.
+- **One clean message.** What they say before, during, and after looking something up ends up in a single reply, the way a person would tell you about it.
+- **Little paw prints in the text.** Okay, they're small tags, but same idea: they show exactly where in the reply a tool was used. Tap the "Tools Used" chip for the full details.
+- **You hold the leash.** Every tool asks for your permission first. Allow it once, always allow it, or say no. There's also one big switch to turn all tools off.
+- **Optional "stay in character" mode.** Turn on Immersive Roleplay and characters will reach for tools on their own when the scene calls for it, not only when you ask.
 
 Tools come from [MCP servers](https://modelcontextprotocol.io/), which you add yourself. They can be online (HTTP) or, on the Windows app, a program running on your PC.
 
@@ -59,12 +59,12 @@ Tools come from [MCP servers](https://modelcontextprotocol.io/), which you add y
 
 | Tool | What it does |
 |---|---|
-| **Look at an image** | Give a character an image link and they'll actually see it. Shows up automatically when your model supports images. |
+| **Look at an image** | Give a character an image link and they'll actually see it. Yes, you can finally show them your fursona. Appears automatically when your model supports images. |
 | **Show HTML** | Lets a character draw a small chart, animation, or clickable choices right inside the chat. |
-| **Wait** | Lets a character pause for a moment (up to 30 seconds) for pacing in a scene. |
+| **Wait** | Lets a character pause for a moment (up to 30 seconds) for dramatic effect. Ears perked, tail still. |
 
 > [!WARNING]
-> **Show HTML** and **Wait** are off until you turn them on in the Custom MCP page. Show HTML runs code written by the AI inside a locked box with no internet access. It's safe by design, but only turn it on if you're comfortable with that.
+> **Show HTML** and **Wait** are off until you turn them on in the Custom MCP page. Show HTML runs code written by the AI inside a locked box with no internet access. It's built to be safe, but only turn it on if you're comfortable with that.
 
 ---
 
@@ -72,17 +72,17 @@ Tools come from [MCP servers](https://modelcontextprotocol.io/), which you add y
 
 | | |
 |---|---|
-| 🔑 **Your own keys** | Save as many providers as you like and switch between them, even in the middle of a chat. |
-| 📖 **Comfortable chat** | Live typing, regenerate a reply with a swipe, branch a chat from any point, edit any message. |
+| 🔑 **Your own keys** | Save as many providers as you like and switch between them, even mid-chat. |
+| 📖 **Comfy chat** | Live typing, swipe for a different reply, branch the story from any point, edit any message. |
 | 🖼️ **Send pictures** | Attach images when your model can see them. |
-| 📏 **Long chats that don't fall apart** | A meter shows how full the model's memory is. When it gets tight, older parts of the chat get summarized so the story keeps going. |
-| ⏳ **Type while it replies** | Your next message waits in line and sends itself when the reply finishes. |
-| 🃏 **Character cards** | Import and export cards that work with SillyTavern, Tavern, and Janitor AI. |
+| 📏 **Long chats that don't lose the plot** | A meter shows how full the model's memory is. When it gets tight, the middle of the chat gets summarized so the story keeps going and your character doesn't forget your name. |
+| ⏳ **Type while it replies** | Your next message waits in line and sends itself when the reply is done. |
+| 🃏 **Character cards** | Import and export cards that work with SillyTavern, Tavern, and Janitor AI. Bring the whole pack over. |
 | 👤 **Characters and personas** | Avatars from a link or your gallery, lorebooks that kick in on keywords, and saved system prompts. |
 | 🎨 **Light or dark** | Follow your system, or pick one. Choose your own accent color too. |
 | 💾 **Backup** | Save everything to one file and load it back on any device. |
-| 📱 **Made for phones too** | Big tap targets, swipe between tabs, and menus that slide up from the bottom. |
-| 🔌 **Plugins (Windows)** | Add extra features without touching the app, like a voice plugin that reads replies out loud. |
+| 📱 **Made for phones too** | Big tap targets, swipe between tabs, and menus that slide up from the bottom. Paw friendly. |
+| 🔌 **Plugins (Windows)** | Add extra features without touching the app, like a voice plugin that reads replies out loud. Hearing your wolf actually talk hits different. |
 
 <div align="center">
 
@@ -102,7 +102,7 @@ Tools come from [MCP servers](https://modelcontextprotocol.io/), which you add y
 
 ## 📥 Get the app
 
-Same app, three ways to use it.
+Same app, three ways to use it. Pick your habitat.
 
 | | |
 |---|---|
@@ -148,8 +148,8 @@ Go to **Settings → Proxies**, add a profile, choose your provider, then paste 
 - You can save several models in one profile and switch between them from the chat box.
 - OpenRouter users get a **Browse Providers** button to pick which hosts serve your model, with price and speed shown.
 
-**2. Pick a character and start chatting.**
-Two sample characters are ready to go, or import your own card.
+**2. Pick a character and say hi.**
+Two sample characters are ready to go, or import your own card. Boops are optional but encouraged.
 
 **3. Add tools (optional).**
 Open the **Custom MCP** page and add a server. On Windows, that can be a command like:
@@ -161,10 +161,10 @@ npx -y @modelcontextprotocol/server-filesystem /your/folder
 You can turn servers on and off from the chat side panel any time.
 
 > [!IMPORTANT]
-> The AI can only use tools **you** added. It can't add new ones by itself, and every tool asks you first until you say otherwise.
+> The AI can only use tools **you** added. It can't add new ones by itself, and every tool asks you first until you say otherwise. Good boy rules apply.
 
 > [!TIP]
-> Some models are much better at using tools than others. If a character keeps pretending to use a tool without actually doing it, try a different model.
+> Some models are much better at using tools than others. If a character keeps pretending to use a tool without actually doing it, they're bluffing. Try a different model.
 
 ---
 
@@ -177,7 +177,7 @@ You can turn servers on and off from the chat side panel any time.
 <div align="center">
 
 <img src="src/screenshot_characters.png" width="880" alt="Character library">
-<br><sub><em>Your character library</em></sub>
+<br><sub><em>Your character library (the pack)</em></sub>
 <br><br>
 
 <img src="src/screenshot_mcp.png" width="880" alt="MCP server settings">
@@ -205,7 +205,7 @@ You can turn servers on and off from the chat side panel any time.
 
 ## 🔒 Your data
 
-Everything you make in NnzRP (characters, personas, chats, API keys, images) is saved on your own device. Nothing is uploaded anywhere. The app only talks to the AI providers, tool servers, and image links you choose.
+Everything you make in NnzRP (characters, personas, chats, API keys, images) is saved on your own device. Nothing gets uploaded anywhere. Your 3 AM roleplays stay between you and your character. The app only talks to the AI providers, tool servers, and image links you choose.
 
 > [!WARNING]
 > The backup file from **Settings → Data → Export All Data** includes your API keys as plain text. Keep it somewhere private.
@@ -220,7 +220,7 @@ Plain JavaScript, no framework and no build step. The Windows app uses [Electron
 
 ## 🤝 Contributing
 
-Bug reports and pull requests are welcome. If you're changing code, read [`CLAUDE.md`](CLAUDE.md) first. It explains how the app is put together.
+Bug reports and pull requests are welcome, from humans and furries alike. If you're changing code, read [`CLAUDE.md`](CLAUDE.md) first. It explains how the app is put together.
 
 ---
 
@@ -228,6 +228,6 @@ Bug reports and pull requests are welcome. If you're changing code, read [`CLAUD
 
 **MIT License**
 
-<sub>Made by <a href="https://github.com/Rehan30g">Rehan</a></sub>
+<sub>Made with 🐾 by <a href="https://github.com/Rehan30g">Rehan</a></sub>
 
 </div>
