@@ -4,34 +4,36 @@
 
 # NnzRP
 
-### Roleplay with AI characters that can actually *use tools* — mid-scene, in character.
+### Roleplay with AI characters who can actually go look things up.
 
-A 100% client-side, BYOK AI roleplay app with real MCP tool-calling — Windows, Android, or the browser.<br>
-No backend. No account. No telemetry.
+A roleplay app that runs entirely on your device. Bring your own API key, pick your characters, and start chatting.<br>
+No account, no server in the middle, no tracking.
 
 <br>
 
-[![MCP](https://img.shields.io/badge/MCP-native%20tool%20calling-8B5CF6?style=flat-square)](#the-part-that-makes-this-different)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
-[![Electron](https://img.shields.io/badge/Electron-31-47848F?style=flat-square&logo=electron&logoColor=white)](https://www.electronjs.org/)
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Android%20%7C%20Web-0078D6?style=flat-square)](#get-nnzrp)
-[![Backend](https://img.shields.io/badge/backend-none-success?style=flat-square)](#data--privacy)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Android%20%7C%20Web-0078D6?style=flat-square)](#-get-the-app)
+[![MCP](https://img.shields.io/badge/MCP-supported-8B5CF6?style=flat-square)](#-characters-that-can-use-tools)
 
 <br>
 
-<img src="src/screenshot_chat.png" width="900" alt="A character browsing the web mid-roleplay via MCP">
+<img src="src/screenshot_chat.png" width="900" alt="A character browsing the web in the middle of a roleplay">
 
 </div>
 
 ---
 
-## The part that makes this different
+## 👋 What is this?
 
-Most roleplay frontends stop at text generation. The model can *describe* looking something up, but it cannot actually go and look.
+NnzRP is a place to chat and roleplay with AI characters, using whichever AI provider you already have a key for. Your characters, chats, and keys stay on your own device.
 
-NnzRP wires [Model Context Protocol](https://modelcontextprotocol.io/) servers directly into the generation loop using **provider-native function calling** — so a character can browse the web, read files, or hit an API *in the middle of a scene*, and narrate it as part of the story.
+What makes it a bit different: characters can use real tools while staying in the scene. Ask one to check a website and they'll actually open it, read it, and react to what they found, all inside the story.
 
-In the screenshot above, Mr. Wolf gets handed a GitHub URL. He doesn't break character to announce a tool call. He pulls out a phone:
+---
+
+## 🛠️ Characters that can use tools
+
+In the screenshot above, Mr. Wolf is handed a GitHub link. He doesn't stop the scene to say "calling a tool now". He just pulls out his phone:
 
 > *He pulls out a phone anyway, one clawed thumb scrolling.*
 >
@@ -41,41 +43,46 @@ In the screenshot above, Mr. Wolf gets handed a GitHub URL. He doesn't break cha
 >
 > *Mr. Wolf squints at the phone, scrolling slowly. The grin fades a little, replaced by something almost like actual curiosity.*
 >
-> **Mr. Wolf:** "Huh. A roleplay thing. Client-side, bring-your-own-key..." *He mutters, thumb swiping.* "Character cards. Lorebooks. Thought-block extraction..."
+> **Mr. Wolf:** "Huh. A roleplay thing. Client-side, bring-your-own-key..."
 
-That reply took **six tool calls**. He really did read the repo. The scepticism before, the browsing, and the reaction after are all **one message** — told the way a person would tell it.
+He really did read the page. Here's how that works for you:
 
-|  | |
+- **Several steps in one reply.** A character can use a few tools in a row before answering, so they can look around properly instead of guessing.
+- **One clean message.** What they say before, during, and after looking something up all ends up in a single reply, like a person telling you what they did.
+- **Small markers in the text.** A little tag shows exactly where in the reply a tool was used. Tap the "Tools Used" chip if you want the full details.
+- **You stay in control.** Every tool asks for your permission first. You can allow it once, always allow it, or block it. There's also one switch to turn all tools off.
+- **Optional "stay in character" nudge.** Turn on Immersive Roleplay and characters will reach for tools on their own when the scene calls for it, not only when you ask.
+
+Tools come from [MCP servers](https://modelcontextprotocol.io/), which you add yourself. They can be online (HTTP) or, on the Windows app, a program running on your PC.
+
+### Built-in tools (no setup needed)
+
+| Tool | What it does |
 |---|---|
-| **Agentic, not one-shot** | The model chains multiple tool calls per turn, feeding each result back and deciding what to reach for next — bounded by a safety limit of 6 rounds, or your own custom cap if you turn that on. |
-| **One message, however many rounds** | Narration written before a tool call and narration written after it land in a single message, not fragmented into robotic separate turns. |
-| **Inline markers** | A small marker sits at the exact point in the prose where each tool fired, so you can see what happened where without it interrupting the read. Back-to-back calls collapse into one marker with a count. |
-| **Live while it runs** | A tool box appears while a call is in flight, then the marker settles into place once the result lands — you're never staring at a frozen bubble wondering what happened. |
-| **Immersive Roleplay mode** | An opt-in nudge for characters to reach for tools *proactively and in-character* — "browsing" when the scene calls for it — instead of waiting to be told. Three intensity levels (Medium / High / MAX) control how eagerly, from natural openings only up to constant, unprompted tool use. |
-| **Permission-gated** | Every tool defaults to **Ask**. Approve per call, or set Allow / Decline per tool. Global kill switch included. |
-| **HTTP + local stdio** | Connect a hosted JSON-RPC endpoint, or let NnzRP spawn a local MCP server as a child process. |
+| **Look at an image** | Give a character an image link and they'll actually see it. Shows up automatically when your model supports images. |
+| **Show HTML** | Lets a character draw a small chart, animation, or clickable choices right inside the chat. |
+| **Wait** | Lets a character pause for a moment (up to 30 seconds) for pacing in a scene. |
 
-<br>
-
-<div align="center">
-<sub><strong>Thinking blocks and tool traces are collapsible</strong> — the reasoning and the full argument/result log are one click away, and folded out of sight the rest of the time.</sub>
-</div>
+> [!WARNING]
+> **Show HTML** and **Wait** are off until you turn them on in the Custom MCP page. Show HTML runs code written by the AI inside a locked box with no internet access. It's safe by design, but only turn it on if you're comfortable with that.
 
 ---
 
-## Tools that work with zero setup
-
-Two tools ship built in. No MCP server, no config file — they go through the exact same permission gate and tool loop as a real MCP tool.
+## ✨ Everything else
 
 | | |
 |---|---|
-| **See an image** | Hand a character a direct image URL and it actually *looks* at it, rather than reasoning about the link text. Offered automatically when your active model supports vision, and it can pull up the character's own avatar too. |
-| **Embed HTML** | Let a character render a small self-contained HTML/CSS/JS snippet **inline in the chat** — a chart, a canvas animation, an interactive diagram, or clickable dialogue choices that drop their text straight into your input box. Renders inside a locked-down sandboxed iframe with no network access and no same-origin privileges, and inherits your current light/dark theme. |
-
-> [!WARNING]
-> **Embed HTML is off by default and stays that way until you turn it on** (Custom MCP page → *Embed HTML (Eksperimental)*). Unlike every other tool, it means AI-authored script actually running inside the app — sandboxed, but running. Enable it only if that trade is one you want.
-
----
+| 🔑 **Your own keys** | Save as many providers as you like and switch between them, even in the middle of a chat. |
+| 📖 **Comfortable chat** | Live typing, regenerate a reply with a swipe, branch a chat from any point, edit any message. |
+| 🖼️ **Send pictures** | Attach images when your model can see them. |
+| 📏 **Long chats that don't fall apart** | A meter shows how full the model's memory is. When it gets tight, older parts of the chat get summarized so the story keeps going. |
+| ⏳ **Type while it replies** | Your next message waits in line and sends itself when the reply finishes. |
+| 🃏 **Character cards** | Import and export cards that work with SillyTavern, Tavern, and Janitor AI. |
+| 👤 **Characters and personas** | Avatars from a link or your gallery, lorebooks that kick in on keywords, and saved system prompts. |
+| 🎨 **Light or dark** | Follow your system, or pick one. Choose your own accent color too. |
+| 💾 **Backup** | Save everything to one file and load it back on any device. |
+| 📱 **Made for phones too** | Big tap targets, swipe between tabs, and menus that slide up from the bottom. |
+| 🔌 **Plugins (Windows)** | Add extra features without touching the app, like a voice plugin that reads replies out loud. |
 
 <div align="center">
 
@@ -87,51 +94,31 @@ Two tools ship built in. No MCP server, no config file — they go through the e
 <img src="https://img.shields.io/badge/OpenRouter-6467F2?style=for-the-badge&logo=openrouter&logoColor=white" alt="OpenRouter">
 <img src="https://img.shields.io/badge/Ollama-000000?style=for-the-badge&logo=ollama&logoColor=white" alt="Ollama">
 
-<sub>…and any other OpenAI-compatible endpoint. Tool-calling works across all of them.</sub>
+<sub>Plus any service that works like the OpenAI API.</sub>
 
 </div>
 
 ---
 
-## Everything else
+## 📥 Get the app
 
-|  | |
-|---|---|
-| **BYOK, no middleman** | Configure as many providers as you like as named profiles, and switch between them mid-conversation. |
-| **Storybook chat** | Centered stream, floating composer, live streaming, swipe-to-regenerate, session forking, inline editing. |
-| **Send images** | Attach pictures straight from the composer when your model can see them — the attach button only appears for vision-capable models. |
-| **Nothing gets silently dropped** | Instead of quietly truncating old messages, a capacity gauge shows how full the model's context window is, and **Compact Chat** summarizes the middle of a long session into a fresh one — keeping the opening and the most recent exchanges word-for-word. |
-| **Generate as long as you want** | Cap the response length, or flip on **Unlimited** and let the model finish. |
-| **Readable code blocks** | Fenced code in a reply gets real syntax highlighting and a one-click copy button — no CDN, no external highlighter. |
-| **AI-personalized greetings** | Regenerate a fresh chat's opening line through a short back-and-forth with the AI — one question at a time, three quick options or type your own — instead of settling for the character's default. |
-| **Never blocks you** | Keep typing while a reply generates — your next message queues and fires automatically. |
-| **Character Card V2** | Import and export cards compatible with Tavern / SillyTavern / Janitor AI. |
-| **Characters & personas** | Avatars by URL or upload, keyword-triggered lorebooks, switchable system prompt presets. |
-| **Themeable** | Light, dark, or follow-the-OS, with a custom accent color. |
-| **Backup & restore** | Export everything to one JSON file and re-import it anywhere. |
-| **Actually built for phones** | Not desktop chrome shrunk to fit — a bottom-sheet model/provider picker, swipe-to-dismiss sheets, and a settings/tools UI that stays flat and thumb-reachable instead of stacking desktop-sized cards. |
-
----
-
-## Get NnzRP
-
-The same app, three ways — pick whichever fits how you actually use it.
+Same app, three ways to use it.
 
 | | |
 |---|---|
-| **Web / PWA** | Open **[rehan30g.github.io/NnzRP](https://rehan30g.github.io/NnzRP/)** in any browser. Works as a regular tab, or use your browser's *Install app* option to add it to your home screen/desktop like a native app. Full mobile-optimized UI — bottom-sheet pickers, swipe-to-dismiss gestures, safe-area aware layout for notches and gesture bars. |
-| **Android** | Grab the signed APK from the **[latest release](https://github.com/Rehan30g/NnzRP/releases/latest)** and sideload it — no Play Store listing. It's a thin shell that loads the app live from the Pages URL above, so it updates itself on next launch, no reinstall needed. |
-| **Windows** | Grab the NSIS installer or the portable `.exe` from the same **[latest release](https://github.com/Rehan30g/NnzRP/releases/latest)** — or build it yourself, see below. The NSIS install self-updates after that (checks on launch, downloads in the background, asks to restart when ready); the portable `.exe` doesn't, since there's no installed copy in place to update. |
+| 🌐 **Browser** | Open **[rehan30g.github.io/NnzRP](https://rehan30g.github.io/NnzRP/)**. You can also use your browser's *Install app* option to put it on your home screen. |
+| 🤖 **Android** | Download the APK from the **[latest release](https://github.com/Rehan30g/NnzRP/releases/latest)** and install it. Most updates arrive on their own the next time you open the app. |
+| 🪟 **Windows** | Get the installer or the portable `.exe` from the same **[latest release](https://github.com/Rehan30g/NnzRP/releases/latest)**. The installer version updates itself. The portable one doesn't, so grab a new copy when you want to update. |
 
 > [!NOTE]
-> Local MCP servers that run as a child process (**stdio/command** transport) only work in the Windows desktop build. Web and Android are sandboxed and can only reach **HTTP** MCP servers — use an HTTP-based server if you're on mobile.
+> MCP servers that run as a program on your PC only work in the Windows app. On the browser and Android, use online (HTTP) MCP servers instead.
 
 <details>
-<summary><b>Run from source</b></summary>
+<summary><b>Run it from the source code</b></summary>
 
 <br>
 
-> **Requires** [Node.js](https://nodejs.org/) 18 or newer.
+You'll need [Node.js](https://nodejs.org/) 18 or newer.
 
 ```bash
 git clone https://github.com/Rehan30g/NnzRP.git
@@ -140,47 +127,48 @@ npm install
 npm start
 ```
 
-On Windows, double-clicking `run.bat` does the same thing. That runs the Electron desktop build; `npm run serve` instead serves the plain web/PWA build locally (what the Android APK ultimately points at in production).
+On Windows you can also just double-click `run.bat`.
 
-**Build a Windows distributable:**
+Other handy commands:
 
 ```bash
-npm run build:exe
+npm run serve       # run the browser version locally
+npm run build:exe   # build the Windows installer and portable .exe into dist/
 ```
-
-Outputs an NSIS installer, a `.zip`, and a portable `.exe` to `dist/`.
 
 </details>
 
 ---
 
-## Setting Up
+## 🚀 Getting started
 
-**1. Add a provider.** Go to **Settings → Proxies**, add a profile, pick your provider, and paste your API key and model.
+**1. Add your AI provider.**
+Go to **Settings → Proxies**, add a profile, choose your provider, then paste your API key and model name.
 
-- `custom` and `openrouter` profiles can hold several model IDs, selectable from a dropdown in the chat composer without leaving the conversation.
-- OpenRouter profiles get a **Browse Providers** button to inspect and pin preferred upstream providers by context length, price, uptime, and throughput.
-- Vision support and context-window size are guessed from the model ID. Both have an override field on the profile for when the guess is wrong or your model is too new to be recognized.
+- You can save several models in one profile and switch between them from the chat box.
+- OpenRouter users get a **Browse Providers** button to pick which hosts serve your model, with price and speed shown.
 
-**2. Add MCP servers** *(optional — the built-in tools work without this).* On the **Custom MCP** page, connect either an HTTP JSON-RPC endpoint or a local command NnzRP spawns as a child process:
+**2. Pick a character and start chatting.**
+Two sample characters are ready to go, or import your own card.
+
+**3. Add tools (optional).**
+Open the **Custom MCP** page and add a server. On Windows, that can be a command like:
 
 ```bash
-npx -y @modelcontextprotocol/server-filesystem /your/path
+npx -y @modelcontextprotocol/server-filesystem /your/folder
 ```
 
-Once enabled, that server's tools are available to every character in every chat. Toggle servers on and off from the chat drawer without leaving the scene.
+You can turn servers on and off from the chat side panel any time.
 
 > [!IMPORTANT]
-> **The model can only call tools you already configured**, with arguments it chooses. It can never register a server or point itself at a new one — that is always a manual step you take. Every tool defaults to **Ask**, so nothing runs without your say-so until you decide otherwise.
->
-> *Immersive Roleplay* changes how eagerly a character reaches for tools. It does **not** bypass permissions.
+> The AI can only use tools **you** added. It can't add new ones by itself, and every tool asks you first until you say otherwise.
 
 > [!TIP]
-> Tool-calling quality varies a lot by model. A model with strong native function-calling will weave tools into prose naturally; a weaker one may call tools it doesn't need or narrate a call without making one.
+> Some models are much better at using tools than others. If a character keeps pretending to use a tool without actually doing it, try a different model.
 
 ---
 
-## More Screenshots
+## 📸 More screenshots
 
 <details>
 <summary><b>Character library, MCP servers, and provider setup</b></summary>
@@ -188,59 +176,51 @@ Once enabled, that server's tools are available to every character in every chat
 <br>
 <div align="center">
 
-<img src="src/screenshot_characters.png" width="880" alt="AI Character Library">
-<br><sub><em>AI Character Library</em></sub>
+<img src="src/screenshot_characters.png" width="880" alt="Character library">
+<br><sub><em>Your character library</em></sub>
 <br><br>
 
-<img src="src/screenshot_mcp.png" width="880" alt="MCP server configuration">
-<br><sub><em>MCP servers — HTTP or local stdio, with per-tool permissions</em></sub>
+<img src="src/screenshot_mcp.png" width="880" alt="MCP server settings">
+<br><sub><em>Tool servers, with permissions for each tool</em></sub>
 <br><br>
 
-<img src="src/screenshot_proxies.png" width="880" alt="Provider configuration">
-<br><sub><em>Provider setup — now lives under Settings → Proxies</em></sub>
+<img src="src/screenshot_proxies.png" width="880" alt="Provider settings">
+<br><sub><em>Provider setup, found under Settings → Proxies</em></sub>
 
 </div>
 </details>
 
 ---
 
-## Tech Stack
+## ⌨️ Keyboard shortcuts
 
-Three thin platform shells around one vanilla ES6-module renderer — no framework, no build step:
-
-- **[Electron](https://www.electronjs.org/)** (Windows desktop) — frameless window, `contextIsolation: true`, `nodeIntegration: false`, a minimal IPC surface (window controls plus a stdio MCP bridge). The only shell that can spawn local MCP servers.
-- **PWA** (any browser) — a service worker and manifest make it installable from a plain browser tab, with stale-while-revalidate caching.
-- **[Capacitor](https://capacitorjs.com/)** (Android) — a thin WebView shell pointed at the live GitHub Pages deployment instead of a bundled snapshot, so a push to `master` reaches the installed APK on its next launch with no rebuild or reinstall.
-
-Storage is native IndexedDB everywhere; markdown via [`marked.js`](https://marked.js.org/); desktop packaging via [`electron-builder`](https://www.electron.build/), Android via Gradle. GitHub Actions auto-deploys the web build on every push and can build signed APK/Windows releases on demand.
-
-Provider calls are direct `fetch()` requests in each provider's native shape — including each one's own streaming format, reasoning format, and function-calling wire format, normalized behind a single interface.
-
----
-
-## Chat Shortcuts
-
-| Keybinding | Action |
+| Keys | What it does |
 |---|---|
-| <kbd>Ctrl</kbd>/<kbd>Cmd</kbd> + <kbd>.</kbd> · <kbd>Alt</kbd> + <kbd>C</kbd> | Toggle right drawer (Sessions / Options / MCP) |
-| <kbd>Esc</kbd> | Close drawer or modal |
+| <kbd>Ctrl</kbd>/<kbd>Cmd</kbd> + <kbd>.</kbd> or <kbd>Alt</kbd> + <kbd>C</kbd> | Open or close the side panel |
+| <kbd>Esc</kbd> | Close the side panel or a popup |
 | <kbd>Enter</kbd> | Send |
-| <kbd>Shift</kbd> + <kbd>Enter</kbd> | Newline |
+| <kbd>Shift</kbd> + <kbd>Enter</kbd> | New line |
 
 ---
 
-## Data & Privacy
+## 🔒 Your data
 
-Everything — characters, personas, chat history, provider configs, API keys, uploaded avatars and images — is stored locally in the app's IndexedDB. NnzRP uploads nothing. Outbound traffic goes only to the provider endpoints, MCP servers, and image URLs you or your characters point it at.
+Everything you make in NnzRP (characters, personas, chats, API keys, images) is saved on your own device. Nothing is uploaded anywhere. The app only talks to the AI providers, tool servers, and image links you choose.
 
 > [!WARNING]
-> **Settings → Data → Export All Data** produces a single JSON backup containing your API keys **in plaintext**. Keep that file somewhere safe.
+> The backup file from **Settings → Data → Export All Data** includes your API keys as plain text. Keep it somewhere private.
 
 ---
 
-## Contributing
+## 🧰 Under the hood
 
-Issues and PRs welcome. [`CLAUDE.md`](CLAUDE.md) is the source of truth for architecture and is kept current — read it before making changes.
+Plain JavaScript, no framework and no build step. The Windows app uses [Electron](https://www.electronjs.org/), the Android app uses [Capacitor](https://capacitorjs.com/), and the browser version works as an installable web app. Everything is stored in the browser's own database (IndexedDB).
+
+---
+
+## 🤝 Contributing
+
+Bug reports and pull requests are welcome. If you're changing code, read [`CLAUDE.md`](CLAUDE.md) first. It explains how the app is put together.
 
 ---
 
@@ -248,6 +228,6 @@ Issues and PRs welcome. [`CLAUDE.md`](CLAUDE.md) is the source of truth for arch
 
 **MIT License**
 
-<sub>Built by <a href="https://github.com/Rehan30g">Rehan</a></sub>
+<sub>Made by <a href="https://github.com/Rehan30g">Rehan</a></sub>
 
 </div>
